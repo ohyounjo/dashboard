@@ -1,0 +1,137 @@
+{
+  "project": "devtracker",
+  "title": "스마트홈 앱",
+  "tabs": [
+    {
+      "key": "overview",
+      "label": "개요"
+    },
+    {
+      "key": "schedule",
+      "label": "일정"
+    },
+    {
+      "key": "issues",
+      "label": "이슈"
+    },
+    {
+      "key": "docs",
+      "label": "문서"
+    }
+  ],
+  "shots": [
+    {
+      "tab": "overview",
+      "label": "개요",
+      "viewport": "desktop",
+      "theme": "light",
+      "file": "overview-desktop-light.png"
+    },
+    {
+      "tab": "schedule",
+      "label": "일정",
+      "viewport": "desktop",
+      "theme": "light",
+      "file": "schedule-desktop-light.png"
+    },
+    {
+      "tab": "issues",
+      "label": "이슈",
+      "viewport": "desktop",
+      "theme": "light",
+      "file": "issues-desktop-light.png"
+    },
+    {
+      "tab": "docs",
+      "label": "문서",
+      "viewport": "desktop",
+      "theme": "light",
+      "file": "docs-desktop-light.png"
+    },
+    {
+      "tab": "overview",
+      "label": "개요",
+      "viewport": "desktop",
+      "theme": "dark",
+      "file": "overview-desktop-dark.png"
+    },
+    {
+      "tab": "schedule",
+      "label": "일정",
+      "viewport": "desktop",
+      "theme": "dark",
+      "file": "schedule-desktop-dark.png"
+    },
+    {
+      "tab": "issues",
+      "label": "이슈",
+      "viewport": "desktop",
+      "theme": "dark",
+      "file": "issues-desktop-dark.png"
+    },
+    {
+      "tab": "docs",
+      "label": "문서",
+      "viewport": "desktop",
+      "theme": "dark",
+      "file": "docs-desktop-dark.png"
+    },
+    {
+      "tab": "overview",
+      "label": "개요",
+      "viewport": "mobile",
+      "theme": "light",
+      "file": "overview-mobile-light.png"
+    },
+    {
+      "tab": "schedule",
+      "label": "일정",
+      "viewport": "mobile",
+      "theme": "light",
+      "file": "schedule-mobile-light.png"
+    },
+    {
+      "tab": "issues",
+      "label": "이슈",
+      "viewport": "mobile",
+      "theme": "light",
+      "file": "issues-mobile-light.png"
+    },
+    {
+      "tab": "docs",
+      "label": "문서",
+      "viewport": "mobile",
+      "theme": "light",
+      "file": "docs-mobile-light.png"
+    },
+    {
+      "tab": "overview",
+      "label": "개요",
+      "viewport": "mobile",
+      "theme": "dark",
+      "file": "overview-mobile-dark.png"
+    },
+    {
+      "tab": "schedule",
+      "label": "일정",
+      "viewport": "mobile",
+      "theme": "dark",
+      "file": "schedule-mobile-dark.png"
+    },
+    {
+      "tab": "issues",
+      "label": "이슈",
+      "viewport": "mobile",
+      "theme": "dark",
+      "file": "issues-mobile-dark.png"
+    },
+    {
+      "tab": "docs",
+      "label": "문서",
+      "viewport": "mobile",
+      "theme": "dark",
+      "file": "docs-mobile-dark.png"
+    }
+  ],
+  "consoleErrors": []
+}
