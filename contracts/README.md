@@ -12,7 +12,7 @@
 | 6 | 상태 파일 `.state/embed.json`, `.state/managed.json` | [state-and-uuid.md](state-and-uuid.md) |
 | 7 | Superset 객체 UUID | [state-and-uuid.md](state-and-uuid.md) |
 | 8 | `make new`의 추론 결과(JSON)와 추론 규칙 | [scaffold.md](scaffold.md). Studio의 프로젝트 마법사가 같은 형식을 주고받는다 |
-| 9 | 적용 전 차이 보기(`make plan`)의 비교 규칙·권한·결과 형식(JSON) | [plan.md](plan.md). Studio의 데이터 화면이 같은 함수를 쓴다 |
+| 9 | 적용 전 차이 보기(`make plan`)의 비교 규칙·권한·결과 형식(JSON), 로더가 남기는 적재 기록(`dashkit_meta` 스키마) | [plan.md](plan.md). plan은 `dash_reader` 계정만 쓴다. Studio의 데이터 화면이 같은 함수를 쓴다 |
 | 10 | 설정 형식 버전(`version`)과 `dashkit migrate` | 아래 "설정 버전", 형식 변경 기록 [../CHANGELOG.md](../CHANGELOG.md) |
 | — | Superset 6.1.0 확인 기록(Explore) | [superset-notes.md](superset-notes.md), 원본 export [superset-6.1.0-export/](superset-6.1.0-export/)(`managed/`는 sync가 만든 객체의 export) |
 | — | Superset 버전 관리와 업그레이드 절차 | [superset-upgrade.md](superset-upgrade.md). 버전은 `.env.example`의 `SUPERSET_VERSION` 한 곳, 키 대조는 `tests/test_superset_keys.py` |
@@ -82,6 +82,10 @@
 `config.referenced_columns(project)`가 `{데이터셋: {열: [출처, …]}}`를 돌려준다. 로더는 `information_schema.columns`의 실제 뷰 열과 비교하고, 없으면 롤백하며 `dashboard.yaml:<출처>: 데이터셋 '<d>' 뷰에 열 '<c>'가 없음`을 출력한다. **뷰에 없는 필터 열**도 이 단계에서 잡는다.
 
 출처: 데이터셋 `labels`의 열(지표 이름 제외), 필터 `column`(`select`·`number_range`. `time_range`·`time_grain` 필터는 열을 참조하지 않는다), 축약 차트에서 레지스트리의 `kind`가 `column`·`columns`·`order_by`인 필드(예: `x`·`time_column`·`groupby`·`columns`·`order_by`, `heatmap`의 `y`, `sankey`의 `source`·`target`. 유형별 필드는 `chart-shorthand.md`의 표. `order_by`의 지표 라벨은 제외), 위젯 섹션에서 매니페스트(`web/widgets/<유형>/widget.json`, [widgets.md](widgets.md))에 `x-column` 표시가 있는 옵션(gantt `fields.*`·`sort`, kanban `group_by`·`card.title`·`card.chips`·`filter.column`). `viz_type` 원본 차트의 `params`는 검사하지 않는다.
+
+### 적재 기록 (`dashkit load`가 같은 트랜잭션에서 남긴다)
+
+로더는 raw·dash를 다시 만드는 트랜잭션에서 `dashkit_meta` 스키마(행 지문 `row_fingerprint`, 적재 스냅샷 `load_snapshot`)도 통째로 다시 만들고 `dash_reader`에게 USAGE·SELECT만 준다. raw의 원본 값은 하나도 넣지 않는다(기본 키의 해시와 행 해시뿐). `dashkit plan`이 owner 계정 없이 CSV와 지난 적재를 비교하는 데 쓴다. 테이블 정의와 지문 규칙은 [plan.md](plan.md) "적재 기록". 데이터 DB의 스키마는 `raw`(owner만), `dash`(reader 읽기), `dashkit_meta`(reader 읽기) 셋이다.
 
 ## `dashkit/config.py` 공개 인터페이스
 

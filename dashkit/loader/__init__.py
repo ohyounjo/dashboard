@@ -2,6 +2,8 @@
 
 1단계(DB 접속 전): CSV를 schema.yaml 규칙으로 검증한다. 오류가 하나라도 있으면 DB를 건드리지 않는다.
 2단계: 트랜잭션 하나에서 raw·dash 스키마를 통째로 다시 만든다. 어느 단계든 실패하면 롤백한다.
+        같은 트랜잭션에서 적재 기록(dashkit_meta: 행 지문과 적재 스냅샷, loader/record.py)도 다시 만든다.
+        `dashkit plan`이 dash_reader 계정만으로 CSV와 지난 적재를 비교하는 데 쓴다.
 """
 from __future__ import annotations
 
@@ -13,6 +15,7 @@ from psycopg import sql
 
 from .. import db
 from ..config import Project, check_view_columns, resolve_as_of, table_order
+from . import record
 from .validate import TableData, validate_csv
 
 RAW = "raw"
@@ -182,6 +185,14 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
     _step(cur, label, sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(dash, reader))
     _step(cur, label, sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}").format(dash, reader))
     _step(cur, label, sql.SQL("GRANT EXECUTE ON FUNCTION {}.as_of() TO {}").format(dash, reader))
+
+    # 적재 기록(plan이 dash_reader로 읽는다). 원본 값은 넣지 않는다(기본 키의 해시와 행 해시뿐)
+    prints = {t: record.fingerprints(tables[t], data[t].rows) for t in order}
+    snap = record.snapshot(project.name, project.schema, project.dashboard, {t: len(data[t].rows) for t in order})
+    try:
+        record.write(cur, snap, prints, os.environ.get("DATA_DB_READER_USER") or "dash_reader")
+    except psycopg.Error as exc:
+        raise _StepError([f"적재 기록({record.META}) 쓰기: {_pg_message(exc)}"]) from None
 
 
 def _create_table_sql(tname: str, table: dict) -> sql.Composed:

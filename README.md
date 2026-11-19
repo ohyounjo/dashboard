@@ -269,15 +269,16 @@ PROJECT=sales-sample make apply
 $ make plan
 데이터   members  +1행 −0행 ~1행
          변경 없음: milestones, tasks
-뷰       dash.docs  열 추가: age_days
+뷰       dash.kpi_snapshots  열 추가: age_days
+         dash.docs  적용해야 알 수 있음 (쿼리가 바뀜)
 Superset 차트 +1 (extra_total)  ~1 (kpi_dday: 제목 변경)
          대시보드 ~1 (overview: 배치 변경)
 ```
 
-- 데이터는 CSV와 지금 적재된 테이블을 기본 키로 비교합니다(`+` 추가, `−` 삭제, `~` 변경 행 수). CSV에 오류가 있으면 차이 대신 검증 오류를 보여 줍니다.
-- 뷰는 새 설정으로 만들어질 열과 지금 열을 비교합니다. `sql:` 데이터셋이 읽는 테이블의 구조가 함께 바뀌면 "적용해야 알 수 있음"으로 나옵니다.
+- 데이터는 CSV와 **지난 적재의 기록**을 기본 키로 비교합니다(`+` 추가, `−` 삭제, `~` 변경 행 수). 기록은 `make apply`(load)가 적재할 때 DB의 `dashkit_meta` 스키마에 남기는 행 지문(기본 키의 해시와 행의 해시. 원본 값은 없습니다)입니다. 삭제될 행은 개수만 나옵니다. 기록이 아직 없으면 "지난 적재 기록 없음: 비교할 수 없음"으로 나오고, 한 번 적용하면 생깁니다. 열 구성이나 기본 키를 바꾼 테이블은 행을 맞추지 않고 전부 추가·전부 삭제로 셉니다. CSV에 오류가 있으면 차이 대신 검증 오류를 보여 줍니다.
+- 뷰는 새 설정으로 만들어질 열과 지금 열을 비교합니다. `table:` 데이터셋은 적용 전에 열 변화를 알 수 있습니다. `sql:` 데이터셋은 쿼리나 쿼리가 읽는 테이블의 구조가 바뀌면 "적용해야 알 수 있음"으로 나옵니다.
 - Superset은 새 번들과 지난 적용이 남긴 `.build/<이름>/bundle/`을 비교합니다. `−`로 나온 차트는 적용할 때 Superset에서 지워집니다.
-- DB, Superset, `.state/`, `.build/`를 바꾸지 않습니다. `make apply`는 plan 없이도 그대로 적용합니다. JSON이 필요하면 `python -m dashkit plan --json`. 규칙과 형식은 [contracts/plan.md](contracts/plan.md)에 있습니다.
+- DB, Superset, `.state/`, `.build/`를 바꾸지 않고, DB는 읽기 계정(`dash_reader`)으로만 읽습니다. `make apply`는 plan 없이도 그대로 적용합니다. JSON이 필요하면 `python -m dashkit plan --json`. 규칙과 형식은 [contracts/plan.md](contracts/plan.md)에 있습니다.
 
 ## 설정 버전
 
