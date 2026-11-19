@@ -136,7 +136,10 @@ def test_block_section_moves_into_one_line_list_with_its_lines_intact():
     new, how = edit(text, [{"op": "section.move", "tab": "schedule", "index": 0, "to_tab": "issues", "to_index": 1}])
     assert how == "exact"
     removed, added = line_changes(text, new)
-    moved = [line for line in text.split("\n")[164:174]]          # gantt 섹션의 줄들
+    # gantt 섹션의 줄들. 예시 파일이 바뀌어도 맞게 줄 번호 대신 내용으로 찾는다
+    lines = text.split("\n")
+    start = next(i for i, line in enumerate(lines) if line.strip() == "- type: gantt")
+    moved = lines[start:start + 10]
     assert moved[0].strip() == "- type: gantt"
     assert set(moved) <= set(new.split("\n")), "옮긴 섹션의 줄(줄 맞춤 공백, 이모지, 인용 부호)이 그대로여야 함"
     assert "    sections: [{ type: superset, dashboard: issues }]" in removed
