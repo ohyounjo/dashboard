@@ -255,6 +255,8 @@ function renderNotice() {
 function renderView() {
   const r = state.route;
   const box = $("view");
+  // 화면 모듈이 컨테이너에 건 리스너와 진행 중인 렌더링을 정리하게 한다
+  if (view && typeof view.destroy === "function") view.destroy();
   view = null;
   box.className = "";
   if (r.kind === "new") { box.replaceChildren(); view = mountWizard(box, ctx); return; }

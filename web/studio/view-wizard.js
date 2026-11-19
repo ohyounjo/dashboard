@@ -20,6 +20,8 @@ export function mount(container, ctx) {
 
   /* ---------------- 올리기 ---------------- */
 
+  let alive = true;
+
   async function upload(files) {
     const csv = files.filter((f) => /\.csv$/i.test(f.name));
     skipped = files.filter((f) => !csv.includes(f)).map((f) => f.name);
@@ -226,6 +228,7 @@ export function mount(container, ctx) {
   }
 
   function render() {
+    if (!alive) return;   // 화면을 떠난 뒤 끝난 요청은 그리지 않는다
     const head = h("div", { class: "view-head" }, h("h2", { text: S.wizardTitle }), h("p", { class: "intro", text: S.wizardLead }));
     gate = null;
     if (step === "drop") fill(container, head, dropView());
@@ -241,7 +244,11 @@ export function mount(container, ctx) {
   }
 
   // 화면 어디에 놓아도 받는다(추론 전 단계에서만)
-  fileDrop(container, (files) => { if (step === "drop") upload(files); });
+  // container는 다른 화면도 쓰는 요소라서, 떠날 때 리스너를 떼고(destroy) 늦게 끝난 요청이 화면을 덮어쓰지 않게 한다(alive)
+  const stopDrop = fileDrop(container, (files) => { if (alive && step === "drop") upload(files); });
   render();
-  return { canLeave: () => step !== "editing" || !edited || window.confirm(S.discardConfirm) };
+  return {
+    canLeave: () => step !== "editing" || !edited || window.confirm(S.discardConfirm),
+    destroy: () => { alive = false; stopDrop(); },
+  };
 }

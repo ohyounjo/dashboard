@@ -102,17 +102,21 @@ export function select(options, value, { onchange, placeholder, ...attrs } = {})
 
 /** 파일 끌어다 놓기 영역으로 만든다. onFiles(File[])를 부른다. */
 export function fileDrop(el, onFiles) {
+  // 돌려주는 함수를 부르면 리스너를 모두 뗀다. 여러 화면이 같이 쓰는 요소에 걸었으면 화면을 떠날 때 반드시 부른다
+  const off = new AbortController();
+  const opt = { signal: off.signal };
   let depth = 0;
   const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
-  el.addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; el.classList.add("is-over"); });
-  el.addEventListener("dragover", (e) => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
-  el.addEventListener("dragleave", (e) => { if (!hasFiles(e)) return; depth = Math.max(0, depth - 1); if (!depth) el.classList.remove("is-over"); });
+  el.addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; el.classList.add("is-over"); }, opt);
+  el.addEventListener("dragover", (e) => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }, opt);
+  el.addEventListener("dragleave", (e) => { if (!hasFiles(e)) return; depth = Math.max(0, depth - 1); if (!depth) el.classList.remove("is-over"); }, opt);
   el.addEventListener("drop", (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault(); depth = 0; el.classList.remove("is-over");
     const files = Array.from(e.dataTransfer.files || []);
     if (files.length) onFiles(files);
-  });
+  }, opt);
+  return () => { off.abort(); el.classList.remove("is-over"); };
 }
 
 /** 숨긴 file input + 버튼. 버튼을 돌려준다(input은 버튼 옆에 붙는다). */

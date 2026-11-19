@@ -158,3 +158,16 @@ def test_only_5a_screens():
     ops = set(re.findall(r"""op:\s*["']([a-z]+\.[a-z]+)["']""", code))
     assert ops == {"app.update", "tab.add", "tab.update", "tab.move", "tab.remove",
                    "section.add", "section.update", "section.move", "section.remove"}
+
+
+def test_views_release_listeners_on_the_shared_container():
+    """화면들은 #view 컨테이너를 같이 쓴다. 컨테이너에 직접 리스너를 건 화면은 떠날 때 떼야 한다(리뷰 지적 회귀)."""
+    root = Path(__file__).resolve().parent.parent / "web" / "studio"
+    shell = (root / "app.js").read_text(encoding="utf-8")
+    assert "view.destroy()" in shell, "셸이 화면을 바꾸기 전에 이전 화면의 destroy를 불러야 함"
+    dom = (root / "dom.js").read_text(encoding="utf-8")
+    assert "signal: off.signal" in dom and "off.abort()" in dom, "fileDrop은 리스너를 떼는 함수를 돌려줘야 함"
+    for path in sorted(root.glob("view-*.js")):
+        text = path.read_text(encoding="utf-8")
+        if re.search(r"fileDrop\(container\b|container\.addEventListener\(", text):
+            assert "destroy:" in text, f"{path.name}: 컨테이너에 건 리스너를 떼는 destroy가 없음"
