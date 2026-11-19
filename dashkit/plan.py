@@ -280,6 +280,24 @@ def read_other_project(state_dir: Path, project: str) -> dict[str, Any] | None:
         return None
 
 
+def read_pending_prune(state_dir: Path, project: Any) -> int:
+    """같은 프로젝트의 `.state/managed.json`에 남아 있지만 이번 설정이 관리하지 않는 객체 수.
+
+    지난 sync에서 삭제에 실패했거나, import 뒤 prune 전에 끊긴 객체다. 다음 sync가 다시 지운다. 읽기만 한다.
+    """
+    from .sync.bundle import managed_objects
+
+    try:
+        doc = json.loads((Path(state_dir) / "managed.json").read_text(encoding="utf-8"))
+        if doc.get("project") != project.name:
+            return 0
+        recorded = doc.get("objects") or {}
+        current = managed_objects(project)
+        return sum(len(set(map(str, recorded.get(kind) or [])) - set(uuids)) for kind, uuids in current.items())
+    except (OSError, ValueError, AttributeError, TypeError):
+        return 0
+
+
 def _load(text: str) -> dict:
     try:
         doc = yaml.safe_load(text)
@@ -501,11 +519,15 @@ def make_plan(
     superset = diff_bundles(new_files, old_files, unknown_files)
     superset["assumed_columns"] = assumed   # 지금 뷰의 열을 그대로 쓴 데이터셋(적용 뒤 열이 달라질 수 있다)
     superset["replaces"] = replaces
+    # 지난 sync가 지우지 못한 객체(같은 프로젝트). 번들 비교에는 안 나오지만 다음 적용에서 삭제를 다시 시도한다
+    superset["pending_prune"] = 0 if replaces else read_pending_prune(
+        Path(state_dir or os.environ.get("STATE_DIR") or "/app/.state"), project)
 
     changed = (any(t["status"] != "unchanged" for t in table_diffs)
                or any(v["status"] not in ("unchanged",) for v in views)
                or _bundle_changed(superset)
                or superset["replaces"] is not None
+               or superset["pending_prune"] > 0
                or any(superset[k]["unknown"] for k, _l in BUNDLE_KINDS))
     return {
         "project": project.name,
@@ -613,6 +635,8 @@ def format_plan(plan: Mapping[str, Any]) -> str:
             quiet.append(label)
         else:
             rows.append(f"{label} {text}")
+    if b.get("pending_prune"):
+        rows.append(f"지난 적용에서 지우지 못한 객체 {b['pending_prune']}개 삭제 재시도")
     if b.get("replaces"):
         rows.append(f"지금 적용된 프로젝트 '{b['replaces']['project']}'의 객체 {b['replaces']['objects']}개 삭제")
     if b["other"]:

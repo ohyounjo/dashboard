@@ -160,7 +160,8 @@ CREATE TABLE dashkit_meta.load_snapshot (
     "dashboards": { "added": [], "changed": [ { "key": "overview", "detail": "배치 변경" } ], "removed": [], "unknown": [], "unchanged": 2 },
     "other": [],
     "assumed_columns": ["docs"],
-    "replaces": null
+    "replaces": null,
+    "pending_prune": 0
   }
 }
 ```
@@ -179,6 +180,7 @@ CREATE TABLE dashkit_meta.load_snapshot (
 | `superset.database` | `added` · `changed` · `unchanged` · `removed` |
 | `superset.<종류>.unknown` | `{key, reason}`. 적용해야 내용을 알 수 있는 파일 |
 | `superset.assumed_columns` | 열을 몰라 지금 뷰의 열로 번들을 만든 데이터셋 |
+| `superset.pending_prune` | 같은 프로젝트의 `.state/managed.json`에 남아 있지만 이번 설정이 관리하지 않는 객체 수. 지난 sync가 삭제에 실패했거나 prune 전에 끊긴 것이고 다음 sync가 다시 지운다. 0보다 크면 `changed`는 참이고 "지난 적용에서 지우지 못한 객체 N개 삭제 재시도"로 알린다 |
 | `superset.replaces` | `null`, 또는 `{project, objects}`: 상태 파일에 남은 다른 프로젝트와 그 Superset 객체 수(이번 적용에서 지워진다) |
 
 ## 함수 (Studio가 그대로 쓴다, 보강설계서 6-3 "데이터" 화면)

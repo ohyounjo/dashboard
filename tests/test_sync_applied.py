@@ -85,3 +85,31 @@ def test_failed_import_keeps_the_previous_baseline(tmp_path, env):
         sync(project, state_dir=state, build_dir=build, client=FakeClient(fail_import=True),
              view_columns=golden.read_columns(NAME), log=lambda m: None)
     assert marker.is_file(), "실패한 sync가 지난 성공 기록을 건드리면 안 됨"
+
+
+def test_plan_sees_objects_a_failed_prune_left_behind(tmp_path):
+    """prune에 실패한 객체는 managed.json에 남는다. 번들 비교에는 안 나오므로 plan이 따로 센다(리뷰 지적 회귀)."""
+    import json
+
+    from dashkit.config import object_uuid
+    from dashkit.sync.bundle import managed_objects
+
+    project = load_project(NAME, PROJECTS)
+    current = managed_objects(project)
+    state = tmp_path / "state"
+    state.mkdir()
+
+    def write(doc: dict) -> None:
+        (state / "managed.json").write_text(json.dumps(doc), encoding="utf-8")
+
+    assert plan.read_pending_prune(state, project) == 0            # 상태 파일 없음
+    write({"version": 1, "project": NAME, "objects": current})
+    assert plan.read_pending_prune(state, project) == 0            # 지난 sync가 깨끗이 끝남
+    leftover = {**current, "chart": current["chart"] + [object_uuid(NAME, "chart", "zz_removed")],
+                "dashboard": current["dashboard"] + [object_uuid(NAME, "dashboard", "zz_gone")]}
+    write({"version": 1, "project": NAME, "objects": leftover})
+    assert plan.read_pending_prune(state, project) == 2            # 삭제에 실패한 두 객체
+    write({"version": 1, "project": "zz-other", "objects": leftover})
+    assert plan.read_pending_prune(state, project) == 0            # 다른 프로젝트의 기록은 replaces가 맡는다
+    write({"broken": True})
+    assert plan.read_pending_prune(state, project) == 0
