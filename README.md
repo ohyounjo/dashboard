@@ -51,7 +51,7 @@ projects/<이름>/        ★ 사용자가 바꾸는 곳: data/*.csv, schema.yam
 contracts/              설정 형식(JSON Schema), API·위젯·상태 파일 계약, Superset 6.1.0 확인 기록
 dashkit/                파이썬 패키지: config.py(설정 검증), loader/, sync/, api/
 superset/               Superset 이미지·설정·초기화(guest 역할)
-web/                    웹앱(바닐라 JS): 셸, strings.js(고정 문구), widgets/gantt.js·kanban.js
+web/                    웹앱(바닐라 JS): 셸, strings.js(고정 문구), widgets/<유형>/(widget.js + widget.json)
 data-db/init/           데이터 DB 계정 초기화
 tests/                  pytest
 .build/  .state/        생성된 asset 번들, 임베드 UUID·관리 객체 목록(커밋 제외)
@@ -133,7 +133,10 @@ make apply
 - 축약 문법은 22개 유형을 지원합니다: 기본 6종(`big_number_total`, `big_number`, `line`, `bar`, `pie`, `table`)과 추이(`area`, `scatter`, `mixed`, `waterfall`), 비율·단계(`funnel`, `gauge`, `treemap`, `sunburst`), 교차·분포(`heatmap`, `pivot_table`, `histogram`, `box_plot`, `bubble`), 관계·기타(`radar`, `sankey`, `word_cloud`). 유형별 예시는 [reference/chart-catalog.md](reference/chart-catalog.md) 3절과 `projects/chart-gallery/`에, 필드 대응은 [contracts/chart-shorthand.md](contracts/chart-shorthand.md)에 있습니다.
 - 축약 문법에 없는 옵션은 `params:`에 Superset 원본 파라미터로 씁니다. 생성된 값 위에 마지막으로 덮어씁니다.
 - 지표 참조: 문자열이면 데이터셋 `metrics`의 이름, `{ sql, label }`이면 그 차트에서만 쓰는 식입니다.
-- 설정에서 지운 차트는 Superset에서도 지워집니다(prune).
+- 설정에서 지운 차트는 Superset에서도 지워집니다(prune). sync가 만든 객체에는 "외부에서 관리됨" 표식이 붙어서, `.state/`를 지운 뒤에도 이 프로젝트의 이전 객체를 찾아 지웁니다. 화면에서 직접 만든 객체는 지우지 않습니다.
+- sync가 만든 대시보드·차트·데이터셋은 Superset 화면에서 고칠 수 없습니다(편집 버튼이 없거나 저장이 막힙니다). 화면에서 고친 내용이 다음 `make apply`에서 말없이 사라지는 일을 막기 위해서입니다. 막지 않으려면 `SYNC_LOCK_UI=0`으로 sync합니다.
+- 배치에는 차트 말고도 제목 `[{ header: 글 }]`, 글 `{ markdown: "글", width: 4 }`, 대시보드 안 탭 `- tabs: [{ label, rows: [[…]] }]`을 놓을 수 있고, `cross_filters: true`면 차트를 눌러 다른 차트를 거를 수 있습니다.
+- 필터는 `type`으로 네 가지를 씁니다: `select`(기본), `time_range`(기간), `number_range`(숫자 범위), `time_grain`(시간 단위). `default`(기본값), `parent`(상위 필터에 따라 선택지가 줄어드는 연쇄), `charts`(적용할 차트)를 줄 수 있습니다. 문법은 [contracts/chart-shorthand.md](contracts/chart-shorthand.md)의 "대시보드와 필터", 견본은 `projects/chart-gallery/`의 `shelf_blocks` 대시보드입니다. 임베드 화면에서는 기간 필터의 값을 바꿀 수 없고 `default`만 적용됩니다(guest 권한 제한).
 - 생성된 asset 번들은 `.build/<이름>/bundle/`에 남아 diff로 볼 수 있습니다.
 
 ## 3. 탭과 위젯 바꾸기
@@ -177,7 +180,7 @@ make apply
 - 위젯 데이터는 `GET /api/data/<데이터셋>`으로 받습니다. 간트·칸반 섹션이 참조한 데이터셋만 열리고, 나머지는 404입니다.
 - 제목, 로고 글자, 기준일, 메인 컬러는 `app`에서 바꿉니다(`title`, `logo_text`, `as_of: today | YYYY-MM-DD`, `theme.primary.light/dark`).
 - 셸의 고정 문구("보기 전용", "테마" 등)는 `web/strings.js` 한 파일에 있습니다.
-- 새 위젯 유형을 만드는 방법은 [contracts/widgets.md](contracts/widgets.md)의 "새 위젯 유형 추가"를 보세요.
+- 새 위젯 유형은 `web/widgets/<유형>/` 폴더 하나(`widget.js`, `widget.json`)로 추가합니다. [contracts/widgets.md](contracts/widgets.md)의 "새 위젯 유형 추가"를 보세요.
 
 ## 4. 새 프로젝트 만들기
 
@@ -232,7 +235,7 @@ PROJECT=sales-sample make apply
    make apply
    ```
 
-6. 화면에서 임시로 만든 차트는 sync가 관리하지 않으므로 Superset에서 직접 지웁니다. sync가 만든 차트를 화면에서 고친 내용은 다음 `make apply`에서 덮어써집니다.
+6. 화면에서 임시로 만든 차트는 sync가 관리하지 않으므로 Superset에서 직접 지웁니다. sync가 만든 차트는 화면에서 덮어쓸 수 없고(Explore의 저장 창에서 "Save as…"만 됩니다), `SYNC_LOCK_UI=0`으로 풀어 고치더라도 다음 `make apply`에서 덮어써집니다.
 
 축약 차트에 옵션만 하나 더하고 싶을 때(예: 막대 값 표시)도 같은 방법으로 키 이름을 찾아 `params: { show_value: true }`처럼 씁니다.
 

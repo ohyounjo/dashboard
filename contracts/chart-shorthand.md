@@ -90,13 +90,73 @@
 
 ## 대시보드와 필터
 
+근거: `contracts/superset-notes.md` 2절(번들 형식 함정), 12절(배치 노드, 필터 유형·기본값·연쇄·적용 범위). 견본은 `projects/chart-gallery`의 `shelf_blocks` 대시보드다.
+
 | 설정 | 번들 |
 |---|---|
 | `dashboards.<키>.title` | `dashboard_title`, `slug: "<프로젝트>-<키>"`(`_`는 `-`로), `uuid` = uuid5(`<프로젝트>/dashboard/<키>`), `published: true` |
-| `layout` 행 | `ROW-<i>` 노드, `meta.background: BACKGROUND_TRANSPARENT` |
-| 행의 차트 | `CHART-<키>` 노드, `meta: {chartId: 0, uuid, sliceName, width, height}`. `chartId: 0`은 자리표시(필수). 너비가 없는 항목은 남은 칸(12 - 지정 너비 합)을 균등 분할하고 나머지는 앞 항목부터 1칸씩 더 준다. 높이 기본 50 |
-| `filters[]` | `metadata.native_filter_configuration[]`: `id: "NATIVE_FILTER-<키>"`, `name: label`, `filterType: "filter_select"`, `targets: [{column:{name}, datasetUuid}]`, `controlValues.multiSelect: multi`, `scope: {rootPath:[ROOT_ID], excluded:[]}`. `chartsInScope`는 쓰지 않는다 |
-| 대시보드 메타 기본 | `metadata: {native_filter_configuration, color_scheme: "", cross_filters_enabled: false, refresh_frequency: 0}` |
+| `cross_filters: true` | `metadata.cross_filters_enabled: true`(생략 시 `false`). 차트를 누르면 같은 대시보드의 다른 차트가 걸러진다 |
+| 대시보드 메타 기본 | `metadata: {native_filter_configuration, color_scheme: "", cross_filters_enabled, refresh_frequency: 0}` |
+
+### 배치(`layout`)
+
+`layout`은 위에서 아래로 놓는 항목의 목록이다. 항목은 **행**(목록)이거나 **대시보드 안 탭 묶음**(`tabs`)이다.
+
+```yaml
+layout:
+  - [{ header: 핵심 지표 }]                                   # 제목. 한 행에 혼자 둔다
+  - [kpi_a, kpi_b, kpi_c]                                     # 차트 키. 12칸을 균등 분할
+  - [{ markdown: "지표 정의는 [문서](https://example.com) 참고", width: 4 }, { chart: trend, width: 8 }]
+  - tabs:                                                     # 대시보드 안 탭
+      - { label: 지역별, rows: [[by_region]] }
+      - { label: 유형별, rows: [[{ header: 유형 }], [by_category]] }
+```
+
+| 설정 | 번들(`position`) |
+|---|---|
+| 행 | `ROW-<i>` 노드(`i`는 `layout` 안 순번, 1부터), `meta.background: BACKGROUND_TRANSPARENT` |
+| 행의 차트: `<키>` 또는 `{ chart, width, height }` | `CHART-<키>` 노드, `meta: {chartId, uuid, sliceName, width, height}`. `chartId`는 자리표시(필수)이고 import가 실제 id로 바꾼다. 값은 0, 단 `charts`를 쓴 필터가 있는 대시보드에서는 차트마다 다른 번호(`charts` 순서, 1부터)다. 높이 기본 50 |
+| 행의 글: `{ markdown: "글", width, height }` | `MARKDOWN-<i>-<칸>` 노드, `meta: {code, width, height}`. 마크다운 문법. 높이 기본은 같은 행 차트의 가장 큰 높이, 차트가 없는 행이면 20 |
+| 너비 | 너비가 없는 항목(차트·글)은 남은 칸(12 − 지정 너비 합)을 균등 분할하고 나머지는 앞 항목부터 1칸씩 더 준다 |
+| 제목: `[{ header: 글 }]` | `HEADER-<i>` 노드(행 없이 격자나 탭의 자식), `meta: {text, headerSize: MEDIUM_HEADER, background: BACKGROUND_TRANSPARENT}` |
+| `tabs: [{ label, rows }]` | `TABS-<i>` 노드와 탭마다 `TAB-<i>-<t>` 노드(`meta.text: label`). `rows`의 행은 `ROW-<i>-<t>-<k>`, 제목은 `HEADER-<i>-<t>-<k>`. 탭 안에 탭은 넣지 않는다 |
+| `parents` | 모든 노드에 뿌리부터 부모까지의 id 목록(`[ROOT_ID, GRID_ID, …]`) |
+
+세로 묶음(`COLUMN`)과 구분선(`DIVIDER`)은 만들지 않는다.
+
+### 필터(`filters`)
+
+```yaml
+filters:
+  - { key: f_period, label: 기간, type: time_range, default: "Last quarter" }
+  - { key: f_amount, label: 금액, type: number_range, dataset: orders, column: amount, default: [0, 100000] }
+  - { key: f_region, label: 지역, dataset: orders, column: region, default: [서울] }      # type 생략 = select
+  - { key: f_city, label: 도시, type: select, dataset: orders, column: city, parent: f_region }
+  - { key: f_grain, label: 단위, type: time_grain, dataset: orders, default: P1M, charts: [trend] }
+```
+
+| `type` | `filterType` | 쓰는 필드(공통: `key`, `label`, `default`, `charts`) | `targets` | `default` → `defaultDataMask` |
+|---|---|---|---|---|
+| `select`(기본, 생략 가능) | `filter_select` | `dataset`·`column`(필수), `multi`(기본 true), `parent` | `[{column: {name}, datasetUuid}]` | 값 또는 값 목록 → `extraFormData.filters: [{col, op: "IN", val: [값…]}]`, `filterState: {label: "값, 값", value: [값…]}`. `multi: false`면 값 하나 |
+| `time_range` | `filter_time` | 없음(`dataset`·`column`을 쓰지 않는다) | `[{}]` | Superset 시간 범위 문자열(`"Last quarter"`, `"2026-01-01 : 2026-07-01"`) → `extraFormData.time_range`, `filterState.value` |
+| `number_range` | `filter_range` | `dataset`·`column`(필수) | `[{column: {name}, datasetUuid}]` | `[최소, 최대]`(한쪽은 `null` 가능) → `extraFormData.filters: [{col, op: ">=", val}, {col, op: "<=", val}]`, `filterState: {label: "최소 ≤ x ≤ 최대", value: [최소, 최대]}` |
+| `time_grain` | `filter_timegrain` | `dataset`(필수. 고를 수 있는 단위를 이 데이터셋에서 읽는다) | `[{datasetUuid}]` | `P1D`·`P1W`·`P1M`·`P3M`·`P1Y` → `extraFormData.time_grain_sqla`, `filterState: {label: "Month", value: ["P1M"]}` |
+
+| 설정 | 번들(`metadata.native_filter_configuration[]`) |
+|---|---|
+| 공통 | `id: "NATIVE_FILTER-<키>"`, `name: label`, `type: NATIVE_FILTER`, `description: ""` |
+| `controlValues` | `select`: `{multiSelect: multi, enableEmptyFilter: false, defaultToFirstItem: false, inverseSelection: false, searchAllOptions: false}`. 나머지 유형: `{enableEmptyFilter: false}` |
+| `default` 없음 | `defaultDataMask: {extraFormData: {}, filterState: {}, ownState: {}}`. 있으면 위 표의 값에 `ownState: {}` |
+| `parent: <필터 키>` | `cascadeParentIds: ["NATIVE_FILTER-<필터 키>"]`(없으면 `[]`). 상위 필터에서 고른 값에 맞는 선택지만 남는다. `select` 필터에만 쓴다 |
+| `charts: [키…]` | `scope: {rootPath: [ROOT_ID], excluded: [나열하지 않은 차트의 자리표시 chartId…]}`. import가 실제 차트 id로 바꾼다. 생략하면 `excluded: []`(대시보드의 모든 차트). `chartsInScope`는 쓰지 않는다 |
+
+- 필터는 대상 열과 **이름이 같은 열**을 가진 차트(데이터셋)에 적용된다.
+- `time_range` 필터가 있는 대시보드에서는, 그 필터의 적용 범위에 든 **축약 차트**의 `adhoc_filters`에 시간 조건 `{expressionType: SIMPLE, clause: WHERE, subject: <시간 열>, operator: TEMPORAL_RANGE, comparator: "No filter"}`를 더한다(`where` 조건이 있으면 그 뒤). Superset의 시간 범위 필터는 이 조건이 있는 차트에만 적용되기 때문이다. `<시간 열>`은 차트가 참조한 열 중 첫 date/timestamp 열, 없으면 데이터셋 뷰의 첫 date/timestamp 열이다(둘 다 없으면 붙이지 않는다). 원본(`viz_type`) 차트에는 붙이지 않으므로 필요하면 `params.adhoc_filters`에 직접 쓴다. 차트의 `params`에 `adhoc_filters`를 쓰면 생성한 값을 통째로 덮어쓴다(생성 순서 3번).
+- 임베드(guest) 화면에서는 `time_range` 필터의 값을 바꿀 수 없고 `default`만 적용된다(`superset-notes.md` 12-3절).
+
+### 표식
+
+데이터베이스·데이터셋·차트·대시보드 YAML의 끝에 `is_managed_externally`, `external_url: "dashkit://<프로젝트>/<종류>/<키>"`를 쓴다. 규칙과 `SYNC_LOCK_UI`는 `state-and-uuid.md`의 "표식"에 있다.
 
 ## 데이터셋
 

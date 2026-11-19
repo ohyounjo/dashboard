@@ -16,3 +16,5 @@ cache_timeout: null
 uuid: 81a96b32-2589-5a3a-a7be-d4d34b3929b4
 version: 1.0.0
 dataset_uuid: 5ce7aeff-a8ee-5cb6-9ea8-a7d35e9ad2ee
+is_managed_externally: true
+external_url: dashkit://sales-sample/chart/tier_mix

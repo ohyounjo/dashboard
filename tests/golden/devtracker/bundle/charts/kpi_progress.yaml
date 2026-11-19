@@ -12,3 +12,5 @@ cache_timeout: null
 uuid: 1a48d16a-b967-5f07-b247-5f1864bafae2
 version: 1.0.0
 dataset_uuid: 0be869ce-1a0b-58f2-9dba-3f38466e73a5
+is_managed_externally: true
+external_url: dashkit://devtracker/chart/kpi_progress

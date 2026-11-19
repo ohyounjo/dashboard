@@ -165,6 +165,8 @@ services:
       DATA_DB_OWNER_PASSWORD: ${DATA_DB_OWNER_PASSWORD:?make env 필요}
       STATE_DIR: ${STATE_DIR}
       BUILD_DIR: ${BUILD_DIR}
+      # sync가 만든 Superset 객체의 화면 편집 차단(기본 1). contracts/state-and-uuid.md "표식"
+      SYNC_LOCK_UI: ${SYNC_LOCK_UI:-1}
       DATA_MAX_ROWS: ${DATA_MAX_ROWS}
     volumes:
       - .:/app

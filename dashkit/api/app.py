@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictStr
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .. import config
+from .. import config, widgets
 from . import data
 from .state import EmbedState, default_state_dir
 
@@ -166,6 +166,8 @@ def get_app():
         },
         "superset": {"url": os.environ.get("SUPERSET_PUBLIC_URL") or None},
         "applied": applied,
+        # 셸이 import()를 허용할 위젯 유형(매니페스트에서 읽은 목록)
+        "widgets": widgets.type_list(),
         "tabs": tabs,
     }
 

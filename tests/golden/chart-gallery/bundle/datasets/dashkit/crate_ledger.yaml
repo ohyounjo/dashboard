@@ -69,3 +69,5 @@ columns:
   extra: null
 version: 1.0.0
 database_uuid: 36bb1cf1-1ea5-5911-98ae-79b9251be5d7
+is_managed_externally: true
+external_url: dashkit://chart-gallery/dataset/crate_ledger

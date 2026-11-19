@@ -15,3 +15,5 @@ cache_timeout: null
 uuid: 4acb899c-0318-59ae-bc64-75f6fd0779ea
 version: 1.0.0
 dataset_uuid: b2210950-cb3d-5b8b-8a20-d2eb9e06c157
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_tree_chart

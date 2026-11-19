@@ -13,3 +13,5 @@ cache_timeout: null
 uuid: 5db8116e-91b1-5363-a9fa-104ab395978b
 version: 1.0.0
 dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_sankey

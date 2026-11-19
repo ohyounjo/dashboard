@@ -16,3 +16,5 @@ cache_timeout: null
 uuid: 3feecc79-6d17-5905-9777-249389cdaf77
 version: 1.0.0
 dataset_uuid: efd4de59-6303-5c28-8bb5-63effc980ca2
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_waterfall

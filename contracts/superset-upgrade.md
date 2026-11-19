@@ -35,6 +35,8 @@ Superset 버전은 `.env.example`의 `SUPERSET_VERSION` **한 곳**에 있다. `
    | `…에 export에 없는 키 [...]` | 새 버전이 그 키를 내보내지 않는다(이름이 바뀌었거나 없어졌다) | `bundle.py`에서 그 키를 새 이름으로 바꾸거나 지운다. `make golden`으로 스냅샷을 갱신하고 diff를 검토한다 |
    | `export에 <종류> 키가 없음` | export에 그 종류의 파일이 없다 | 3번에서 대시보드와 딸린 차트·데이터셋·DB가 모두 들어갔는지 확인 |
 
+   번들에는 export에 나오지 않는 import 전용 키(`is_managed_externally`, `external_url`)도 쓴다. 이 둘은 `contracts/superset-<버전>-export/managed/import-only-keys.yaml`에 근거와 함께 적혀 있고 테스트가 그 목록만 허용한다. 새 버전에서 모델의 `extra_import_fields`에 여전히 있는지 다시 확인하고, 통합 테스트 `test_objects_carry_the_mark`가 실제 저장을 본다.
+
    새 export에만 있는 키(우리가 쓰지 않는 새 키)는 실패가 아니다. 필요하면 `git diff --no-index contracts/superset-<이전>-export contracts/superset-<새 버전>-export`로 훑어본다.
 
    대조 범위는 종류별 최상위 키, 데이터셋의 `metrics[]`·`columns[]` 항목 키, 데이터베이스 `extra` 키다. 차트 `params`와 대시보드 `position`·`metadata` 안쪽은 Superset이 JSON으로 그대로 보관하므로 export로는 검증되지 않는다. 이 부분은 5번이 맡는다.

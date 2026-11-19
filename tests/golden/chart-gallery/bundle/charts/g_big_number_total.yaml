@@ -13,3 +13,5 @@ cache_timeout: null
 uuid: 2095393a-5540-5dbc-9c5e-4f03066f0095
 version: 1.0.0
 dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_big_number_total

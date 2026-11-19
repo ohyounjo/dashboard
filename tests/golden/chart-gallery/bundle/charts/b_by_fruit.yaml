@@ -1,0 +1,23 @@
+slice_name: 과일별 상자 수
+description: null
+certified_by: null
+certification_details: null
+viz_type: pie
+params:
+  viz_type: pie
+  groupby:
+  - fruit
+  metric: crate_total
+  adhoc_filters:
+  - expressionType: SIMPLE
+    clause: WHERE
+    subject: picked_on
+    operator: TEMPORAL_RANGE
+    comparator: No filter
+query_context: null
+cache_timeout: null
+uuid: 8fc60802-6776-56b9-b108-37ac68225054
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/b_by_fruit

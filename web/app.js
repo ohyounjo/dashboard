@@ -2,7 +2,7 @@
 import S from "./strings.js";
 import { icon } from "./icons.js";
 
-const WIDGET_TYPES = ["gantt", "kanban"];        // 셸이 import()할 수 있는 위젯 유형
+const WIDGET_TYPE = /^[a-z][a-z0-9_]*$/;         // 위젯 유형 이름 형식(import 경로에 쓰기 전 한 번 더 확인)
 const THEME_KEY = "dashboard-theme";             // localStorage 키(수동 테마 선택)
 const CONNECT_TIMEOUT_MS = 30000;                // Superset iframe 응답 대기 상한
 const SIZE_POLL_MS = 2000;                       // 높이 자동 맞춤 주기(보이는 탭만)
@@ -275,7 +275,16 @@ function supersetSection(container, sec, ctx) {
   load();
 }
 
-/* ---------------- 데이터 위젯 섹션(gantt, kanban) ---------------- */
+/* ---------------- 위젯 섹션(web/widgets/<유형>/widget.js) ---------------- */
+
+/** /api/app의 widgets → 셸이 import()할 수 있는 유형 이름 집합. 서버가 준 이름과 정확히 같을 때만 경로에 쓴다. */
+function widgetTypeSet(list) {
+  const types = new Set();
+  for (const w of Array.isArray(list) ? list : []) {
+    if (w && typeof w.type === "string" && WIDGET_TYPE.test(w.type)) types.add(w.type);
+  }
+  return types;
+}
 
 function widgetSection(container, sec, ctx) {
   const body = h("div");
@@ -290,11 +299,11 @@ function widgetSection(container, sec, ctx) {
     const my = ++gen;
     if (inst && typeof inst.destroy === "function") { try { inst.destroy(); } catch (e) { /* 무시 */ } }
     inst = null;
-    if (!WIDGET_TYPES.includes(sec.type)) { fail(S.widgetErrorTitle, S.unsupportedSection(String(sec.type)), false); return; }
+    if (typeof sec.type !== "string" || !ctx.widgetTypes.has(sec.type)) { fail(S.widgetErrorTitle, S.unsupportedSection(String(sec.type)), false); return; }
     body.replaceChildren(widgetSkeleton());
 
-    let data;
-    try {
+    let data = null;
+    if (sec.dataset != null) try {   // dataset 옵션이 없는 유형은 데이터를 받지 않는다(rows = [])
       let res;
       try {
         res = await fetch(`/api/data/${encodeURIComponent(sec.dataset)}`, { cache: "no-store", headers: { Accept: "application/json" } });
@@ -312,7 +321,7 @@ function widgetSection(container, sec, ctx) {
     }
 
     try {
-      const mod = await import(`./widgets/${sec.type}.js`);
+      const mod = await import(`./widgets/${sec.type}/widget.js`);
       if (my !== gen) return;
       const el = h("div", { class: `widget widget-${sec.type}` });
       body.replaceChildren(el);
@@ -380,6 +389,7 @@ function renderApp(cfg) {
   $("meta").hidden = false;
 
   const tabs = cfg.tabs;
+  const widgetTypes = widgetTypeSet(cfg.widgets);
   const nav = $("tabs");
   const views = $("views");
   nav.replaceChildren();
@@ -403,7 +413,7 @@ function renderApp(cfg) {
     views.append(view);
     const showHandlers = new Set();
     const ctx = {
-      index, sectionIndex: 0, tabLabel: tab.label, supersetUrl, asOf: app.as_of,
+      index, sectionIndex: 0, tabLabel: tab.label, supersetUrl, asOf: app.as_of, widgetTypes,
       isActive: () => active === index,
       onShow: (fn) => showHandlers.add(fn),
       onResize: (fn) => resizeHandlers.add(() => { if (active === index) fn(); }),

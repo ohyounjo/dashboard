@@ -1,0 +1,26 @@
+slice_name: 농원별 상자 수
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_bar
+params:
+  viz_type: echarts_timeseries_bar
+  x_axis: orchard
+  metrics:
+  - crate_total
+  groupby: []
+  orientation: vertical
+  y_axis_format: ',d'
+  adhoc_filters:
+  - expressionType: SIMPLE
+    clause: WHERE
+    subject: picked_on
+    operator: TEMPORAL_RANGE
+    comparator: No filter
+query_context: null
+cache_timeout: null
+uuid: a2c21c43-e9fd-56e2-b439-56e7add0d8d7
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/b_by_orchard

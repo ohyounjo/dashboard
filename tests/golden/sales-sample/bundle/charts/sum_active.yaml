@@ -12,3 +12,5 @@ cache_timeout: null
 uuid: 07db1096-7fbe-5482-9931-5c9c24186e3b
 version: 1.0.0
 dataset_uuid: 147338b5-501a-58e6-9457-7f541847dff2
+is_managed_externally: true
+external_url: dashkit://sales-sample/chart/sum_active

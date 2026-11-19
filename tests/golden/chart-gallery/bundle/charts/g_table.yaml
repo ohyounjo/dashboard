@@ -23,3 +23,5 @@ cache_timeout: null
 uuid: e9f62edf-ad5b-5793-bf57-d4513bb2791e
 version: 1.0.0
 dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_table

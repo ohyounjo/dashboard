@@ -20,3 +20,5 @@ cache_timeout: null
 uuid: 7cf313e3-7a30-5158-b7ed-ec1326ab086b
 version: 1.0.0
 dataset_uuid: dfcadfa0-715d-5f72-a6b1-047df47406d3
+is_managed_externally: true
+external_url: dashkit://devtracker/chart/trend_open

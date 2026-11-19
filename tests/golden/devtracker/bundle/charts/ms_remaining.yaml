@@ -24,3 +24,5 @@ cache_timeout: null
 uuid: 930faba8-c08c-5553-a167-daad2693ebe4
 version: 1.0.0
 dataset_uuid: 0be869ce-1a0b-58f2-9dba-3f38466e73a5
+is_managed_externally: true
+external_url: dashkit://devtracker/chart/ms_remaining

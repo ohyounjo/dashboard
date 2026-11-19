@@ -1,0 +1,37 @@
+{
+  "type": "gantt",
+  "label": "간트",
+  "options": {
+    "type": "object",
+    "required": ["dataset", "fields"],
+    "properties": {
+      "dataset": { "$ref": "#/$defs/key" },
+      "fields": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "start", "end"],
+        "properties": {
+          "label": { "$ref": "#/$defs/column", "x-column": true },
+          "start": { "description": "date 열", "$ref": "#/$defs/column", "x-column": true },
+          "end": { "description": "date 열", "$ref": "#/$defs/column", "x-column": true },
+          "progress": { "description": "0~100 숫자 열", "$ref": "#/$defs/column", "x-column": true, "default": null },
+          "status": { "$ref": "#/$defs/column", "x-column": true, "default": null }
+        }
+      },
+      "statuses": { "$ref": "#/$defs/status_map", "default": null },
+      "range": {
+        "description": "축 범위. 생략하면 행의 최소 start ~ 최대 end",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["start", "end"],
+        "properties": {
+          "start": { "$ref": "#/$defs/date" },
+          "end": { "$ref": "#/$defs/date" }
+        },
+        "x-date-range": ["start", "end"],
+        "default": null
+      },
+      "sort": { "description": "정렬 열(오름차순). 생략하면 start", "$ref": "#/$defs/column", "x-column": true, "default": null }
+    }
+  }
+}

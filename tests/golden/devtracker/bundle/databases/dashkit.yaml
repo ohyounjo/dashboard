@@ -16,3 +16,5 @@ impersonate_user: false
 configuration_method: sqlalchemy_form
 uuid: 5d69280a-42e4-58d7-b3cf-fa80e305fa8a
 version: 1.0.0
+is_managed_externally: true
+external_url: dashkit://devtracker/database/main

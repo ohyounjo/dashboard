@@ -1,0 +1,25 @@
+slice_name: 수확 추이
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_line
+params:
+  viz_type: echarts_timeseries_line
+  x_axis: picked_on
+  time_grain_sqla: P1W
+  metrics:
+  - crate_total
+  groupby: []
+  adhoc_filters:
+  - expressionType: SIMPLE
+    clause: WHERE
+    subject: picked_on
+    operator: TEMPORAL_RANGE
+    comparator: No filter
+query_context: null
+cache_timeout: null
+uuid: bc7fd3b5-983c-58a0-aad4-6e876d7b412b
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/b_trend

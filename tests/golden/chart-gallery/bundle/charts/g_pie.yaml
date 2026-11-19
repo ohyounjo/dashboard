@@ -14,3 +14,5 @@ cache_timeout: null
 uuid: 7f847a49-51f0-5728-b111-d13c7119df2f
 version: 1.0.0
 dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_pie

@@ -7,6 +7,8 @@
 .test/
 projects/
 web/
+# 위젯 매니페스트는 backend가 섹션 스키마를 합성할 때 읽는다(dashkit/widgets.py)
+!web/widgets/*/widget.json
 tests/
 reference/
 **/__pycache__/
