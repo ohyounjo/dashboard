@@ -81,6 +81,8 @@
 
 통합 테스트의 프로젝트 전환은 실행 중인 스택 대신 **별도 compose 프로젝트 이름**(`COMPOSE_PROJECT_NAME=dashkit-test`, 다른 포트, 별도 볼륨)에서 돌린다. 개발 중인 화면이 테스트 때문에 바뀌지 않는다.
 
+파일 상태도 나눈다. sync는 `STATE_DIR`(`embed.json`, `managed.json`)과 `BUILD_DIR`에 쓰고 backend는 `STATE_DIR`을 읽으므로, 테스트 스택은 전용 디렉터리(`.test/state`, `.test/build`)를 쓰고 테스트 backend도 그 디렉터리를 마운트한다. 완료 조건: `make test` 전후로 개발 스택의 `.state/`와 `.build/` 파일이 바뀌지 않는다.
+
 ### 3-3. CI
 - PR마다 `make test-unit`을 돌린다.
 - `dashkit/`, `superset/`, `projects/`, `contracts/`가 바뀐 PR에는 `make test`도 돌린다. 기존 화면 캡처 워크플로가 이미 전체 스택을 띄우므로 같은 작업에 단계로 붙인다.
@@ -349,6 +351,7 @@ tables:
 | 저장 방식 | 임시 사본에 써서 `config.load_project`로 검증 → 통과하면 원자적 교체. 실패하면 파일을 건드리지 않고 오류를 폼에 표시 |
 | 미리보기 | 별도 렌더러를 만들지 않는다. "적용"을 누르면 실제 apply를 실행하고 오른쪽 iframe을 새로 고친다 |
 | 되돌리기 | git에 맡긴다. 화면에 "바뀐 파일" 목록을 보여 준다 |
+| 프레임 허용 | 웹앱은 `frame-ancestors 'none'`이고 Superset은 `WEB_ORIGINS`만 허용하므로 그대로는 미리보기가 차단된다. `STUDIO_ORIGIN`(기본 비어 있음)을 두고, `make studio`로 띄울 때만 웹앱 CSP의 `frame-ancestors`와 Superset의 `frame-ancestors`에 그 출처를 정확히 더한다. 값이 비어 있으면 지금과 같다(`'none'`). 완료 조건(5a): Studio 안에서 웹앱과 그 안의 Superset 대시보드가 중첩 iframe으로 렌더링된다 |
 
 ### 6-3. 화면과 기능
 
