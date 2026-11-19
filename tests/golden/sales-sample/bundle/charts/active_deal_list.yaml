@@ -1,0 +1,29 @@
+slice_name: 금액 상위 진행 딜
+description: null
+certified_by: null
+certification_details: null
+viz_type: table
+params:
+  viz_type: table
+  query_mode: raw
+  all_columns:
+  - step_badge
+  - deal_code
+  - deal_label
+  - company
+  - rep_name
+  - amount_krw
+  - age_days
+  order_by_cols:
+  - '["amount_krw", false]'
+  row_limit: 10
+  table_timestamp_format: '%Y-%m-%d'
+  adhoc_filters:
+  - expressionType: SQL
+    clause: WHERE
+    sqlExpression: is_active
+query_context: null
+cache_timeout: null
+uuid: 9e1d57ab-4817-5865-bdb3-10f0548740ba
+version: 1.0.0
+dataset_uuid: 147338b5-501a-58e6-9457-7f541847dff2

@@ -1,0 +1,18 @@
+slice_name: 월별 수주액
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_line
+params:
+  viz_type: echarts_timeseries_line
+  x_axis: closed_on
+  time_grain_sqla: P1M
+  metrics:
+  - won_amount
+  groupby: []
+  y_axis_format: ',.0f'
+query_context: null
+cache_timeout: null
+uuid: 55304d53-baa4-5286-930d-193b8974aee1
+version: 1.0.0
+dataset_uuid: 147338b5-501a-58e6-9457-7f541847dff2

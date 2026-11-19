@@ -15,7 +15,10 @@ from dashkit.config import load_project
 from conftest import PROJECTS, api, live_project
 
 SWITCH_FROM = os.environ.get("SWITCH_FROM")
-pytestmark = pytest.mark.skipif(not SWITCH_FROM, reason="make test의 전환 단계에서만 실행")
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(not SWITCH_FROM, reason="make test의 전환 단계에서만 실행"),
+]
 
 
 @pytest.fixture(scope="module")

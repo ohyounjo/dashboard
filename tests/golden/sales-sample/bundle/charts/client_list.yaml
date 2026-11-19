@@ -1,0 +1,27 @@
+slice_name: 고객사 목록
+description: null
+certified_by: null
+certification_details: null
+viz_type: table
+params:
+  viz_type: table
+  query_mode: raw
+  all_columns:
+  - account_code
+  - company
+  - industry
+  - region
+  - tier
+  - rep_name
+  - deal_count
+  - won_total
+  order_by_cols:
+  - '["won_total", false]'
+  - '["account_code", true]'
+  table_timestamp_format: '%Y-%m-%d'
+  include_search: true
+query_context: null
+cache_timeout: null
+uuid: 7e68cfe5-fdc2-5b9b-8ffa-40b4ac1ae50c
+version: 1.0.0
+dataset_uuid: 5ce7aeff-a8ee-5cb6-9ea8-a7d35e9ad2ee

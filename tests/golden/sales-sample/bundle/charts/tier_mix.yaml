@@ -1,0 +1,18 @@
+slice_name: 등급별 고객 수
+description: null
+certified_by: null
+certification_details: null
+viz_type: pie
+params:
+  viz_type: pie
+  groupby:
+  - tier
+  metric:
+    expressionType: SQL
+    sqlExpression: COUNT(*)
+    label: 고객 수
+query_context: null
+cache_timeout: null
+uuid: 81a96b32-2589-5a3a-a7be-d4d34b3929b4
+version: 1.0.0
+dataset_uuid: 5ce7aeff-a8ee-5cb6-9ea8-a7d35e9ad2ee

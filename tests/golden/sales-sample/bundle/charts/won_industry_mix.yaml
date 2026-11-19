@@ -1,0 +1,16 @@
+slice_name: 업종별 수주액
+description: null
+certified_by: null
+certification_details: null
+viz_type: pie
+params:
+  viz_type: pie
+  groupby:
+  - industry
+  metric: won_amount
+  donut: true
+query_context: null
+cache_timeout: null
+uuid: bdc9cb26-5d3b-576f-ac1f-f93224640807
+version: 1.0.0
+dataset_uuid: 147338b5-501a-58e6-9457-7f541847dff2

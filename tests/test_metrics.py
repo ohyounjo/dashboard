@@ -13,7 +13,10 @@ from conftest import PROJECTS, live_project
 
 PROJECT = "devtracker"
 
-pytestmark = pytest.mark.skipif(live_project() != PROJECT, reason="devtracker가 적용된 상태에서만 확인한다")
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(live_project() != PROJECT, reason="devtracker가 적용된 상태에서만 확인한다"),
+]
 
 
 @pytest.fixture(scope="module")

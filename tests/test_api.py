@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 
 import pytest
 import requests
@@ -12,7 +13,9 @@ from dashkit.config import load_project
 
 from conftest import PROJECTS, api, live_project
 
-REFERER = {"Referer": "http://localhost:8080/"}
+# 허용 출처(WEB_ORIGINS)의 첫 항목. 테스트 스택은 개발 스택과 포트가 다르다
+REFERER = {"Referer": (os.environ.get("WEB_ORIGINS") or "http://localhost:8080").split(",")[0].strip() + "/"}
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="module")

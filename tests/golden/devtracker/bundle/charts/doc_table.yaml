@@ -1,0 +1,25 @@
+slice_name: 문서 목록 (🆕 최근 7일 안에 수정)
+description: null
+certified_by: null
+certification_details: null
+viz_type: table
+params:
+  viz_type: table
+  query_mode: raw
+  all_columns:
+  - new_mark
+  - title
+  - type
+  - version
+  - author_name
+  - updated
+  - milestone_short
+  order_by_cols:
+  - '["updated", false]'
+  - '["id", true]'
+  table_timestamp_format: '%Y-%m-%d'
+query_context: null
+cache_timeout: null
+uuid: 5626dc0c-5354-5009-8797-3d401b0c9443
+version: 1.0.0
+dataset_uuid: fbfbb115-7ce4-5e28-a58e-193a83ee419b

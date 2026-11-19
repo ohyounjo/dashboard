@@ -37,7 +37,9 @@ check(설정 검사) → load(CSV 검증·적재) → sync(Superset 반영) → 
 | `make up` | 기동 후 healthy 대기 |
 | `make check` | 설정만 검사(DB 불필요) |
 | `make apply` | 검사 → 적재 → Superset 반영 → backend 재시작. **무엇을 바꿨든 이것 하나** |
-| `make test` | 전체 테스트(아래 "테스트") |
+| `make test-unit` | 단위 테스트(스택 불필요) |
+| `make test` | 통합 테스트(별도 테스트 스택, 아래 "테스트") |
+| `make golden` | 번들 스냅샷 갱신 |
 | `make logs` | 로그 보기 |
 | `make down` | 중지(데이터 유지) |
 | `make reset CONFIRM=1` | 컨테이너·볼륨·`.state/`·`.build/` 삭제(처음부터 다시) |
@@ -239,16 +241,25 @@ PROJECT=sales-sample make apply
 ## 테스트
 
 ```bash
-make test
+make test-unit   # 스택 없이(tools 이미지만). PR마다 CI가 돌린다
+make test        # 전체 스택이 필요한 통합 테스트
 ```
 
-1. 현재 `PROJECT`로 `tests/` 전체를 실행합니다.
-   - 설정 검사, 로더(임시 DB), sync(임시 프로젝트 이름)
-   - 지표 정합성(Superset 차트 데이터 API)
-   - 백엔드와 guest token 권한 경계
-   - 템플릿 코드의 도메인 단어 grep
-2. 다른 예시 프로젝트로 `apply`한 뒤 전환을 검사합니다(`tests/test_switch.py`). 탭·차트·위젯 데이터가 바뀌고 이전 Superset 객체가 남지 않는지 봅니다.
-3. 성공하든 실패하든 원래 프로젝트로 다시 `apply`합니다.
+**`make test-unit`** 은 DB와 Superset 없이 돕니다.
+
+- 설정 검사(`tests/test_config.py`), CSV 검증(`tests/test_validate.py`), 템플릿 코드의 도메인 단어 grep
+- 번들 스냅샷(`tests/test_bundle_golden.py`): 예시 프로젝트의 번들을 고정된 뷰 열 정보(`tests/golden/<이름>/view_columns.json`)로 만들어 `tests/golden/<이름>/bundle/`과 한 바이트도 다르지 않은지 봅니다. 번들이 바뀌는 것이 의도라면 `make golden`으로 갱신하고 diff를 PR에서 검토합니다. `sql:` 데이터셋의 열이 바뀌었으면 `PROJECT=<이름> make golden COLUMNS=1`로 열 정보부터 다시 읽습니다(그 프로젝트가 적용된 스택 필요).
+
+**`make test`** 는 개발 스택과 분리된 테스트 스택에서 돕니다. 쓰던 화면(8080, 8088)과 `.state/`, `.build/`는 바뀌지 않습니다.
+
+- 테스트 스택: compose 프로젝트 `dashkit-test`, 웹앱 18080, Superset 18088, 별도 볼륨, 상태·번들은 `.test/`. 이미지는 개발 스택과 같이 씁니다.
+- 순서:
+  1. devtracker로 `up`, `apply`한 뒤 `tests/` 전체를 실행합니다. 단위 테스트에 더해 로더(임시 DB), sync(임시 프로젝트 이름), 지표 정합성(Superset 차트 데이터 API), 백엔드와 guest token 권한 경계를 봅니다.
+  2. sales-sample로 `apply`한 뒤 전환을 검사합니다(`tests/test_switch.py`). 탭·차트·위젯 데이터가 바뀌고 이전 Superset 객체가 남지 않는지 봅니다.
+  3. 성공하든 실패하든 테스트 스택과 그 볼륨, `.test/`를 지웁니다. `make test KEEP=1`이면 남기고, `make test-down`으로 내립니다.
+- Superset을 하나 더 띄우므로 메모리가 2GB쯤 더 필요합니다. 부족하면 `make down`으로 개발 스택을 내린 뒤 실행하세요.
+
+CI: PR마다 `make test-unit`을 돌리고(`.github/workflows/tests.yml`), 코드·설정·계약이 바뀐 PR은 화면 캡처 워크플로가 `make test`도 돌립니다.
 
 UI 화면은 자동 테스트에 넣지 않았습니다.
 

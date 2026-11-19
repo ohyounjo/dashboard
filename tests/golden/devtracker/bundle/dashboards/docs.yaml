@@ -1,0 +1,77 @@
+dashboard_title: 문서
+description: null
+css: null
+slug: devtracker-docs
+certified_by: null
+certification_details: null
+published: true
+uuid: 61cc6391-457f-56ea-8d27-12e8b85fbcf7
+position:
+  DASHBOARD_VERSION_KEY: v2
+  ROOT_ID:
+    type: ROOT
+    id: ROOT_ID
+    children:
+    - GRID_ID
+  GRID_ID:
+    type: GRID
+    id: GRID_ID
+    children:
+    - ROW-1
+    parents:
+    - ROOT_ID
+  ROW-1:
+    type: ROW
+    id: ROW-1
+    children:
+    - CHART-doc_table
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-doc_table:
+    type: CHART
+    id: CHART-doc_table
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: 5626dc0c-5354-5009-8797-3d401b0c9443
+      sliceName: 문서 목록 (🆕 최근 7일 안에 수정)
+      width: 12
+      height: 60
+metadata:
+  native_filter_configuration:
+  - id: NATIVE_FILTER-f_doc_type
+    name: 유형
+    filterType: filter_select
+    type: NATIVE_FILTER
+    targets:
+    - column:
+        name: type
+      datasetUuid: fbfbb115-7ce4-5e28-a58e-193a83ee419b
+    controlValues:
+      multiSelect: true
+      enableEmptyFilter: false
+      defaultToFirstItem: false
+      inverseSelection: false
+      searchAllOptions: false
+    defaultDataMask:
+      extraFormData: {}
+      filterState: {}
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
+  color_scheme: ''
+  cross_filters_enabled: false
+  refresh_frequency: 0
+theme_uuid: null
+version: 1.0.0

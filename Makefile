@@ -10,7 +10,21 @@ HOST_GID := $(shell id -g)
 TOOLS    := $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) tools
 
 .NOTPARALLEL:
-.PHONY: help env up check load sync apply test reset down logs dirs
+.PHONY: help env up check load sync apply test test-unit test-down unit-image golden reset down logs dirs _test _test_run
+
+# ---- 테스트 스택(보강설계서 3-2, 7절 D5): 개발 스택과 이름·포트·볼륨·상태 디렉터리가 모두 다르다.
+# 상태·빌드 디렉터리는 .test/ 고정이다(아래 정리 단계가 이 경로를 그대로 쓴다).
+TEST_NAME          := dashkit-test
+TEST_WEB_PORT      ?= 18080
+TEST_SUPERSET_PORT ?= 18088
+TEST_ENV := COMPOSE_PROJECT_NAME=$(TEST_NAME) \
+  WEB_PORT=$(TEST_WEB_PORT) SUPERSET_PORT=$(TEST_SUPERSET_PORT) \
+  WEB_ORIGINS=http://localhost:$(TEST_WEB_PORT),http://127.0.0.1:$(TEST_WEB_PORT) \
+  SUPERSET_PUBLIC_URL=http://localhost:$(TEST_SUPERSET_PORT) \
+  STATE_DIR=/app/.test/state BUILD_DIR=/app/.test/build HOST_STATE_DIR=./.test/state
+# 단위 테스트는 compose 없이 tools 이미지만으로 돈다(.env도 필요 없다)
+APP_IMAGE := dashkit-app:local
+UNIT_RUN  := docker run --rm --user $(HOST_UID):$(HOST_GID) -v "$(CURDIR)":/app -w /app $(APP_IMAGE)
 
 help:
 	@echo "make env     .env 생성(없을 때만, 비밀값 자동 생성)"
@@ -19,7 +33,9 @@ help:
 	@echo "make load    CSV 적재"
 	@echo "make sync    Superset 반영"
 	@echo "make apply   check → load → sync → backend 재시작"
-	@echo "make test    테스트"
+	@echo "make test-unit  단위 테스트(스택 불필요: 설정 검증, 번들 스냅샷, CSV 검증, 도메인 단어)"
+	@echo "make test    통합 테스트(별도 테스트 스택을 띄우고 끝나면 내림. KEEP=1이면 남김)"
+	@echo "make golden  번들 스냅샷(tests/golden/) 갱신"
 	@echo "make reset CONFIRM=1   볼륨과 .state/.build 삭제"
 	@echo "make down / make logs"
 
@@ -90,23 +106,60 @@ apply: check load sync
 	$(COMPOSE) restart backend
 	$(call wait_healthy,backend)
 
-# 1) 현재 프로젝트로 전체 pytest
-# 2) 다른 예시 프로젝트로 apply → 전환 검사(tests/test_switch.py) → 원래 프로젝트로 다시 apply
-# 어느 단계가 실패해도 복원 apply는 실행하고, 실패가 하나라도 있으면 종료 코드 1.
-test: dirs
-	@orig="$${PROJECT:-$$(sed -n 's/^PROJECT=//p' .env)}"; \
-	other=$$( [ "$$orig" = devtracker ] && echo sales-sample || echo devtracker ); \
-	rc=0; \
-	echo "== 1단계: PROJECT=$$orig 전체 테스트"; \
-	PROJECT=$$orig $(TOOLS) python -m pytest -q -p no:cacheprovider tests/ || rc=1; \
-	echo "== 2단계: PROJECT=$$other 로 전환해 범용성 검사"; \
-	if PROJECT=$$other $(MAKE) --no-print-directory apply; then \
-	  PROJECT=$$other $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) -e SWITCH_FROM=$$orig tools \
-	    python -m pytest -q -p no:cacheprovider tests/test_switch.py || rc=1; \
-	else rc=1; fi; \
-	echo "== 복원: PROJECT=$$orig 로 다시 apply"; \
-	PROJECT=$$orig $(MAKE) --no-print-directory apply || rc=1; \
+# ---------------------------------------------------------------- 테스트
+unit-image:
+	@docker build -q -t $(APP_IMAGE) -f dashkit/Dockerfile . > /dev/null
+
+test-unit: unit-image
+	$(UNIT_RUN) python -m pytest -q -p no:cacheprovider -m "not integration" tests/
+
+# 번들 스냅샷 갱신. COLUMNS=1이면 먼저 현재 스택의 DB에서 PROJECT의 뷰 열 정보를 다시 읽는다(스택 필요).
+golden: unit-image
+ifeq ($(COLUMNS),1)
+	$(TOOLS) python -m tests.golden --columns
+endif
+	$(UNIT_RUN) python -m tests.golden
+
+# 통합 테스트는 별도 compose 프로젝트(dashkit-test)에서 돈다. 개발 스택과 .state/, .build/는 건드리지 않는다.
+# 1) devtracker로 up·apply → 전체 pytest
+# 2) sales-sample로 apply → 전환 검사(tests/test_switch.py)와 스냅샷 열 정보 대조
+# 끝나면 테스트 스택과 그 볼륨, .test/를 지운다(KEEP=1이면 남긴다). 실패가 하나라도 있으면 종료 코드 1.
+test:
+	@before=$$(cat .state/*.json 2>/dev/null | cksum); \
+	$(TEST_ENV) $(MAKE) --no-print-directory _test; rc=$$?; \
+	after=$$(cat .state/*.json 2>/dev/null | cksum); \
+	if [ "$$before" != "$$after" ]; then echo "✖ 테스트가 개발 스택의 .state/를 바꿈"; rc=1; fi; \
 	if [ $$rc -eq 0 ]; then echo "✔ make test 통과"; else echo "✖ make test 실패"; fi; \
+	exit $$rc
+
+_test:
+	@[ "$$COMPOSE_PROJECT_NAME" = "$(TEST_NAME)" ] || { echo "✖ _test는 make test가 부른다"; exit 1; }
+	@mkdir -p .test/state .test/build
+	@rc=0; $(MAKE) --no-print-directory _test_run || rc=1; \
+	if [ "$(KEEP)" = 1 ]; then \
+	  echo "• KEEP=1: 테스트 스택을 남김(웹앱 :$(TEST_WEB_PORT), Superset :$(TEST_SUPERSET_PORT)). 내리기: make test-down"; \
+	else \
+	  $(MAKE) --no-print-directory test-down; \
+	fi; \
+	exit $$rc
+
+# 테스트 스택과 그 볼륨만 지운다(프로젝트 이름을 직접 지정하므로 개발 스택에는 닿지 않는다)
+test-down:
+	docker compose -p $(TEST_NAME) down -v --remove-orphans
+	rm -rf ./.test
+
+_test_run:
+	@[ "$$COMPOSE_PROJECT_NAME" = "$(TEST_NAME)" ] || { echo "✖ _test_run은 make test가 부른다"; exit 1; }
+	@a=devtracker; b=sales-sample; rc=0; \
+	echo "== 테스트 스택 기동($(TEST_NAME)), PROJECT=$$a apply"; \
+	PROJECT=$$a $(MAKE) --no-print-directory up apply || exit 1; \
+	echo "== 1단계: PROJECT=$$a 전체 테스트"; \
+	PROJECT=$$a $(TOOLS) python -m pytest -q -p no:cacheprovider tests/ || rc=1; \
+	echo "== 2단계: PROJECT=$$b 로 전환해 범용성 검사"; \
+	if PROJECT=$$b $(MAKE) --no-print-directory apply; then \
+	  PROJECT=$$b $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) -e SWITCH_FROM=$$a tools \
+	    python -m pytest -q -p no:cacheprovider tests/test_switch.py tests/test_bundle_golden.py || rc=1; \
+	else rc=1; fi; \
 	exit $$rc
 
 # ---------------------------------------------------------------- 초기화

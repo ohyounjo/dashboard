@@ -1,0 +1,92 @@
+dashboard_title: 고객사
+description: null
+css: null
+slug: sales-sample-client-book
+certified_by: null
+certification_details: null
+published: true
+uuid: ff40e865-323b-5a26-824a-6b68219b2f15
+position:
+  DASHBOARD_VERSION_KEY: v2
+  ROOT_ID:
+    type: ROOT
+    id: ROOT_ID
+    children:
+    - GRID_ID
+  GRID_ID:
+    type: GRID
+    id: GRID_ID
+    children:
+    - ROW-1
+    parents:
+    - ROOT_ID
+  ROW-1:
+    type: ROW
+    id: ROW-1
+    children:
+    - CHART-tier_mix
+    - CHART-client_list
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-tier_mix:
+    type: CHART
+    id: CHART-tier_mix
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: 81a96b32-2589-5a3a-a7be-d4d34b3929b4
+      sliceName: 등급별 고객 수
+      width: 4
+      height: 50
+  CHART-client_list:
+    type: CHART
+    id: CHART-client_list
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: 7e68cfe5-fdc2-5b9b-8ffa-40b4ac1ae50c
+      sliceName: 고객사 목록
+      width: 8
+      height: 80
+metadata:
+  native_filter_configuration:
+  - id: NATIVE_FILTER-f_industry
+    name: 업종
+    filterType: filter_select
+    type: NATIVE_FILTER
+    targets:
+    - column:
+        name: industry
+      datasetUuid: 5ce7aeff-a8ee-5cb6-9ea8-a7d35e9ad2ee
+    controlValues:
+      multiSelect: true
+      enableEmptyFilter: false
+      defaultToFirstItem: false
+      inverseSelection: false
+      searchAllOptions: false
+    defaultDataMask:
+      extraFormData: {}
+      filterState: {}
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
+  color_scheme: ''
+  cross_filters_enabled: false
+  refresh_frequency: 0
+theme_uuid: null
+version: 1.0.0

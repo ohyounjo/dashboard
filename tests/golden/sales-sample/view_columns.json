@@ -1,0 +1,5 @@
+{
+ "campaign_plan": [["campaign_code", "text"], ["campaign_name", "text"], ["channel", "text"], ["launch_on", "date"], ["close_on", "date"], ["budget_krw", "bigint"], ["phase", "text"], ["completion_pct", "bigint"], ["lead_rep_name", "text"]],
+ "client_roster": [["account_code", "text"], ["company", "text"], ["industry", "text"], ["region", "text"], ["tier", "text"], ["rep_name", "text"], ["deal_count", "bigint"], ["won_total", "numeric"]],
+ "deal_pipeline": [["deal_code", "text"], ["deal_label", "text"], ["pipeline_step", "text"], ["amount_krw", "bigint"], ["opened_on", "date"], ["closed_on", "date"], ["company", "text"], ["industry", "text"], ["region", "text"], ["tier", "text"], ["rep_name", "text"], ["team", "text"], ["campaign_name", "text"], ["is_won", "boolean"], ["is_active", "boolean"], ["age_days", "integer"], ["step_badge", "text"]]
+}

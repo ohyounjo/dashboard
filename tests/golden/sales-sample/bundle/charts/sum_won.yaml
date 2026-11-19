@@ -1,0 +1,14 @@
+slice_name: 누적 수주액(원)
+description: null
+certified_by: null
+certification_details: null
+viz_type: big_number_total
+params:
+  viz_type: big_number_total
+  metric: won_amount
+  y_axis_format: ',.0f'
+query_context: null
+cache_timeout: null
+uuid: b932fd12-67c5-5de8-988b-5626536cfad5
+version: 1.0.0
+dataset_uuid: 147338b5-501a-58e6-9457-7f541847dff2

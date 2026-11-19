@@ -1,0 +1,211 @@
+dashboard_title: 영업 요약
+description: null
+css: null
+slug: sales-sample-sales-home
+certified_by: null
+certification_details: null
+published: true
+uuid: 9bed673a-4c31-5c8b-a2ab-de883a3f9635
+position:
+  DASHBOARD_VERSION_KEY: v2
+  ROOT_ID:
+    type: ROOT
+    id: ROOT_ID
+    children:
+    - GRID_ID
+  GRID_ID:
+    type: GRID
+    id: GRID_ID
+    children:
+    - ROW-1
+    - ROW-2
+    - ROW-3
+    parents:
+    - ROOT_ID
+  ROW-1:
+    type: ROW
+    id: ROW-1
+    children:
+    - CHART-sum_won
+    - CHART-sum_active
+    - CHART-sum_win_rate
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-sum_won:
+    type: CHART
+    id: CHART-sum_won
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: b932fd12-67c5-5de8-988b-5626536cfad5
+      sliceName: 누적 수주액(원)
+      width: 4
+      height: 50
+  CHART-sum_active:
+    type: CHART
+    id: CHART-sum_active
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: 07db1096-7fbe-5482-9931-5c9c24186e3b
+      sliceName: 진행 중인 딜
+      width: 4
+      height: 50
+  CHART-sum_win_rate:
+    type: CHART
+    id: CHART-sum_win_rate
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: 4e77e2ab-c173-5745-83c7-87d261155c4c
+      sliceName: 수주율(%)
+      width: 4
+      height: 50
+  ROW-2:
+    type: ROW
+    id: ROW-2
+    children:
+    - CHART-won_monthly
+    - CHART-won_industry_mix
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-won_monthly:
+    type: CHART
+    id: CHART-won_monthly
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 0
+      uuid: 55304d53-baa4-5286-930d-193b8974aee1
+      sliceName: 월별 수주액
+      width: 8
+      height: 50
+  CHART-won_industry_mix:
+    type: CHART
+    id: CHART-won_industry_mix
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 0
+      uuid: bdc9cb26-5d3b-576f-ac1f-f93224640807
+      sliceName: 업종별 수주액
+      width: 4
+      height: 50
+  ROW-3:
+    type: ROW
+    id: ROW-3
+    children:
+    - CHART-amount_per_rep
+    - CHART-active_deal_list
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-amount_per_rep:
+    type: CHART
+    id: CHART-amount_per_rep
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-3
+    meta:
+      chartId: 0
+      uuid: 36a40648-768e-5524-8dc6-718136d8315d
+      sliceName: 담당자별 금액
+      width: 6
+      height: 50
+  CHART-active_deal_list:
+    type: CHART
+    id: CHART-active_deal_list
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-3
+    meta:
+      chartId: 0
+      uuid: 9e1d57ab-4817-5865-bdb3-10f0548740ba
+      sliceName: 금액 상위 진행 딜
+      width: 6
+      height: 50
+metadata:
+  native_filter_configuration:
+  - id: NATIVE_FILTER-f_region
+    name: 지역
+    filterType: filter_select
+    type: NATIVE_FILTER
+    targets:
+    - column:
+        name: region
+      datasetUuid: 147338b5-501a-58e6-9457-7f541847dff2
+    controlValues:
+      multiSelect: true
+      enableEmptyFilter: false
+      defaultToFirstItem: false
+      inverseSelection: false
+      searchAllOptions: false
+    defaultDataMask:
+      extraFormData: {}
+      filterState: {}
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
+  - id: NATIVE_FILTER-f_team
+    name: 팀
+    filterType: filter_select
+    type: NATIVE_FILTER
+    targets:
+    - column:
+        name: team
+      datasetUuid: 147338b5-501a-58e6-9457-7f541847dff2
+    controlValues:
+      multiSelect: true
+      enableEmptyFilter: false
+      defaultToFirstItem: false
+      inverseSelection: false
+      searchAllOptions: false
+    defaultDataMask:
+      extraFormData: {}
+      filterState: {}
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
+  color_scheme: ''
+  cross_filters_enabled: false
+  refresh_frequency: 0
+theme_uuid: null
+version: 1.0.0

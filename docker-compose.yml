@@ -106,7 +106,8 @@ services:
       DATA_MAX_ROWS: ${DATA_MAX_ROWS}
     volumes:
       - ./projects:/app/projects:ro
-      - ./.state:/app/.state:ro
+      # 테스트 스택(make test)은 HOST_STATE_DIR, STATE_DIR을 .test/state로 바꿔 개발 상태와 분리한다
+      - ${HOST_STATE_DIR:-./.state}:${STATE_DIR:-/app/.state}:ro
     depends_on:
       data-db:
         condition: service_healthy

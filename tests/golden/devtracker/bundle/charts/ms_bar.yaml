@@ -1,0 +1,20 @@
+slice_name: 마일스톤별 진척률
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_bar
+params:
+  viz_type: echarts_timeseries_bar
+  x_axis: title
+  metrics:
+  - expressionType: SQL
+    sqlExpression: MAX(progress)
+    label: 진척률
+  groupby: []
+  orientation: vertical
+  y_axis_format: .0f
+query_context: null
+cache_timeout: null
+uuid: a6181da3-33ba-5565-a20e-40ff41b61015
+version: 1.0.0
+dataset_uuid: 0be869ce-1a0b-58f2-9dba-3f38466e73a5
