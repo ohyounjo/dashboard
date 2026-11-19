@@ -99,7 +99,7 @@ sync만 읽고 쓴다. 지난 sync가 만든 Superset 객체 목록이다. 다�
 ## sync 순서 (plan 6-2절 3번)
 
 1. 설정을 읽고 뷰의 열 정보를 `information_schema`에서 읽는다(dash_reader).
-2. 번들을 `.build/<프로젝트>/bundle.zip`에 만든다. 같은 내용을 풀어 둔 `.build/<프로젝트>/bundle/`도 남겨 diff로 볼 수 있게 한다. 파일 내용은 결정적(키 정렬, 타임스탬프는 metadata.yaml 하나만)이어야 한다.
+2. 번들을 `.build/<프로젝트>/bundle.zip`에 만든다. 같은 내용을 풀어 둔 `.build/<프로젝트>/bundle/`도 남겨 diff로 볼 수 있게 한다. 이 폴더가 `dashkit plan`이 새 번들과 비교하는 "지난 번들"이다([plan.md](plan.md). plan은 이 폴더와 상태 파일을 읽기만 한다). 파일 내용은 결정적(키 정렬, 타임스탬프는 metadata.yaml 하나만)이어야 한다.
 3. 관리자 계정으로 로그인(`/api/v1/security/login`, CSRF 토큰)한다.
 4. `POST /api/v1/assets/import/`(overwrite). 실패하면 응답 앞부분과 함께 "Superset 로그를 확인하세요(`make logs`)"를 출력하고 종료 코드 1로 끝낸다.
 5. 대시보드마다 `POST /api/v1/dashboard/<id>/embedded {"allowed_domains": WEB_ORIGINS}`를 부른다.

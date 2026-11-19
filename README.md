@@ -27,7 +27,7 @@ make up
 ```bash
 make apply
 ```
-check(설정 검사) → load(CSV 검증·적재) → sync(Superset 반영) → backend 재시작 순서로 실행합니다.
+check(설정 검사) → load(CSV 검증·적재) → sync(Superset 반영) 순서로 실행합니다. backend는 `projects/`의 설정 파일이 바뀌면 스스로 다시 읽으므로 재시작하지 않습니다.
 
 브라우저에서 http://localhost:8080 을 엽니다. Superset 관리 화면은 http://localhost:8088 이고, 계정은 `.env`의 `SUPERSET_ADMIN_USER`/`SUPERSET_ADMIN_PASSWORD`입니다.
 
@@ -36,7 +36,9 @@ check(설정 검사) → load(CSV 검증·적재) → sync(Superset 반영) → 
 | `make env` | `.env` 생성 |
 | `make up` | 기동 후 healthy 대기 |
 | `make check` | 설정만 검사(DB 불필요) |
-| `make apply` | 검사 → 적재 → Superset 반영 → backend 재시작. **무엇을 바꿨든 이것 하나** |
+| `make plan` | 적용하면 무엇이 바뀌는지 미리 보기(아무것도 바꾸지 않음. 선택) |
+| `make apply` | 검사 → 적재 → Superset 반영. **`projects/`에서 무엇을 바꿨든 이것 하나** |
+| `make migrate` | 설정 파일을 최신 형식 버전으로 고침(아래 "설정 버전") |
 | `make test-unit` | 단위 테스트(스택 불필요) |
 | `make test` | 통합 테스트(별도 테스트 스택, 아래 "테스트") |
 | `make golden` | 번들 스냅샷 갱신 |
@@ -184,14 +186,34 @@ make apply
 
 ## 4. 새 프로젝트 만들기
 
+CSV 폴더가 있으면 초안을 자동으로 만듭니다(스택을 띄우지 않아도 됩니다).
+
 ```bash
-cp -r projects/sales-sample projects/myproject
+make new NAME=myproject FROM=~/exports/
 ```
 
-1. `projects/myproject/data/`에 CSV를 둡니다(파일 이름 = 테이블 이름).
-2. `projects/myproject/schema.yaml`에 테이블·열·검증 규칙을 씁니다.
-3. `projects/myproject/dashboard.yaml`에 `app`, `datasets`, `dashboards`, `tabs`를 씁니다.
+`FROM` 폴더 바로 아래의 `*.csv`를 읽어 `projects/myproject/`에 `schema.yaml`, `dashboard.yaml`, `data/*.csv`를 만듭니다. 원본 폴더는 읽기만 합니다. 이미 있는 프로젝트는 덮어쓰지 않습니다. 이름은 소문자·숫자·`_`·`-`만 씁니다.
+
+추론 규칙(자세한 기준은 [contracts/scaffold.md](contracts/scaffold.md)):
+
+| 대상 | 규칙 |
+|---|---|
+| 유형 | 모든 값이 정수면 `integer`, 숫자면 `number`, `YYYY-MM-DD`면 `date`, `true/false`면 `boolean`, ISO 8601 시각이면 `timestamp`, 아니면 `text`. `007`처럼 0으로 시작하는 숫자는 `text`. 빈 값이 없으면 `required: true` |
+| `enum` | 고유값이 12개 이하이고 값 있는 행의 절반 이하인 text 열 |
+| `primary_key` | 값이 유일하고 비어 있지 않은 첫 열. 없으면 함께 쓰면 유일한 두 열. 그래도 없으면 만들지 않고 어느 파일인지 알려 줍니다 |
+| `ref` | `<테이블>_id` 꼴 열, 또는 다른 테이블의 기본 키와 이름이 같은 열. 값이 모두 대상에 있을 때만 |
+| 이름 | 대문자·공백·한글·예약어가 있는 머리글과 파일 이름은 snake_case로 바꾸고(`Order Date` → `order_date`, `select` → `select_col`, `금액` → `column_4`) 머리글을 고친 CSV 사본을 씁니다. 원래 이름은 화면 표시 이름(`labels`)으로 남깁니다 |
+| 차트 | 테이블마다 건수와 원본 행 표. date+숫자 열 → 주별 합계 선, enum 열 → 값별 건수 막대, enum+숫자 열 → 값별 합계 원. 테이블마다 최대 6개 |
+| 위젯 | 시작·종료 꼴 이름의 date 열 2개 → 간트, `status`·`state`·`step`으로 끝나는 enum 열 → 칸반 |
+
+만든 뒤 손볼 곳:
+
+1. 두 YAML에서 `# 추론: 확인 필요`를 찾아 유형·enum 값·기본 키·ref를 확인합니다. 맞으면 주석을 지웁니다.
+2. `schema.yaml`에 `min`/`max`/`pattern`과 `checks`를 더합니다(추론하지 않습니다). 코드 값이 enum으로 잡혔으면 `text`로 되돌립니다.
+3. `dashboard.yaml`에서 `app.title`, 차트 제목, 탭 라벨·아이콘을 고치고, 필요 없는 차트와 탭을 지웁니다. 조인이나 계산 열이 필요하면 데이터셋의 `table:`을 `sql:`로 바꿉니다. 칸반의 칸 순서와 라벨, 간트의 `statuses`도 여기서 정합니다.
 4. `.env`에서 `PROJECT=myproject`로 바꿉니다.
+
+파일을 만들지 않고 추론 결과만 보려면 `python -m dashkit new <이름> --from <폴더> --dry-run`(JSON 출력)을 씁니다. 손으로 시작하려면 `cp -r projects/sales-sample projects/myproject`로 예시를 복사해 고쳐도 됩니다.
 
 ```bash
 make check
@@ -241,6 +263,32 @@ PROJECT=sales-sample make apply
 
 ---
 
+## 적용 전에 차이 보기
+
+```
+$ make plan
+데이터   members  +1행 −0행 ~1행
+         변경 없음: milestones, tasks
+뷰       dash.docs  열 추가: age_days
+Superset 차트 +1 (extra_total)  ~1 (kpi_dday: 제목 변경)
+         대시보드 ~1 (overview: 배치 변경)
+```
+
+- 데이터는 CSV와 지금 적재된 테이블을 기본 키로 비교합니다(`+` 추가, `−` 삭제, `~` 변경 행 수). CSV에 오류가 있으면 차이 대신 검증 오류를 보여 줍니다.
+- 뷰는 새 설정으로 만들어질 열과 지금 열을 비교합니다. `sql:` 데이터셋이 읽는 테이블의 구조가 함께 바뀌면 "적용해야 알 수 있음"으로 나옵니다.
+- Superset은 새 번들과 지난 적용이 남긴 `.build/<이름>/bundle/`을 비교합니다. `−`로 나온 차트는 적용할 때 Superset에서 지워집니다.
+- DB, Superset, `.state/`, `.build/`를 바꾸지 않습니다. `make apply`는 plan 없이도 그대로 적용합니다. JSON이 필요하면 `python -m dashkit plan --json`. 규칙과 형식은 [contracts/plan.md](contracts/plan.md)에 있습니다.
+
+## 설정 버전
+
+`schema.yaml`과 `dashboard.yaml` 맨 위에 `version: 1`을 둘 수 있습니다. 없으면 1로 봅니다(기존 파일은 고치지 않아도 됩니다). 형식을 깨는 변경이 생기면 버전이 올라가고, 그때 `make migrate`가 파일을 새 형식으로 고칩니다(주석과 나머지 내용은 그대로 둡니다. `python -m dashkit migrate --check`는 고칠 것이 있는지만 확인합니다). 지원하지 않는 버전의 파일은 `make check`가 `dashboard.yaml:version: …` 오류로 알려 줍니다. 형식이 언제 어떻게 바뀌었는지는 [CHANGELOG.md](CHANGELOG.md)에 적습니다.
+
+## 템플릿 코드를 바꿨을 때
+
+`make apply`는 `projects/`의 변경만 반영합니다. backend 이미지에 들어 있는 것(`dashkit/`의 파이썬 코드, `contracts/`의 스키마, 위젯 매니페스트 `web/widgets/*/widget.json`)을 바꿨으면 `make up`으로 이미지를 다시 만들고 컨테이너를 바꿔야 합니다. `web/`의 화면 코드(JS, CSS)는 마운트되어 있어 새로 고침이면 됩니다.
+
+---
+
 ## 테스트
 
 ```bash
@@ -251,13 +299,14 @@ make test        # 전체 스택이 필요한 통합 테스트
 **`make test-unit`** 은 DB와 Superset 없이 돕니다.
 
 - 설정 검사(`tests/test_config.py`), CSV 검증(`tests/test_validate.py`), 템플릿 코드의 도메인 단어 grep
+- plan의 차이 계산(`tests/test_plan_diff.py`), 설정 버전과 migrate(`tests/test_migrate.py`), backend의 설정 다시 읽기(`tests/test_reload.py`)
 - 번들 스냅샷(`tests/test_bundle_golden.py`): 예시 프로젝트의 번들을 고정된 뷰 열 정보(`tests/golden/<이름>/view_columns.json`)로 만들어 `tests/golden/<이름>/bundle/`과 한 바이트도 다르지 않은지 봅니다. 번들이 바뀌는 것이 의도라면 `make golden`으로 갱신하고 diff를 PR에서 검토합니다. `sql:` 데이터셋의 열이 바뀌었으면 `PROJECT=<이름> make golden COLUMNS=1`로 열 정보부터 다시 읽습니다(그 프로젝트가 적용된 스택 필요).
 
 **`make test`** 는 개발 스택과 분리된 테스트 스택에서 돕니다. 쓰던 화면(8080, 8088)과 `.state/`, `.build/`는 바뀌지 않습니다.
 
 - 테스트 스택: compose 프로젝트 `dashkit-test`, 웹앱 18080, Superset 18088, 별도 볼륨, 상태·번들은 `.test/`. 이미지는 개발 스택과 같이 씁니다.
 - 순서:
-  1. devtracker로 `up`, `apply`한 뒤 `tests/` 전체를 실행합니다. 단위 테스트에 더해 로더(임시 DB), sync(임시 프로젝트 이름), 지표 정합성(Superset 차트 데이터 API), 백엔드와 guest token 권한 경계를 봅니다.
+  1. devtracker로 `up`, `apply`한 뒤 `tests/` 전체를 실행합니다. 단위 테스트에 더해 로더(임시 DB), sync(임시 프로젝트 이름), 지표 정합성(Superset 차트 데이터 API), 백엔드와 guest token 권한 경계, plan(`tests/test_plan.py`: 적용 직후 "변경 없음", 고친 사본의 숫자, plan 전후로 DB·Superset·상태 파일이 그대로인지)을 봅니다.
   2. sales-sample로 `apply`한 뒤 전환을 검사합니다(`tests/test_switch.py`). 탭·차트·위젯 데이터가 바뀌고 이전 Superset 객체가 남지 않는지 봅니다.
   3. chart-gallery로 `apply`한 뒤 차트 유형마다 데이터 조회가 되는지 봅니다(`tests/test_gallery.py`).
   4. 성공하든 실패하든 테스트 스택과 그 볼륨, `.test/`를 지웁니다. `make test KEEP=1`이면 남기고, `make test-down`으로 내립니다.

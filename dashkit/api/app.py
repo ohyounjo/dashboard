@@ -1,6 +1,8 @@
 """백엔드 API. 계약: contracts/api.md.
 
-uvicorn dashkit.api.app:app 으로 띄운다. 설정은 시작 때 env PROJECT로 한 번 읽는다.
+uvicorn dashkit.api.app:app 으로 띄운다. 설정은 시작 때 env PROJECT로 읽고, 그 뒤로는 요청마다 설정 파일의
+서명(mtime, 크기, inode)을 확인해 바뀌었을 때만 다시 읽는다(state.ProjectState). 다시 읽은 설정이 검증에 실패하면
+마지막으로 유효했던 설정을 계속 쓴다.
 backend는 Superset 계정을 갖지 않고 Superset에 요청하지 않는다(guest token은 직접 서명).
 """
 from __future__ import annotations
@@ -22,7 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import config, widgets
 from . import data
-from .state import EmbedState, default_state_dir
+from .state import EmbedState, ProjectState, default_state_dir
 
 log = logging.getLogger("dashkit.api")
 if not log.handlers:
@@ -44,8 +46,13 @@ class ApiError(Exception):
 
 
 class _Ctx:
-    project: config.Project
+    project_state: ProjectState
     embed_state: EmbedState
+
+    @property
+    def project(self) -> config.Project:
+        """지금 유효한 설정. 요청 하나 안에서는 한 번만 읽어 지역 변수로 쓴다(도중에 설정이 바뀌어도 응답이 섞이지 않게)."""
+        return self.project_state.project()
 
 
 ctx = _Ctx()
@@ -54,13 +61,14 @@ ctx = _Ctx()
 def _load() -> None:
     name = os.environ.get("PROJECT", "")
     try:
-        project = config.load_project(name)
+        state = ProjectState(name)
     except config.ConfigError as exc:
         log.error("설정 오류로 시작할 수 없습니다 (PROJECT=%s, 오류 %d개):", name, len(exc.errors))
         for e in exc.errors:
             log.error("  %s", e)
         raise
-    ctx.project = project
+    ctx.project_state = state
+    project = state.project()
     ctx.embed_state = EmbedState(default_state_dir() / "embed.json", project.name)
     if not os.environ.get("GUEST_TOKEN_JWT_SECRET"):
         log.warning("GUEST_TOKEN_JWT_SECRET이 없음. /api/guest-token은 500을 돌려줍니다")
@@ -127,8 +135,8 @@ async def _unhandled(_req: Request, exc: Exception):
 
 # ---------------------------------------------------------------- 도우미
 
-def _sections_with_embeds(embeds: dict[str, str]) -> tuple[list[dict], bool]:
-    tabs = copy.deepcopy(ctx.project.dashboard["tabs"])
+def _sections_with_embeds(project: config.Project, embeds: dict[str, str]) -> tuple[list[dict], bool]:
+    tabs = copy.deepcopy(project.dashboard["tabs"])
     applied = True
     for tab in tabs:
         for sec in tab["sections"]:
@@ -139,10 +147,10 @@ def _sections_with_embeds(embeds: dict[str, str]) -> tuple[list[dict], bool]:
     return tabs, applied
 
 
-def _applied(embeds: dict[str, str]) -> bool:
+def _applied(project: config.Project, embeds: dict[str, str]) -> bool:
     return all(
         sec["dashboard"] in embeds
-        for tab in ctx.project.dashboard["tabs"]
+        for tab in project.dashboard["tabs"]
         for sec in tab["sections"]
         if sec["type"] == "superset"
     )
@@ -154,7 +162,7 @@ def _applied(embeds: dict[str, str]) -> bool:
 def get_app():
     project = ctx.project
     embeds = ctx.embed_state.embeds()
-    tabs, applied = _sections_with_embeds(embeds)
+    tabs, applied = _sections_with_embeds(project, embeds)
     app_cfg = project.dashboard["app"]
     return {
         "project": project.name,
@@ -224,11 +232,15 @@ def get_data(dataset: str):
 @app.get("/api/health")
 def get_health():
     ok = data.ping()
+    project = ctx.project
+    status = ctx.project_state.status()
     body = {
         "status": "ok" if ok else "degraded",
-        "project": ctx.project.name,
+        "project": project.name,
         "db": ok,
-        "applied": _applied(ctx.embed_state.embeds()),
+        "applied": _applied(project, ctx.embed_state.embeds()),
+        # 설정 파일이 바뀌었는데 검증에 실패해 이전 설정을 쓰는 중이면 valid가 false다(오류 내용은 backend 로그)
+        "config": {"valid": status["valid"], "errors": status["errors"]},
     }
     if not ok:
         log.warning("health: 데이터 DB SELECT 1 실패")

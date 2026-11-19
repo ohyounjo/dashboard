@@ -11,9 +11,39 @@
 | 5 | 웹앱 위젯 | [widgets.md](widgets.md) |
 | 6 | 상태 파일 `.state/embed.json`, `.state/managed.json` | [state-and-uuid.md](state-and-uuid.md) |
 | 7 | Superset 객체 UUID | [state-and-uuid.md](state-and-uuid.md) |
+| 8 | `make new`의 추론 결과(JSON)와 추론 규칙 | [scaffold.md](scaffold.md). Studio의 프로젝트 마법사가 같은 형식을 주고받는다 |
+| 9 | 적용 전 차이 보기(`make plan`)의 비교 규칙·권한·결과 형식(JSON) | [plan.md](plan.md). Studio의 데이터 화면이 같은 함수를 쓴다 |
+| 10 | 설정 형식 버전(`version`)과 `dashkit migrate` | 아래 "설정 버전", 형식 변경 기록 [../CHANGELOG.md](../CHANGELOG.md) |
 | — | Superset 6.1.0 확인 기록(Explore) | [superset-notes.md](superset-notes.md), 원본 export [superset-6.1.0-export/](superset-6.1.0-export/)(`managed/`는 sync가 만든 객체의 export) |
 | — | Superset 버전 관리와 업그레이드 절차 | [superset-upgrade.md](superset-upgrade.md). 버전은 `.env.example`의 `SUPERSET_VERSION` 한 곳, 키 대조는 `tests/test_superset_keys.py` |
 | — | 구현 계획(A~E 분담, 환경변수, 의존성) | [implementation-plan.md](implementation-plan.md) |
+
+## 설정 버전 (보강설계서 5-3)
+
+- `schema.yaml`과 `dashboard.yaml` 최상위에 `version: <정수>`를 둘 수 있다. **없으면 1로 본다.** 두 파일의 버전은 따로 본다.
+- 이 dashkit이 읽는 버전은 `dashkit/config.py`의 `CONFIG_VERSION`(지금 1) 하나다. 검사는 JSON Schema보다 먼저 하고, 버전이 맞지 않는 파일은 형식 검사를 하지 않고 버전 오류 하나만 보고한다.
+
+  | 파일의 버전 | 결과 |
+  |---|---|
+  | 없음, 또는 `CONFIG_VERSION`과 같음 | 통과 |
+  | 더 큼 | `<파일>:version: 이 dashkit은 설정 버전 1까지 지원함(파일은 버전 2). dashkit을 업그레이드하세요` |
+  | 더 작음(버전이 올라간 뒤) | `<파일>:version: 설정 버전 1은 더 이상 그대로 읽지 않음(현재 버전 2). `python -m dashkit migrate`(make migrate)로 파일을 고치세요` |
+  | 1 이상의 정수가 아님 | JSON Schema 오류(`<파일>:version: …`) |
+
+- **버전을 올리는 때는 형식을 깨는 변경뿐이다**(키 이름·뜻이 바뀌거나 없어져, 고치지 않은 기존 파일이 통과하지 못하게 되는 변경). 선택 키나 새 유형을 **추가**하는 변경은 버전을 올리지 않는다. 어느 쪽이든 [CHANGELOG.md](../CHANGELOG.md)에 적는다.
+- 버전을 올릴 때 할 일: ① `CONFIG_VERSION`을 올린다 ② `dashkit/migrate.py`의 `MIGRATIONS[이전 버전]`에 변환 함수 하나를 등록한다(`(파일 이름, 텍스트) -> 텍스트`. `version:` 줄은 migrate가 고친다) ③ CHANGELOG.md에 적는다 ④ 예시 프로젝트에 `make migrate`를 돌린다.
+- 정규화한 `Project.schema`, `Project.dashboard`에는 `version`이 항상 들어 있다(없던 파일은 1). 번들에는 들어가지 않는다.
+
+### `python -m dashkit migrate [--check]`
+
+`PROJECTS_DIR/<PROJECT>/`의 두 설정 파일을 최신 버전 형식으로 고친다.
+
+- 텍스트 수준에서 고친다(YAML을 읽어 다시 쓰지 않는다). 주석·순서·따옴표·줄 끝 문자가 그대로 남는다.
+- `version` 키가 없으면 `version: 1` 줄을 맨 위에 넣는다(BOM과 `---` 표시가 있으면 그 뒤. 다음 줄이 비어 있지 않으면 빈 줄 하나를 둔다). 그다음 등록된 변환을 버전 순서대로 적용한다. 지금은 버전이 1뿐이라 변환이 없다.
+- 이미 최신이면 아무것도 쓰지 않는다(다시 실행해도 같다).
+- 두 파일을 모두 변환해 본 뒤에 쓴다. 한 파일이라도 실패하면(YAML 문법 오류, 지원보다 높은 버전, 등록되지 않은 변환) 아무 파일도 바꾸지 않고 종료 코드 1. 쓰기는 임시 파일 뒤 `os.replace`다.
+- `--check`: 파일을 바꾸지 않는다. 고칠 것이 있으면 무엇을 고칠지 출력하고 종료 코드 1, 없으면 0.
+- migrate는 형식 버전만 다룬다. 내용 검사는 `dashkit check`가 한다.
 
 ## 참조 검사 (`dashkit/config.py`, JSON Schema 다음 단계)
 
@@ -66,7 +96,10 @@ class Project:
     schema: dict                           # schema.yaml (검증 완료, 기본값 채움: required=False, checks=[])
     dashboard: dict                        # dashboard.yaml (검증 완료, 섹션 선택 필드 None 채움)
 
+CONFIG_VERSION = 1                         # 이 dashkit이 읽는 설정 형식 버전("설정 버전" 절)
+
 def load_project(name: str, projects_dir: Path = Path("projects")) -> Project   # 실패 시 ConfigError
+def config_version(doc: dict) -> int                            # 설정 파일 내용의 version(없으면 1)
 def object_uuid(project: str, kind: str, key: str) -> str
 def resolve_as_of(project: Project, today: date | None = None) -> date
 def table_order(project: Project) -> list[str]                  # ref 위상 정렬(적재 순서)
@@ -78,4 +111,6 @@ def layout_blocks(dashboard: dict) -> list[dict]                 # layout → �
 def load_schema(name: str) -> dict                               # 계약의 JSON Schema(dashboard.schema.json은 차트 유형 정의와 위젯 섹션 정의를 합성한 결과)
 ```
 
-CLI: `python -m dashkit {check|load|sync|api|gen}`. `gen`은 계약 문서의 생성 구간을 레지스트리에서 다시 쓴다(`--check`는 확인만). 모든 하위 명령은 `PROJECT`, `PROJECTS_DIR`(기본 `/app/projects`) 환경변수를 쓴다.
+CLI: `python -m dashkit {check|plan|load|sync|migrate|api|gen}`. `plan`은 적용 전에 차이를 보여 주고 아무것도 바꾸지 않는다([plan.md](plan.md), `--json`). `migrate`는 설정 파일을 최신 형식 버전으로 고친다(위 "설정 버전", `--check`는 확인만). `gen`은 계약 문서의 생성 구간을 레지스트리에서 다시 쓴다(`--check`는 확인만). 모든 하위 명령은 `PROJECT`, `PROJECTS_DIR`(기본 `/app/projects`) 환경변수를 쓴다.
+
+CLI(프로젝트 초안): `python -m dashkit new <이름> --from <CSV 폴더> [--dry-run]`. CSV 폴더에서 `PROJECTS_DIR/<이름>/`을 만든다([scaffold.md](scaffold.md)). `PROJECT`는 쓰지 않고 DB도 필요 없다. `--dry-run`은 파일을 쓰지 않고 추론 결과(JSON)만 출력한다. 이미 있는 프로젝트는 덮어쓰지 않고 종료 코드 1로 끝낸다.
