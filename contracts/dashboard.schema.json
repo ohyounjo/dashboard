@@ -12,6 +12,9 @@
     "tabs"
   ],
   "properties": {
+    "version": {
+      "$ref": "#/$defs/version"
+    },
     "app": {
       "$ref": "#/$defs/app"
     },
@@ -43,6 +46,11 @@
     }
   },
   "$defs": {
+    "version": {
+      "description": "설정 형식 버전(선택. 없으면 1). 이 dashkit이 지원하는 버전보다 크면 config.py가 '<파일>:version: …' 오류로 거부한다. 형식 변경 기록은 CHANGELOG.md, 고치는 명령은 dashkit migrate.",
+      "type": "integer",
+      "minimum": 1
+    },
     "key": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]{0,62}$"

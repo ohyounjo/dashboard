@@ -33,6 +33,10 @@ GRID_COLUMNS = 12
 SCHEMA_FILE = "schema.yaml"
 DASHBOARD_FILE = "dashboard.yaml"
 
+# 이 dashkit이 읽는 설정 형식 버전. 두 파일 최상위의 `version`(없으면 1)과 비교한다.
+# 형식을 깨는 변경이 생기면 이 값을 올리고 dashkit/migrate.py에 변환 함수를 등록하고 CHANGELOG.md에 적는다.
+CONFIG_VERSION = 1
+
 
 def _contracts_dir() -> Path:
     env = os.environ.get("CONTRACTS_DIR")
@@ -123,6 +127,27 @@ def _read_yaml(path: Path, errors: list[str]) -> Any:
         return None
 
 
+def config_version(doc: Any) -> int:
+    """설정 파일 내용(dict)의 형식 버전. `version` 키가 없으면 1이다."""
+    if isinstance(doc, dict) and "version" in doc:
+        return doc["version"]
+    return 1
+
+
+def _version_error(doc: Any, file: str) -> str | None:
+    """지원하지 않는 버전이면 오류 한 줄. 정수가 아닌 값은 JSON Schema 검사가 보고한다."""
+    v = config_version(doc)
+    if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+        return None
+    if v > CONFIG_VERSION:
+        return (f"{file}:version: 이 dashkit은 설정 버전 {CONFIG_VERSION}까지 지원함(파일은 버전 {v}). "
+                f"dashkit을 업그레이드하세요")
+    if v < CONFIG_VERSION:
+        return (f"{file}:version: 설정 버전 {v}은 더 이상 그대로 읽지 않음(현재 버전 {CONFIG_VERSION}). "
+                f"`python -m dashkit migrate`(make migrate)로 파일을 고치세요")
+    return None
+
+
 def _parse_date(value: Any) -> date | None:
     if isinstance(value, date):
         return value
@@ -156,8 +181,14 @@ def load_project(name: str, projects_dir: Path | None = None) -> Project:
     schema = _dates_to_str(schema)
     dashboard = _dates_to_str(dashboard)
 
-    errors += _schema_errors(_validator("schema.schema.json"), schema, SCHEMA_FILE)
-    errors += _schema_errors(_validator("dashboard.schema.json"), dashboard, DASHBOARD_FILE)
+    # 버전이 맞지 않는 파일은 형식 자체가 다를 수 있으므로 버전 오류 하나만 보고하고 형식 검사는 하지 않는다
+    for doc, file, schema_name in ((schema, SCHEMA_FILE, "schema.schema.json"),
+                                   (dashboard, DASHBOARD_FILE, "dashboard.schema.json")):
+        version_error = _version_error(doc, file)
+        if version_error:
+            errors.append(version_error)
+        else:
+            errors += _schema_errors(_validator(schema_name), doc, file)
     if errors:
         raise ConfigError(errors)
 
@@ -184,6 +215,7 @@ def _dates_to_str(obj: Any) -> Any:
 
 def _normalize_schema(schema: dict) -> dict:
     schema = copy.deepcopy(schema)
+    schema.setdefault("version", 1)
     for table in schema["tables"].values():
         pk = table["primary_key"]
         table["primary_key"] = [pk] if isinstance(pk, str) else list(pk)
@@ -201,6 +233,7 @@ _EMBED_SECTION_DEFAULTS = {"title": None, "height": None}
 
 def _normalize_dashboard(dash: dict) -> dict:
     dash = copy.deepcopy(dash)
+    dash.setdefault("version", 1)
     app = dash["app"]
     app.setdefault("logo_text", None)
     app.setdefault("theme", None)

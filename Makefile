@@ -12,7 +12,7 @@ HOST_GID := $(shell id -g)
 TOOLS    := $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) tools
 
 .NOTPARALLEL:
-.PHONY: help env up check load sync apply test test-unit test-down unit-image golden gen reset down logs dirs _test _test_run
+.PHONY: help env up check load sync apply plan migrate new test test-unit test-down unit-image golden gen reset down logs dirs _test _test_run
 
 # ---- 테스트 스택(보강설계서 3-2, 7절 D5): 개발 스택과 이름·포트·볼륨·상태 디렉터리가 모두 다르다.
 # 상태·빌드 디렉터리는 .test/ 고정이다(아래 정리 단계가 이 경로를 그대로 쓴다).
@@ -34,7 +34,10 @@ help:
 	@echo "make check   설정 검사"
 	@echo "make load    CSV 적재"
 	@echo "make sync    Superset 반영"
-	@echo "make apply   check → load → sync → backend 재시작"
+	@echo "make apply   check → load → sync (backend는 설정을 스스로 다시 읽는다)"
+	@echo "make plan    적용 전에 바뀌는 것 보기(데이터, 뷰, Superset). 아무것도 바꾸지 않음"
+	@echo "make new NAME=<이름> FROM=<CSV 폴더>   CSV에서 프로젝트 초안 생성"
+	@echo "make migrate [CHECK=1]   설정 파일을 최신 설정 버전으로"
 	@echo "make test-unit  단위 테스트(스택 불필요: 설정 검증, 번들 스냅샷, CSV 검증, 도메인 단어)"
 	@echo "make test    통합 테스트(별도 테스트 스택을 띄우고 끝나면 내림. KEEP=1이면 남김)"
 	@echo "make golden  번들 스냅샷(tests/golden/) 갱신"
@@ -103,11 +106,26 @@ sync: dirs
 	$(TOOLS) python -m dashkit sync
 
 apply: check load sync
-	@# 템플릿 코드가 바뀌었으면 backend 이미지를 다시 만든다(바뀐 게 없으면 캐시로 즉시 끝남).
-	@# 설정(projects/)은 시작할 때 읽으므로 항상 재시작한다.
-	$(COMPOSE) up -d --build --no-deps backend
-	$(COMPOSE) restart backend
+	@# backend는 projects/의 설정 변경을 파일 시각으로 감지해 다시 읽는다(재빌드·재시작 없음).
+	@# PROJECT는 컨테이너 환경변수라서 프로젝트를 바꿨을 때만 컨테이너가 다시 만들어진다(바뀐 게 없으면 아무 일도 없다).
+	@# 템플릿 코드(dashkit/, web/widgets/*/widget.json)를 바꿨으면 make up으로 이미지를 다시 만든다.
+	$(COMPOSE) up -d --no-deps backend
 	$(call wait_healthy,backend)
+
+# 적용 전에 무엇이 바뀌는지 본다(데이터, 뷰, Superset). 아무것도 바꾸지 않는다. contracts/plan.md
+plan:
+	$(TOOLS) python -m dashkit plan
+
+# 설정 파일을 최신 설정 버전 형식으로 고친다. CHECK=1이면 고칠 것이 있는지만 본다(있으면 종료 코드 1)
+migrate:
+	$(TOOLS) python -m dashkit migrate $(if $(CHECK),--check)
+
+# CSV 폴더에서 프로젝트 초안을 만든다: make new NAME=myproject FROM=~/exports/  (스택 불필요. contracts/scaffold.md)
+new: unit-image
+	@test -n "$(NAME)" -a -n "$(FROM)" || { echo "사용법: make new NAME=<이름> FROM=<CSV 폴더>" >&2; exit 2; }
+	@from=$$(cd -- "$(FROM)" 2>/dev/null && pwd) || { echo "FROM 폴더가 없음: $(FROM)" >&2; exit 2; }; \
+	docker run --rm --user $(HOST_UID):$(HOST_GID) -v "$(CURDIR)":/app -v "$$from":/import:ro -w /app $(APP_IMAGE) \
+	  python -m dashkit new "$(NAME)" --from /import
 
 # ---------------------------------------------------------------- 테스트
 unit-image:
@@ -131,6 +149,7 @@ gen: unit-image
 # 1) devtracker로 up·apply → 전체 pytest
 # 2) sales-sample로 apply → 전환 검사(tests/test_switch.py)와 스냅샷 열 정보 대조
 # 3) chart-gallery로 apply → 차트 유형별 데이터 조회(tests/test_gallery.py)와 스냅샷 열 정보 대조
+# 4) make new로 예시 CSV 폴더에서 초안(projects/zz-newtest, 끝나면 지움)을 만들어 apply → tests/test_new_project.py
 # 끝나면 테스트 스택과 그 볼륨, .test/를 지운다(KEEP=1이면 남긴다). 실패가 하나라도 있으면 종료 코드 1.
 test:
 	@before=$$(cat .state/*.json 2>/dev/null | cksum); \
@@ -172,6 +191,13 @@ _test_run:
 	if PROJECT=chart-gallery $(MAKE) --no-print-directory apply; then \
 	  PROJECT=chart-gallery $(TOOLS) python -m pytest -q -p no:cacheprovider tests/test_gallery.py tests/test_bundle_golden.py || rc=1; \
 	else rc=1; fi; \
+	echo "== 4단계: 예시 CSV 폴더에서 초안을 만들어(make new) check·apply가 되는지 확인"; \
+	rm -rf ./projects/zz-newtest; \
+	if $(MAKE) --no-print-directory new NAME=zz-newtest FROM=projects/sales-sample/data \
+	   && PROJECT=zz-newtest $(MAKE) --no-print-directory apply; then \
+	  PROJECT=zz-newtest $(TOOLS) python -m pytest -q -p no:cacheprovider tests/test_new_project.py || rc=1; \
+	else rc=1; fi; \
+	rm -rf ./projects/zz-newtest; \
 	exit $$rc
 
 # ---------------------------------------------------------------- 초기화

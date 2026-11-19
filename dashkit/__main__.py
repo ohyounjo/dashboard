@@ -1,5 +1,6 @@
-"""python -m dashkit {check|load|sync|api|gen}
+"""python -m dashkit {check|plan|load|sync|migrate|api|gen|new}
 
+`new <이름> --from <CSV 폴더>`는 CSV에서 프로젝트 초안을 만든다(PROJECT를 쓰지 않는다).
 PROJECT(필수), PROJECTS_DIR(선택) 환경변수를 쓴다. 오류는 한 줄에 하나씩 출력하고 종료 코드 1로 끝낸다.
 """
 from __future__ import annotations
@@ -66,6 +67,68 @@ def cmd_gen(args) -> int:
     return 0
 
 
+def cmd_new(args) -> int:
+    """CSV 폴더에서 프로젝트 초안을 만든다(PROJECT 환경변수는 쓰지 않는다)."""
+    import json
+
+    from . import scaffold
+
+    try:
+        if args.dry_run:
+            scaffold.check_name(args.name)
+            print(json.dumps(scaffold.infer_folder(args.source), ensure_ascii=False, indent=2))
+            return 0
+        root, inference = scaffold.create_project(args.name, scaffold.read_folder(args.source))
+    except scaffold.ScaffoldError as exc:
+        return _fail("new 실패, 만든 파일 없음", exc.errors)
+    n = scaffold.overview(inference)
+    print(f"✔ new: {root}에 초안을 만듦 (테이블 {n['tables']}, 열 {n['columns']}(이름 바꿈 {n['renamed']}), "
+          f"enum {n['enums']}, ref {n['refs']}, 차트 {n['charts']}, 탭 {n['tabs']}, 위젯 섹션 {n['widgets']})")
+    print(f"  다음: schema.yaml과 dashboard.yaml에서 \"{scaffold.MARK}\"를 찾아 확인한 뒤 "
+          f"PROJECT={args.name} make check, PROJECT={args.name} make apply")
+    return 0
+
+
+def cmd_plan(args) -> int:
+    """적용 전에 차이를 보여 준다. DB·Superset·상태 파일을 바꾸지 않는다."""
+    import json
+
+    from . import plan
+
+    project = _project()
+    try:
+        result = plan.make_plan(project)
+    except plan.PlanError as exc:
+        return _fail(f"plan: {exc.title}", exc.errors)
+    print(json.dumps(result, ensure_ascii=False, indent=2) if args.json else plan.format_plan(result))
+    return 0
+
+
+def cmd_migrate(args) -> int:
+    """설정 파일을 최신 형식 버전으로 고친다(--check는 확인만)."""
+    import re
+
+    from . import migrate
+    from .config import default_projects_dir
+
+    name = os.environ.get("PROJECT", "")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name):
+        raise ConfigError([f"PROJECT:(최상위): 프로젝트 이름 형식 오류 '{name}' (소문자, 숫자, _, -)"])
+    results = migrate.migrate_project(default_projects_dir() / name, check=args.check)
+    pending = [r for r in results if r.changed]
+    for r in pending:
+        print(f"  {r.file}: {'; '.join(r.steps)}")
+    if not pending:
+        print(f"✔ migrate: {name} 설정이 이미 최신 형식임(버전 {migrate.CONFIG_VERSION})")
+        return 0
+    if args.check:
+        print(f"✖ migrate --check: {name}에 고칠 파일 {len(pending)}개(파일은 바꾸지 않음). 고치기: make migrate",
+              file=sys.stderr)
+        return 1
+    print(f"✔ migrate: {name} 파일 {len(pending)}개를 버전 {migrate.CONFIG_VERSION} 형식으로 고침")
+    return 0
+
+
 def cmd_api(args) -> int:
     import uvicorn
 
@@ -82,6 +145,17 @@ def main(argv: list[str] | None = None) -> int:
     gen = sub.add_parser("gen", help="레지스트리에서 계약 파일의 생성 구간을 다시 쓴다")
     gen.add_argument("--check", action="store_true", help="쓰지 않고 최신인지만 확인")
     gen.set_defaults(fn=cmd_gen)
+    new = sub.add_parser("new", help="CSV 폴더에서 프로젝트 초안을 만든다(DB 불필요)")
+    new.add_argument("name", help="프로젝트 이름(소문자, 숫자, _, -)")
+    new.add_argument("--from", dest="source", required=True, metavar="CSV_폴더", help="*.csv가 있는 폴더")
+    new.add_argument("--dry-run", action="store_true", help="파일을 쓰지 않고 추론 결과(JSON)만 출력")
+    new.set_defaults(fn=cmd_new)
+    plan = sub.add_parser("plan", help="적용 전에 차이 보기(아무것도 바꾸지 않음)")
+    plan.add_argument("--json", action="store_true", help="구조화된 결과를 JSON으로 출력")
+    plan.set_defaults(fn=cmd_plan)
+    migrate = sub.add_parser("migrate", help="설정 파일을 최신 형식 버전으로 고친다")
+    migrate.add_argument("--check", action="store_true", help="파일을 바꾸지 않고, 고칠 것이 있으면 종료 코드 1")
+    migrate.set_defaults(fn=cmd_migrate)
     api = sub.add_parser("api", help="백엔드 API 서버")
     api.add_argument("--host", default="0.0.0.0")
     api.add_argument("--port", type=int, default=8000)

@@ -83,7 +83,10 @@ pytest==9.2.0
 | `env` | `.env`가 없으면 `.env.example`을 복사하고 `__GENERATE__` 자리를 임의 값으로 채운다(호스트 `od`/`tr` 또는 일회성 컨테이너. 파이썬을 호스트에서 쓰지 않는다). 있으면 건드리지 않는다 |
 | `up` | `docker compose up -d --build` 후 superset healthy까지 대기(시간 제한 300초) |
 | `check` | `tools: python -m dashkit check` |
-| `apply` | `check` → `load` → `sync` → `docker compose restart backend` |
+| `apply` | `check` → `load` → `sync`. backend는 `projects/` 변경을 스스로 다시 읽는다(재빌드·재시작 없음. 프로젝트를 바꿨을 때만 컨테이너를 다시 만든다) |
+| `plan` | `tools: python -m dashkit plan`. 적용 전 차이(데이터, 뷰, Superset). 아무것도 바꾸지 않는다(`contracts/plan.md`) |
+| `new NAME= FROM=` | CSV 폴더에서 프로젝트 초안 생성(`contracts/scaffold.md`). 스택 불필요 |
+| `migrate` | 설정 파일을 최신 설정 버전으로(`CHECK=1`이면 확인만) |
 | `test-unit` | 스택 없이 `pytest -m "not integration" tests/`(tools 이미지를 `docker run`으로 직접 실행) |
 | `test` | 별도 compose 프로젝트 `dashkit-test`(웹앱 18080, Superset 18088, 별도 볼륨, 상태 `.test/`)를 띄워 `pytest tests/` → 프로젝트 전환 검사 → 스택 삭제(`KEEP=1`이면 남김). 개발 스택의 `.state/`가 바뀌면 실패 |
 | `golden` | 번들 스냅샷 `tests/golden/` 갱신 |

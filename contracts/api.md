@@ -5,8 +5,23 @@
 - 오류 본문은 `{"detail": "<영문 코드>", "message": "<사람이 읽는 설명>"}`. 웹앱은 `detail`로 분기하고 `message`는 표시하지 않는다(문구는 `web/strings.js`).
 - 공통 오류 코드: 없는 경로 404 `not_found`, 허용하지 않는 메서드 405 `method_not_allowed`, 처리하지 못한 오류 500 `internal_error`.
 - OpenAPI 문서 경로(`/docs`, `/openapi.json`)는 만들지 않는다.
-- 설정은 프로세스 시작 때 `dashkit.config.load_project(PROJECT)`로 읽는다. 위젯 매니페스트(`WIDGETS_DIR`, 기본 `/app/web/widgets`)도 이때 읽는다. 설정을 바꾸면 `make apply`가 backend를 재시작한다.
-- `.state/embed.json`은 **요청마다** 파일 mtime을 확인해 바뀌었으면 다시 읽는다. `.state/`는 디렉터리째 읽기 전용으로 마운트한다(원자적 rename을 반영하려면 파일 단위 마운트를 쓰면 안 된다).
+- 설정은 프로세스 시작 때 `dashkit.config.load_project(PROJECT)`로 읽는다. 이때 설정이 유효하지 않으면 시작하지 않는다.
+- 그 뒤로는 **요청마다** `projects/<PROJECT>/schema.yaml`, `dashboard.yaml`의 서명(mtime, 크기, inode)을 확인해 바뀌었으면 다시 읽는다(`dashkit/api/state.py`의 `ProjectState`). 설정을 바꾼 뒤 backend를 재시작하거나 이미지를 다시 만들 필요가 없다(보강설계서 5-2, M9). 아래 "설정 다시 읽기" 참조.
+- 위젯 매니페스트(`WIDGETS_DIR`, 기본 `/app/web/widgets`)는 **이미지에 들어 있고 프로세스당 한 번만 읽는다**(`dashkit/widgets.py`의 캐시). 계약의 JSON Schema와 차트 유형 레지스트리도 이미지에 들어 있다. 그래서 템플릿 코드(`dashkit/`, `contracts/`, `web/widgets/*/widget.json`)를 바꿨으면 `make up`으로 이미지를 다시 만들어야 한다. `PROJECT` 환경변수를 바꿨을 때도 컨테이너를 다시 만들어야 한다(`make apply`가 한다).
+- `.state/embed.json`은 **요청마다** 파일 서명을 확인해 바뀌었으면 다시 읽는다. `.state/`는 디렉터리째 읽기 전용으로 마운트한다(원자적 rename을 반영하려면 파일 단위 마운트를 쓰면 안 된다).
+
+## 설정 다시 읽기
+
+| 상황 | 동작 |
+|---|---|
+| 두 파일의 서명이 지난번과 같음 | 읽지 않는다(요청마다 `stat` 두 번) |
+| 서명이 바뀌었고 새 설정이 유효함 | 그 요청부터 새 설정으로 응답한다. 로그 `설정 변경을 감지해 프로젝트 '<이름>'를 다시 읽음` |
+| 서명이 바뀌었지만 검증에 실패함(문법 오류, 참조 오류, 저장 도중의 반쪽 파일, 파일 없음) | **마지막으로 유효했던 설정으로 계속 응답한다.** 오류 목록을 ERROR 로그에 남긴다. 같은 서명에서는 다시 읽지 않으므로 로그는 변경 한 번에 한 번이다. 파일이 다시 바뀌면 다시 시도한다 |
+
+- 요청 하나는 처음 받은 설정을 끝까지 쓴다(응답 안에서 옛 설정과 새 설정이 섞이지 않는다). 서명 확인과 읽기는 잠금 하나로 묶여 있어 동시 요청이 여럿이어도 변경 한 번에 한 번만 읽는다.
+- 다시 읽는 대상은 설정 파일 둘뿐이다. CSV(`data/`)는 backend가 읽지 않는다.
+- `/api/app`의 탭·섹션, `/api/guest-token`의 대시보드 키, `/api/data`의 허용 목록이 모두 새 설정을 따른다. `make apply`보다 먼저 설정 파일만 저장하면 backend는 새 설정을, DB와 Superset은 옛 상태를 갖는 구간이 생긴다. 이 구간에서 새 대시보드는 `embed_id: null`(409 `not_applied`), 새 뷰는 503 `not_loaded`로 응답한다(적용 전과 같은 응답이다).
+- backend는 여전히 Superset 계정과 owner DB 계정을 갖지 않는다. `projects/`는 읽기 전용 마운트다.
 
 ## GET /api/app
 
@@ -110,7 +125,10 @@ JWT(HS256, 키 `GUEST_TOKEN_JWT_SECRET`):
 ## GET /api/health
 
 ```json
-{ "status": "ok", "project": "devtracker", "db": true, "applied": true }
+{ "status": "ok", "project": "devtracker", "db": true, "applied": true, "config": { "valid": true, "errors": 0 } }
 ```
 
 DB에 `SELECT 1`이 실패하면 503, `status: "degraded"`, `db: false`. compose healthcheck가 이 경로를 쓴다.
+
+- `config.valid`: 지금 응답에 쓰는 설정이 디스크의 설정 파일과 같으면 `true`. 파일이 바뀌었는데 검증에 실패해 마지막으로 유효했던 설정을 쓰는 중이면 `false`이고 `config.errors`가 오류 개수다. 오류 내용은 응답에 싣지 않는다(backend 로그, 또는 `make check`).
+- `config.valid`가 `false`여도 상태 코드는 200, `status`는 `ok`다. backend는 정상으로 응답하고 있고, 저장 도중의 설정 때문에 컨테이너가 unhealthy가 되면 안 되기 때문이다.
