@@ -122,11 +122,14 @@ async function loadProjects() {
 
 async function loadConfig(name, { quiet = false } = {}) {
   if (!quiet) { state.config = null; state.configLoading = true; state.configError = null; renderAll(); }
+  // 응답이 오기 전에 다른 프로젝트로 옮겼으면, 성공이든 실패든 지금 화면의 상태를 건드리지 않는다
+  const current = () => state.route.kind === "project" && state.route.name === name;
   try {
     const cfg = await api.config(name);
-    if (state.route.kind !== "project" || state.route.name !== name) return;
+    if (!current()) return;
     state.config = cfg; state.configError = null;
   } catch (e) {
+    if (!current()) return;
     if (!quiet) state.configError = describeError(e);
   }
   state.configLoading = false;

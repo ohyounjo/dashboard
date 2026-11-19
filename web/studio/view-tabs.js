@@ -98,25 +98,28 @@ export function mount(container, ctx) {
   // 화면을 떠나면 false. 떠난 뒤 끝난 저장이 같이 쓰는 컨테이너를 다시 그리거나 선택 상태를 바꾸지 않게 한다
   let alive = true;
 
+  // 컨테이너는 다른 화면도 쓰므로, 화면을 떠났더라도 저장이 끝나면 반드시 잠금을 푼다
+  function unlock() { container.classList.remove("is-busy"); container.inert = false; }
+
   async function patch(ops, { message, onDone, form = false }) {
     if (busy) return;
     busy = true; listError = null; formError = null;
     container.classList.add("is-busy");
+    container.inert = true;   // 저장 중의 입력·끌기를 막는다(응답 뒤 초안을 다시 만들므로 그 사이의 입력은 사라진다)
     try {
       await ctx.patch(ops);
-      busy = false;
+      busy = false; unlock();
       if (!alive) return;
       if (onDone) onDone();
       if (message) ctx.announce(message);
     } catch (e) {
-      busy = false;
+      busy = false; unlock();
       if (!alive) return;
       const info = ctx.describeError(e);
       if (info.detail === "stale_config") { dirty = false; if (sel && sel.kind !== "tab" && sel.kind !== "section") sel = null; resetDraftFromSelection(); form = false; }   // 설정을 새로 읽었다 → 초안을 버린다
       if (form) formError = info; else listError = info;
       ctx.announce(info.title);
     }
-    container.classList.remove("is-busy");
     render();
   }
 

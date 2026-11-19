@@ -113,6 +113,9 @@ export function mount(container, ctx) {
       error ? alertBox({ title: error.title, body: error.body, errors: error.errors }) : null,
       h("div", { class: "form-actions" }, save_, revert, note));
     form.addEventListener("submit", (e) => { e.preventDefault(); save(); });
+    // 저장 중에는 입력을 막는다. 응답이 오면 초안을 서버 값으로 다시 읽으므로, 그 사이의 입력은 저장되지 않은 채 사라진다
+    form.inert = busy;
+    if (busy) form.setAttribute("aria-busy", "true");
 
     fill(container, h("div", { class: "view-head" }, h("h2", { text: S.screenApp }), h("p", { class: "intro", text: S.appLead })), form);
   }
