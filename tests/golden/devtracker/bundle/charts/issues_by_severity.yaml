@@ -1,0 +1,17 @@
+slice_name: 심각도별 열린 이슈
+description: null
+certified_by: null
+certification_details: null
+viz_type: pie
+params:
+  viz_type: pie
+  groupby:
+  - severity
+  metric: open_issues
+query_context: null
+cache_timeout: null
+uuid: 1465d92f-e208-5eaf-96f0-4ab7e512d2e2
+version: 1.0.0
+dataset_uuid: 8eb7db6f-3a8a-5988-9179-62e63a96d3ce
+is_managed_externally: true
+external_url: dashkit://devtracker/chart/issues_by_severity

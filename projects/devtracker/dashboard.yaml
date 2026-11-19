@@ -116,9 +116,15 @@ dashboards:                     # Superset 대시보드
         columns: [resolved_mark, id, title, severity, status, assignee_name, updated]
         order_by: [[updated, desc], [id, desc]]
         row_limit: 5
+      - key: issues_by_severity
+        title: 심각도별 열린 이슈
+        viz: pie
+        dataset: issues
+        groupby: [severity]
+        metric: open_issues        # issues 데이터셋의 지표(is_open인 이슈 수)
     layout:                      # 행 단위. 12칸 격자를 균등 분할, 필요하면 { chart, width }
       - [kpi_progress, kpi_dday, kpi_open, kpi_critical]
-      - [trend_open, ms_bar]
+      - [trend_open, ms_bar, issues_by_severity]
       - [ms_remaining, issues_recent]
 
   issues:
