@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Studio</title>
+<link rel="stylesheet" href="/studio/static/tokens.css">
+<link rel="stylesheet" href="/studio/static/studio.css">
+<script type="module" src="/studio/static/app.js"></script>
+</head>
+<body>
+<a class="skip" id="skip" href="#editor"></a>
+
+<header class="bar" id="bar">
+  <button class="btn icon-only nav-toggle" id="navBtn" type="button" aria-controls="side" aria-expanded="false"></button>
+  <div class="brand"><span class="mark" aria-hidden="true">S</span><span class="brand-name" id="brandName"></span></div>
+  <div class="bar-project" id="barProject"></div>
+  <div class="bar-actions" id="barActions"></div>
+</header>
+
+<div class="shell" id="shell">
+  <nav class="side" id="side"></nav>
+  <main class="editor" id="editor" tabindex="-1">
+    <div id="notice"></div>
+    <div id="view"></div>
+    <section class="dock" id="dock" hidden></section>
+  </main>
+  <aside class="preview" id="preview"></aside>
+</div>
+
+<div class="sr-only" id="announcer" role="status"></div>
+</body>
+</html>

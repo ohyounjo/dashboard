@@ -5,10 +5,29 @@
 - 오류 본문은 `{"detail": "<영문 코드>", "message": "<사람이 읽는 설명>"}`. 웹앱은 `detail`로 분기하고 `message`는 표시하지 않는다(문구는 `web/strings.js`).
 - 공통 오류 코드: 없는 경로 404 `not_found`, 허용하지 않는 메서드 405 `method_not_allowed`, 처리하지 못한 오류 500 `internal_error`.
 - OpenAPI 문서 경로(`/docs`, `/openapi.json`)는 만들지 않는다.
-- 설정은 프로세스 시작 때 `dashkit.config.load_project(PROJECT)`로 읽는다. 이때 설정이 유효하지 않으면 시작하지 않는다.
-- 그 뒤로는 **요청마다** `projects/<PROJECT>/schema.yaml`, `dashboard.yaml`의 서명(mtime, 크기, inode)을 확인해 바뀌었으면 다시 읽는다(`dashkit/api/state.py`의 `ProjectState`). 설정을 바꾼 뒤 backend를 재시작하거나 이미지를 다시 만들 필요가 없다(보강설계서 5-2, M9). 아래 "설정 다시 읽기" 참조.
-- 위젯 매니페스트(`WIDGETS_DIR`, 기본 `/app/web/widgets`)는 **이미지에 들어 있고 프로세스당 한 번만 읽는다**(`dashkit/widgets.py`의 캐시). 계약의 JSON Schema와 차트 유형 레지스트리도 이미지에 들어 있다. 그래서 템플릿 코드(`dashkit/`, `contracts/`, `web/widgets/*/widget.json`)를 바꿨으면 `make up`으로 이미지를 다시 만들어야 한다. `PROJECT` 환경변수를 바꿨을 때도 컨테이너를 다시 만들어야 한다(`make apply`가 한다).
-- `.state/embed.json`은 **요청마다** 파일 서명을 확인해 바뀌었으면 다시 읽는다. `.state/`는 디렉터리째 읽기 전용으로 마운트한다(원자적 rename을 반영하려면 파일 단위 마운트를 쓰면 안 된다).
+- backend가 보여 주는 프로젝트(**현재 프로젝트**)는 `.state/embed.json`의 `project`, 곧 마지막으로 sync에 성공한 프로젝트다. 쓸 수 없으면 환경변수 `PROJECT`다. 아래 "현재 프로젝트" 참조. 시작할 때 어느 쪽 설정도 유효하지 않으면 시작하지 않는다.
+- **요청마다** 현재 프로젝트의 `projects/<이름>/schema.yaml`, `dashboard.yaml`의 서명(mtime, 크기, inode)을 확인해 바뀌었으면 다시 읽는다(`dashkit/api/state.py`의 `ProjectState`). 설정을 바꾼 뒤 backend를 재시작하거나 이미지를 다시 만들 필요가 없다(보강설계서 5-2, M9). 아래 "설정 다시 읽기" 참조.
+- 위젯 매니페스트(`WIDGETS_DIR`, 기본 `/app/web/widgets`)는 **이미지에 들어 있고 프로세스당 한 번만 읽는다**(`dashkit/widgets.py`의 캐시). 계약의 JSON Schema와 차트 유형 레지스트리도 이미지에 들어 있다. 그래서 템플릿 코드(`dashkit/`, `contracts/`, `web/widgets/*/widget.json`)를 바꿨으면 `make up`으로 이미지를 다시 만들어야 한다.
+- `.state/embed.json`은 **요청마다** 파일 서명을 확인해 바뀌었으면 다시 읽는다. 프로젝트를 바꿔 적용해도(`PROJECT=<다른 이름> make apply`, Studio의 적용) backend를 다시 만들 필요가 없다. `.state/`는 디렉터리째 읽기 전용으로 마운트한다(원자적 rename을 반영하려면 파일 단위 마운트를 쓰면 안 된다).
+
+## 현재 프로젝트
+
+`/api/app`, `/api/data`, `/api/guest-token`, `/api/health`는 모두 같은 "현재 프로젝트"를 쓴다(`dashkit/api/state.py`의 `CurrentState`). 요청 하나는 처음 받은 프로젝트·설정·임베드 목록을 끝까지 쓴다.
+
+| 상황 | 현재 프로젝트 | 임베드(`embed_id`) |
+|---|---|---|
+| `embed.json`의 `project`가 있고 그 프로젝트의 설정을 읽을 수 있음 | **그 프로젝트**(환경변수 `PROJECT`와 달라도) | `embed.json`의 것 |
+| `embed.json`이 없음(한 번도 적용하지 않음) · JSON이 깨짐 · `project`가 문자열이 아니거나 이름 형식이 틀림 | 환경변수 `PROJECT` | 없음(미적용) |
+| `embed.json`의 프로젝트 폴더가 없음(지웠거나 다른 체크아웃) | 환경변수 `PROJECT` | 없음(미적용) |
+| `embed.json`의 프로젝트 설정이 유효하지 않고, backend가 그 프로젝트를 유효하게 읽은 적이 없음 | 환경변수 `PROJECT` | 없음(미적용) |
+| 현재 프로젝트의 설정이 **읽은 뒤에** 깨짐 | 그대로(마지막으로 유효했던 설정. 아래 "설정 다시 읽기") | 그대로 |
+| 어느 쪽 설정도 읽을 수 없음 | 시작할 때는 시작하지 않는다. 실행 중에는 마지막으로 응답한 상태를 유지한다(`/api/health`의 `config.valid: false`) | 그대로 |
+
+- 환경변수 `PROJECT`로 넘어간 경우 `embed.json`이 그 프로젝트의 것이 아니므로 `embed_id: null`, `applied: false`, guest-token 409 `not_applied`다(적용 전과 같은 응답).
+- `embed.json`의 프로젝트를 쓸 수 없다는 판단은 그 프로젝트의 설정 파일(또는 `embed.json`)이 바뀔 때까지 다시 하지 않는다. 요청마다 검증을 되풀이하지 않고, 로그도 변경 한 번에 한 번이다. 파일을 고치면 다음 요청부터 그 프로젝트로 넘어간다.
+- 프로젝트가 바뀌면 로그에 `현재 프로젝트: '<이름>' (embed.json의 project | env PROJECT)`를 남긴다.
+- `/api/data`가 읽는 DB에는 마지막으로 **load**에 성공한 프로젝트가 있다. apply가 load까지만 성공하고 sync에서 실패하면 backend는 이전 프로젝트의 설정으로, DB는 새 프로젝트의 뷰로 남는다. 이 구간의 위젯 데이터는 503 `not_loaded`이거나(뷰 이름이 다를 때) 새 프로젝트의 행이다. sync를 다시 성공시키면 맞춰진다.
+- backend는 `projects/` 전체를 읽기 전용으로 마운트하므로 환경변수 `PROJECT`가 아닌 프로젝트도 읽을 수 있다. Superset 계정과 owner DB 계정은 여전히 갖지 않는다.
 
 ## 설정 다시 읽기
 
@@ -64,7 +83,8 @@
 - `app.logo_text`, `app.theme`: 설정에 없으면 `null`. 웹앱은 `null`이면 기본 토큰을 쓴다.
 - `superset.url`: 환경변수 `SUPERSET_PUBLIC_URL`(브라우저가 접속할 주소). 비어 있으면 `null`.
 - 섹션의 선택 필드는 설정에 없으면 `null`로 채워 **키가 항상 있다**.
-- `embed_id`: `.state/embed.json`에서 찾은 임베드 UUID. 없거나 embed.json의 `project`가 현재 프로젝트와 다르면 `null`.
+- `project`: 현재 프로젝트의 이름(위 "현재 프로젝트").
+- `embed_id`: `.state/embed.json`에서 찾은 임베드 UUID. 없거나, 현재 프로젝트가 환경변수 `PROJECT`로 넘어간 것이라 embed.json이 그 프로젝트의 것이 아니면 `null`.
 - `applied`: 모든 superset 섹션의 `embed_id`가 있으면 `true`.
 - `widgets`: 위젯 매니페스트(`web/widgets/<유형>/widget.json`, [widgets.md](widgets.md))에서 읽은 유형 목록(이름순). 이 프로젝트가 쓰지 않는 유형도 들어 있다. 웹앱은 섹션의 `type`이 이 목록의 `type`과 정확히 같을 때만 `./widgets/<type>/widget.js`를 불러온다. `superset`은 위젯이 아니므로 목록에 없다.
 - 위젯 섹션의 키는 유형의 매니페스트가 정한다(공통 키 `type`, `title` + 옵션). 위 예의 `gantt`, `kanban`은 저장소에 들어 있는 두 유형이다.
@@ -129,6 +149,8 @@ JWT(HS256, 키 `GUEST_TOKEN_JWT_SECRET`):
 ```
 
 DB에 `SELECT 1`이 실패하면 503, `status: "degraded"`, `db: false`. compose healthcheck가 이 경로를 쓴다.
+
+- `project`: 현재 프로젝트의 이름. 환경변수 `PROJECT`와 다를 수 있다.
 
 - `config.valid`: 지금 응답에 쓰는 설정이 디스크의 설정 파일과 같으면 `true`. 파일이 바뀌었는데 검증에 실패해 마지막으로 유효했던 설정을 쓰는 중이면 `false`이고 `config.errors`가 오류 개수다. 오류 내용은 응답에 싣지 않는다(backend 로그, 또는 `make check`).
 - `config.valid`가 `false`여도 상태 코드는 200, `status`는 `ok`다. backend는 정상으로 응답하고 있고, 저장 도중의 설정 때문에 컨테이너가 unhealthy가 되면 안 되기 때문이다.

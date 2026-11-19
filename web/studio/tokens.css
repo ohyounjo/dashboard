@@ -1,0 +1,39 @@
+/* 디자인 토큰: web/styles.css의 토큰 블록(:root ~ [data-tone])을 그대로 복사한 것이다.
+   studio 컨테이너는 web/studio/만 서빙하므로 원본을 직접 링크할 수 없다.
+   이 파일을 손으로 고치지 않는다. 원본이 바뀌면 블록을 다시 복사한다(tests/test_studio_ui_static.py가 일치를 검사한다). */
+:root {
+  --primary: var(--brand-light, #1428A0); --primary-soft: var(--brand-soft-light, #E6E9F8); --on-primary: var(--brand-on-light, #FFFFFF);
+  --bg: #F5F6FB; --surface: #FFFFFF; --surface-2: #EEF0F8; --line: #DDE0EE;
+  --fg: #141833; --muted: #5B6080;
+  --good: #1B8A4B; --warn: #C76A00; --bad: #C62828; --info: #2563C9; --neutral: #6B7088;
+  --good-bg: #E3F4EA; --warn-bg: #FCEFDD; --bad-bg: #FBE4E4; --info-bg: #E3ECFA; --neutral-bg: #ECEDF2;
+  --skeleton: #E7E9F3;
+  --font-body: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", "Noto Sans CJK KR", sans-serif;
+  --font-num: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "D2Coding", monospace;
+  --radius: 12px; --rail: 76px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --primary: var(--brand-dark, #7B8CFF); --primary-soft: var(--brand-soft-dark, #232A52); --on-primary: var(--brand-on-dark, #0E1120);
+  --bg: #0E1120; --surface: #171B2E; --surface-2: #1F2439; --line: #2C3250;
+  --fg: #E7E9F5; --muted: #9AA0BE;
+  --good: #5BD08A; --warn: #F2A64A; --bad: #FF7A7A; --info: #7FAAF5; --neutral: #A3A8C0;
+  --good-bg: #173326; --warn-bg: #3A2A14; --bad-bg: #3D1C20; --info-bg: #1B2A45; --neutral-bg: #262A3D;
+  --skeleton: #232840;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --primary: var(--brand-dark, #7B8CFF); --primary-soft: var(--brand-soft-dark, #232A52); --on-primary: var(--brand-on-dark, #0E1120);
+  --bg: #0E1120; --surface: #171B2E; --surface-2: #1F2439; --line: #2C3250;
+  --fg: #E7E9F5; --muted: #9AA0BE;
+  --good: #5BD08A; --warn: #F2A64A; --bad: #FF7A7A; --info: #7FAAF5; --neutral: #A3A8C0;
+  --good-bg: #173326; --warn-bg: #3A2A14; --bad-bg: #3D1C20; --info-bg: #1B2A45; --neutral-bg: #262A3D;
+  --skeleton: #232840;
+  color-scheme: dark }
+
+/* 색조: data-tone 속성 → --tone / --tone-bg */
+[data-tone="primary"] { --tone: var(--primary); --tone-bg: var(--primary-soft) }
+[data-tone="good"] { --tone: var(--good); --tone-bg: var(--good-bg) }
+[data-tone="warn"] { --tone: var(--warn); --tone-bg: var(--warn-bg) }
+[data-tone="bad"] { --tone: var(--bad); --tone-bg: var(--bad-bg) }
+[data-tone="neutral"] { --tone: var(--neutral); --tone-bg: var(--neutral-bg) }

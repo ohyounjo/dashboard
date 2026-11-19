@@ -51,7 +51,7 @@ check(설정 검사) → load(CSV 검증·적재) → sync(Superset 반영) 순�
 ```
 projects/<이름>/        ★ 사용자가 바꾸는 곳: data/*.csv, schema.yaml, dashboard.yaml
 contracts/              설정 형식(JSON Schema), API·위젯·상태 파일 계약, Superset 6.1.0 확인 기록
-dashkit/                파이썬 패키지: config.py(설정 검증), loader/, sync/, api/
+dashkit/                파이썬 패키지: config.py(설정 검증), loader/, sync/, api/, studio/(구성 화면 API)
 superset/               Superset 이미지·설정·초기화(guest 역할)
 web/                    웹앱(바닐라 JS): 셸, strings.js(고정 문구), widgets/<유형>/(widget.js + widget.json)
 data-db/init/           데이터 DB 계정 초기화
@@ -230,6 +230,8 @@ make apply
 PROJECT=sales-sample make apply
 ```
 
+웹앱은 **마지막으로 적용에 성공한 프로젝트**를 보여 줍니다(`.state/embed.json`의 `project`. 규칙은 `contracts/api.md`의 "현재 프로젝트"). `.env`의 `PROJECT`는 `make check`·`make apply`가 다룰 프로젝트이고, 아직 아무것도 적용하지 않았을 때 웹앱이 보여 줄 프로젝트입니다.
+
 ## 5. Superset 화면에서 만든 차트를 params로 옮기기
 
 축약 문법에 없는 차트 유형이나 세부 옵션은 Superset 화면에서 만든 뒤, 그 파라미터를 설정으로 옮깁니다.
@@ -262,6 +264,30 @@ PROJECT=sales-sample make apply
 축약 차트에 옵션만 하나 더하고 싶을 때(예: 막대 값 표시)도 같은 방법으로 키 이름을 찾아 `params: { show_value: true }`처럼 씁니다.
 
 ---
+
+## Studio: 화면에서 구성하기 (선택)
+
+```bash
+make studio        # http://localhost:8090
+make studio-down   # 끄기(웹앱·Superset의 프레임 허용도 원래대로)
+```
+
+Studio는 `projects/<이름>/`의 파일을 고치고 `make apply`와 같은 일을 실행하는 **YAML 편집기**입니다. 전용 저장소나 DB가 없어서, Studio로 만든 것과 손으로 쓴 것이 같은 파일입니다. 손 편집과 섞어 써도 됩니다.
+
+| 화면 | 하는 일 |
+|---|---|
+| 프로젝트 마법사 | CSV 여러 개를 놓으면 `make new`와 같은 추론 결과(유형, 키, 참조, 초안 차트)를 보여 주고, 고친 뒤 프로젝트를 만듭니다 |
+| 데이터 | CSV를 테이블에 놓으면 검증 결과와 지난 적재와의 차이(`make plan`의 방식)를 먼저 보여 주고, 통과한 파일만 `data/<테이블>.csv`로 바꿉니다 |
+| 탭 구성 | 탭과 섹션의 순서·추가·삭제, 섹션 옵션. `dashboard.yaml`의 `tabs`를 고칩니다 |
+| 앱 | 제목, 로고, 기준일, 색. `dashboard.yaml`의 `app`을 고칩니다 |
+| 적용 | check → load → sync를 실행하고 진행 로그를 보여 줍니다. 끝나면 오른쪽 미리보기(실제 웹앱)가 그 프로젝트를 보여 줍니다 |
+
+- **외부에 열지 마세요.** Studio에는 인증이 없고, owner DB 계정과 Superset 관리자 계정, `projects/` 쓰기 권한을 가집니다. `127.0.0.1`에만 열리며 운영 배포에 넣지 않습니다. 다른 사이트가 브라우저를 통해 요청을 보내지 못하도록 Host·Origin·Content-Type을 검사합니다(`contracts/studio.md` "요청 보호").
+- **저장 방식.** 변경을 임시 사본에 적용해 `make check`와 같은 검사를 통과한 뒤에만 원래 파일을 원자적으로 바꿉니다. 실패하면 파일은 그대로이고 오류가 화면에 나옵니다. YAML은 고친 곳만 다시 쓰므로 손으로 쓴 주석, 키 순서, 줄 모양이 남습니다(건드리지 않은 줄은 바이트 단위로 같습니다).
+- **되돌리기는 git으로 합니다.** Studio는 이번 실행에서 자기가 쓴 파일 목록만 보여 줍니다(`git diff`, `git checkout -- <파일>`).
+- 한계: 차트와 대시보드 배치, 필터는 아직 화면에서 고칠 수 없습니다(`dashboard.yaml`을 직접 고칩니다). `schema.yaml`은 마법사가 만들 때만 쓰고 그 뒤로는 고치지 않습니다. 앵커·별칭(`&a`, `*a`)이 있는 YAML은 파일 전체를 다시 쓰므로 주석과 키 순서는 남지만 줄 모양이 표준 꼴로 바뀝니다. 한 번에 하나의 적용만 실행합니다.
+
+API와 저장 규칙은 `contracts/studio.md`에 있습니다.
 
 ## 적용 전에 차이 보기
 

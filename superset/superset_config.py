@@ -48,7 +48,10 @@ if not WEB_ORIGINS:
 
 TALISMAN_ENABLED = True
 TALISMAN_CONFIG = copy.deepcopy(_DEFAULT_TALISMAN_CONFIG)
-TALISMAN_CONFIG["content_security_policy"]["frame-ancestors"] = list(WEB_ORIGINS)
+# Studio(구성 화면)의 미리보기는 Studio → 웹앱 → Superset으로 iframe이 겹친다. frame-ancestors는 모든 조상을 보므로
+# STUDIO_ORIGIN이 있을 때만(make studio) 그 출처를 정확히 더한다. 임베드 허용 도메인(Referer 검사)은 웹앱 출처 그대로다.
+STUDIO_ORIGIN = os.environ.get("STUDIO_ORIGIN", "").strip()
+TALISMAN_CONFIG["content_security_policy"]["frame-ancestors"] = list(WEB_ORIGINS) + ([STUDIO_ORIGIN] if STUDIO_ORIGIN else [])
 TALISMAN_CONFIG["frame_options"] = None  # X-Frame-Options 대신 frame-ancestors로 제어
 
 # ---------------------------------------------------------------- 캐시

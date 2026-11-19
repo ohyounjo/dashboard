@@ -12,20 +12,27 @@ HOST_GID := $(shell id -g)
 TOOLS    := $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) tools
 
 .NOTPARALLEL:
-.PHONY: help env up check load sync apply plan migrate new test test-unit test-down unit-image golden gen reset down logs dirs _test _test_run
+.PHONY: help env up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down unit-image golden gen reset down logs dirs _test _test_run
 
 # ---- 테스트 스택(보강설계서 3-2, 7절 D5): 개발 스택과 이름·포트·볼륨·상태 디렉터리가 모두 다르다.
 # 상태·빌드 디렉터리는 .test/ 고정이다(아래 정리 단계가 이 경로를 그대로 쓴다).
 TEST_NAME          := dashkit-test
 TEST_WEB_PORT      ?= 18080
 TEST_SUPERSET_PORT ?= 18088
+TEST_STUDIO_PORT    ?= 18090
 TEST_ENV := COMPOSE_PROJECT_NAME=$(TEST_NAME) \
   WEB_PORT=$(TEST_WEB_PORT) SUPERSET_PORT=$(TEST_SUPERSET_PORT) \
   WEB_ORIGINS=http://localhost:$(TEST_WEB_PORT),http://127.0.0.1:$(TEST_WEB_PORT) \
   SUPERSET_PUBLIC_URL=http://localhost:$(TEST_SUPERSET_PORT) \
-  STATE_DIR=/app/.test/state BUILD_DIR=/app/.test/build HOST_STATE_DIR=./.test/state
+  STATE_DIR=/app/.test/state BUILD_DIR=/app/.test/build HOST_STATE_DIR=./.test/state HOST_BUILD_DIR=./.test/build \
+  STUDIO_PORT=$(TEST_STUDIO_PORT) WEB_PUBLIC_URL=http://localhost:$(TEST_WEB_PORT)
 # 단위 테스트는 compose 없이 tools 이미지만으로 돈다(.env도 필요 없다)
 APP_IMAGE := dashkit-app:local
+STUDIO_IMAGE := dashkit-studio:local
+# Studio가 projects/에 쓰는 파일이 호스트 사용자 소유가 되게 한다(compose의 studio.user)
+export HOST_UID HOST_GID
+# Studio 포트: 환경 > .env > .env.example
+STUDIO_PORT ?= $(or $(shell sed -n 's/^STUDIO_PORT=//p' .env 2>/dev/null | tail -1),$(shell sed -n 's/^STUDIO_PORT=//p' .env.example | tail -1),8090)
 UNIT_RUN  := docker run --rm --user $(HOST_UID):$(HOST_GID) -v "$(CURDIR)":/app -w /app $(APP_IMAGE)
 
 help:
@@ -38,6 +45,7 @@ help:
 	@echo "make plan    적용 전에 바뀌는 것 보기(데이터, 뷰, Superset). 아무것도 바꾸지 않음"
 	@echo "make new NAME=<이름> FROM=<CSV 폴더>   CSV에서 프로젝트 초안 생성"
 	@echo "make migrate [CHECK=1]   설정 파일을 최신 설정 버전으로"
+	@echo "make studio / make studio-down   구성 화면(http://localhost:8090, 127.0.0.1 전용)"
 	@echo "make test-unit  단위 테스트(스택 불필요: 설정 검증, 번들 스냅샷, CSV 검증, 도메인 단어)"
 	@echo "make test    통합 테스트(별도 테스트 스택을 띄우고 끝나면 내림. KEEP=1이면 남김)"
 	@echo "make golden  번들 스냅샷(tests/golden/) 갱신"
@@ -107,7 +115,7 @@ sync: dirs
 
 apply: check load sync
 	@# backend는 projects/의 설정 변경을 파일 시각으로 감지해 다시 읽는다(재빌드·재시작 없음).
-	@# PROJECT는 컨테이너 환경변수라서 프로젝트를 바꿨을 때만 컨테이너가 다시 만들어진다(바뀐 게 없으면 아무 일도 없다).
+	@# backend는 마지막으로 sync에 성공한 프로젝트(.state/embed.json)를 따른다. 아래 up은 컨테이너가 없을 때만 일한다.
 	@# 템플릿 코드(dashkit/, web/widgets/*/widget.json)를 바꿨으면 make up으로 이미지를 다시 만든다.
 	$(COMPOSE) up -d --no-deps backend
 	$(call wait_healthy,backend)
@@ -127,12 +135,34 @@ new: unit-image
 	docker run --rm --user $(HOST_UID):$(HOST_GID) -v "$(CURDIR)":/app -v "$$from":/import:ro -w /app $(APP_IMAGE) \
 	  python -m dashkit new "$(NAME)" --from /import
 
+# ---------------------------------------------------------------- Studio(구성 화면, 보강설계서 6절)
+# 127.0.0.1에만 열리고 인증이 없다. 외부에 열지 않는다. 웹앱과 Superset은 Studio 출처를 frame-ancestors에 더해 다시 뜬다
+# (미리보기 iframe). make studio-down이 원래 정책('none')으로 되돌린다.
+studio: dirs
+	STUDIO_PORT=$(STUDIO_PORT) STUDIO_ORIGIN=http://localhost:$(STUDIO_PORT) $(COMPOSE) --profile studio up -d --build studio web superset
+	$(call wait_healthy,superset web studio)
+	@echo "✔ Studio: http://localhost:$(STUDIO_PORT)  (끄기: make studio-down)"
+
+studio-down:
+	$(COMPOSE) --profile studio rm -sf studio
+	$(COMPOSE) up -d web superset
+	$(call wait_healthy,superset web)
+
 # ---------------------------------------------------------------- 테스트
 unit-image:
-	@docker build -q -t $(APP_IMAGE) -f dashkit/Dockerfile . > /dev/null
+	@docker build -q -t $(APP_IMAGE) --target app -f dashkit/Dockerfile . > /dev/null
 
-test-unit: unit-image
-	$(UNIT_RUN) python -m pytest -q -p no:cacheprovider -m "not integration" tests/
+studio-image:
+	@docker build -q -t $(STUDIO_IMAGE) --target studio -f dashkit/Dockerfile . > /dev/null
+
+# Studio 테스트(tests/test_studio*.py)는 ruamel.yaml이 있는 studio 이미지에서 따로 돈다. app 이미지에서는 그 파일들을 빼고 돈다.
+test-unit: unit-image studio-image
+	$(UNIT_RUN) python -m pytest -q -p no:cacheprovider -m "not integration" --ignore-glob='tests/test_studio*.py' tests/
+	@if ls tests/test_studio*.py > /dev/null 2>&1; then \
+	  echo "== Studio 테스트(studio 이미지)"; \
+	  docker run --rm --user $(HOST_UID):$(HOST_GID) -v "$(CURDIR)":/app -w /app $(STUDIO_IMAGE) \
+	    python -m pytest -q -p no:cacheprovider -m "not integration" tests/test_studio*.py; \
+	fi
 
 # 번들 스냅샷 갱신. COLUMNS=1이면 먼저 현재 스택의 DB에서 PROJECT의 뷰 열 정보를 다시 읽는다(스택 필요).
 golden: unit-image
@@ -146,7 +176,8 @@ gen: unit-image
 	$(UNIT_RUN) python -m dashkit gen
 
 # 통합 테스트는 별도 compose 프로젝트(dashkit-test)에서 돈다. 개발 스택과 .state/, .build/는 건드리지 않는다.
-# 1) devtracker로 up·apply → 전체 pytest
+# 1) devtracker로 up·apply → 전체 pytest(Studio 테스트는 ruamel.yaml이 있는 studio 이미지에서 따로 돈다: make test-unit)
+#    이어서 Studio를 띄워 tests/test_studio_integration.py(끝나면 원래 프로젝트를 다시 적용한다)
 # 2) sales-sample로 apply → 전환 검사(tests/test_switch.py)와 스냅샷 열 정보 대조
 # 3) chart-gallery로 apply → 차트 유형별 데이터 조회(tests/test_gallery.py)와 스냅샷 열 정보 대조
 # 4) make new로 예시 CSV 폴더에서 초안(projects/zz-newtest, 끝나면 지움)을 만들어 apply → tests/test_new_project.py
@@ -181,7 +212,12 @@ _test_run:
 	echo "== 테스트 스택 기동($(TEST_NAME)), PROJECT=$$a apply"; \
 	PROJECT=$$a $(MAKE) --no-print-directory up apply || exit 1; \
 	echo "== 1단계: PROJECT=$$a 전체 테스트"; \
-	PROJECT=$$a $(TOOLS) python -m pytest -q -p no:cacheprovider tests/ || rc=1; \
+	PROJECT=$$a $(TOOLS) python -m pytest -q -p no:cacheprovider --ignore-glob='tests/test_studio*.py' tests/ || rc=1; \
+	echo "== Studio 단계: Studio API만으로 CSV → 프로젝트 → 적용 → 탭 변경 → 데이터 교체"; \
+	if PROJECT=$$a $(MAKE) --no-print-directory studio; then \
+	  PROJECT=$$a $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) -e STUDIO_TEST_URL=http://studio:8090 tools \
+	    python -m pytest -q -p no:cacheprovider tests/test_studio_integration.py || rc=1; \
+	else rc=1; fi; \
 	echo "== 2단계: PROJECT=$$b 로 전환해 범용성 검사"; \
 	if PROJECT=$$b $(MAKE) --no-print-directory apply; then \
 	  PROJECT=$$b $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) -e SWITCH_FROM=$$a tools \

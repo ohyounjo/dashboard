@@ -76,7 +76,8 @@ sync가 쓰고 backend가 읽는다(읽기 전용 마운트). 쓰기는 임시 �
 ```
 
 - `embed_uuid`는 Superset이 만든다(`POST /api/v1/dashboard/<id>/embedded`, upsert라서 다시 불러도 유지된다).
-- backend는 `project`가 현재 `PROJECT`와 다르면 없는 것으로 취급한다(`embed_id: null`, guest-token 409).
+- **backend는 이 파일의 `project`를 현재 프로젝트로 따른다**(마지막으로 sync에 성공한 프로젝트. 환경변수 `PROJECT`와 달라도 된다). 파일이 없거나 깨졌거나, 그 프로젝트 폴더가 없거나 설정을 읽을 수 없으면 환경변수 `PROJECT`를 쓰고 임베드는 없는 것으로 취급한다(`embed_id: null`, guest-token 409). 규칙은 [api.md](api.md)의 "현재 프로젝트".
+- 그래서 sync에 성공하는 것이 곧 "웹앱이 이 프로젝트를 보여 준다"이다. `PROJECT=<다른 이름> make apply`와 Studio의 적용이 같은 방식으로 프로젝트를 바꾼다. sync가 실패하면 이 파일은 그대로이고 웹앱도 이전 프로젝트를 계속 보여 준다.
 
 ## `.state/managed.json`
 
