@@ -124,3 +124,48 @@ metadata:
 6. allowed_domains와 frame-ancestors에 `localhost`와 `127.0.0.1` 출처를 둘 다 넣을지 결정.
 7. import 실패는 500 HTML이고 부분 적용(DB 객체)이 남을 수 있다 → 재실행으로 수렴.
 8. guest 역할 권한 3개는 `superset init` 다음에 부여한다.
+
+## 10. 축약 16종 추가와 갤러리의 원본 유형 (보강설계서 2단계)
+
+- 확인일: 2026-11-20. 방법: `projects/chart-gallery`를 테스트 스택(`dashkit-test`, Superset 6.1.0)에 적용하고
+  1. 차트마다 `POST /api/v1/chart/data`(관리자)가 200이고 행이 있는지(`tests/test_gallery.py`, 28개 통과),
+  2. 웹앱(guest 임베드) 화면을 헤드리스 Chromium으로 탭마다 캡처(1280px 라이트·다크, 390px)해 차트 자리의 오류 알림("Data error", "Unexpected error" 등)이 없는지와 그림이 그려졌는지
+  를 봤다. 통과 기준은 보강설계서 7절 D4(둘 다 통과해야 축약으로 올린다)다.
+- 파라미터 이름의 출발점은 이미지 안 예제(`/app/superset/examples/<묶음>/charts/*.yaml`)다. 예제에는 예전 버전에서 옮겨 온 키가 섞여 있어(예: `box_plot`의 `whisker_options`, `mixed_timeseries`의 `seriesType: echarts_timeseries_line`) 그대로 믿지 않고 렌더링으로 확인했다.
+- "최소 params"는 그 값만 담은 번들로 guest 화면에서 그려진 조합이다. 선택 필드를 뺀 최소 조합도 임시 대시보드로 따로 확인했다(`area`, `scatter`, `mixed`, `waterfall`(시간 x, 범주 x), `gauge`, `histogram`, `pivot_table`, `bubble`).
+
+### 10-1. 축약으로 올린 16종 (모두 통과)
+
+| 축약 `viz` | `viz_type` | 최소 params(실측 통과) | 근거 예제 | 메모 |
+|---|---|---|---|---|
+| `area` | `echarts_area` | `x_axis`, `metrics[]`, `groupby: []` | `world_health/World_s_Pop_Growth` | `stack: "Stack"`은 선택(`stacked: true`). 시간 x면 `time_grain_sqla` |
+| `scatter` | `echarts_timeseries_scatter` | `x_axis`, `metrics[]`, `groupby: []` | `featured_charts/Scatter_Plot` | |
+| `mixed` | `mixed_timeseries` | `x_axis`, `metrics[]`, `metrics_b[]`, `groupby: []`, `groupby_b: []`, `seriesType`, `seriesTypeB` | `featured_charts/Mixed` | `seriesType` 값은 `line`·`bar`·`scatter`·`smooth`(예제의 `echarts_timeseries_line`은 예전 값). 둘째 묶음을 오른쪽 축에 두려면 `yAxisIndexB: 1`, 그 축 형식은 `y_axis_format_secondary` |
+| `waterfall` | `waterfall` | `x_axis`, `metric`, `groupby: []` | `featured_charts/Waterfall` | x는 시간 열·범주 열 모두 됨. 시간 x의 눈금 기본 형식은 시각까지 나와(`03 PM`) 갤러리는 `params: { x_axis_time_format: "%Y-%m" }`를 더했다 |
+| `funnel` | `funnel` | `groupby[]`, `metric`, `sort_by_metric: true` | `featured_charts/Funnel` | |
+| `gauge` | `gauge_chart` | `metric`, `groupby: []` | `featured_charts/Gauge` | `min_val`/`max_val`을 생략하면 최댓값은 값의 2배로 잡힌다 |
+| `treemap` | `treemap_v2` | `groupby[]`, `metric` | `world_health/Treemap` | `groupby` 순서가 바깥 → 안 |
+| `sunburst` | `sunburst_v2` | `columns[]`, `metric` | `world_health/Rural_Breakdown` | `columns` 순서가 안쪽 → 바깥쪽 |
+| `heatmap` | `heatmap_v2` | `x_axis`, `groupby`(열 **하나**, 목록 아님), `metric` | `sales_dashboard/Number_of_Deals_for_each_Combination` | 축약 `y` → `groupby` |
+| `pivot_table` | `pivot_table_v2` | `groupbyRows[]`, `groupbyColumns[]`(둘 다 `[]` 가능), `metrics[]`, `aggregateFunction: "Sum"`, `metricsLayout: "COLUMNS"` | `usa_births_names/Pivot_Table_v2` | 값 형식은 `valueFormat` |
+| `histogram` | `histogram_v2` | `column`, `groupby: []` | `fcc_new_coder_survey/Last_Year_Income_Distribution` | `bins` 생략 시 5 |
+| `box_plot` | `box_plot` | `columns[]`(분포 단위), `groupby[]`(상자 묶음), `metrics[]`, `whiskerOptions: "Tukey"` | `world_health/Box_plot` | 키는 `whiskerOptions`다(예제의 `whisker_options`는 예전 이름). 이 값이 없으면 프론트엔드가 boxplot 후처리를 붙이지 않으므로 축약이 항상 쓴다 |
+| `bubble` | `bubble_v2` | `entity`, `x`, `y`, `size`(셋 다 지표) | `featured_charts/Bubble` | `series`는 선택(색). `max_bubble_size` 없이도 그려진다 |
+| `radar` | `radar` | `groupby[]`, `metrics[]` | `featured_charts/Radar` | [실측] 크기가 크게 다른 지표(천 단위와 십 단위)를 섞으면 작은 쪽이 중심에 뭉쳐 읽을 수 없었다. 크기가 비슷한 지표끼리 쓴다 |
+| `sankey` | `sankey_v2` | `source`, `target`, `metric` | `fcc_new_coder_survey/First_Time_Developer_Commute_Time` | 갤러리는 양쪽 열의 값이 겹치지 않는 데이터로만 확인했다(순환이 있는 데이터는 확인하지 않음) |
+| `word_cloud` | `word_cloud` | `series`, `metric` | `usa_births_names/Boy_Name_Cloud` | 차트가 좁으면 큰 단어가 잘린다. 갤러리는 한 행 전체 너비로 배치 |
+
+### 10-2. 원본 방식으로 남긴 유형
+
+| `viz_type` | 최소 params(실측) | 근거 예제 | 데이터 조회 | guest 화면 | 메모 |
+|---|---|---|---|---|---|
+| `graph_chart` | `source`, `target`, `metric`, `layout: circular` | `featured_charts/Graph` | 200 | 통과 | |
+| `tree_chart` | `id`, `parent`, `name`, `root_node_id`, `metric` | `featured_charts/Tree` | 200 | 통과 | 뿌리 행의 부모 열은 비워 둔다 |
+| `gantt_chart` | `start_time`, `end_time`, `y_axis`, `series` | `featured_charts/Gantt` | 200 | 통과 | 왼쪽 항목 이름이 잘리면 `y_axis_title_margin`을 넓힌다(갤러리 80) |
+| `chord` | `groupby`(열 하나), `columns`(열 하나), `metric` | `slack_dashboard/Cross_Channel_Relationship` | 200 | **실패: "Data error / Access is Denied"** | 아래 설명 |
+| `world_map` | `entity`, `country_fieldtype`, `metric`, `show_bubbles` | `world_health/Rural` | 200 | **실패: 같은 오류** | `show_bubbles: true`는 `secondary_metric`이 있어야 의미가 있다 |
+| `country_map` | `select_country`, `entity`(ISO 3166-2), `metric` | `misc_charts/Birth_in_France_by_department_in_2016` | 200 | **실패: 같은 오류** | `select_country: korea`의 지역 코드는 `KR-11` 꼴(이미지의 geojson에서 확인) |
+
+- **`chord`, `world_map`, `country_map`이 guest 화면에서 안 그려지는 이유:** 이 세 유형은 예전 조회 경로 `POST /superset/explore_json/`를 쓴다. guest 역할(`EmbedGuest`, 5절의 권한 3개)에는 `can_explore_json on Superset`이 없어 403이 난다. [실측] Superset 로그의 `POST /superset/explore_json/?form_data={"slice_id":…}&dashboard_id=… 403`.
+- [실측] 테스트 스택에서만 `EmbedGuest`에 `can_explore_json on Superset`을 임시로 더하니 세 유형 모두 guest 화면에서 그려졌다(확인 뒤 `init_guest_role.py`를 다시 돌려 권한 3개로 되돌렸다). **결정: 이 권한을 주지 않는다.** 5절의 "최소 권한 3개"를 넓히는 일이고, 이 경로에서 guest가 어디까지 조회할 수 있는지(4절 표와 같은 경계)를 실측하지 않았다.
+- 이 세 유형은 그래서 축약으로 올리지 않고 갤러리에도 넣지 않았다(임시로 넣어 확인한 뒤 뺐다). 원본 방식 조각은 `reference/chart-catalog.md` 4절에 남겼다. Superset 관리자 화면에서는 그려지고, 데이터 조회(`POST /api/v1/chart/data`)는 200이었다.

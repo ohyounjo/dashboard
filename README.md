@@ -130,7 +130,7 @@ dashboards:
 make apply
 ```
 
-- 축약 문법은 6개 유형을 지원합니다: `big_number_total`, `big_number`, `line`, `bar`, `pie`, `table`. 필드 대응은 [contracts/chart-shorthand.md](contracts/chart-shorthand.md)에 있습니다.
+- 축약 문법은 22개 유형을 지원합니다: 기본 6종(`big_number_total`, `big_number`, `line`, `bar`, `pie`, `table`)과 추이(`area`, `scatter`, `mixed`, `waterfall`), 비율·단계(`funnel`, `gauge`, `treemap`, `sunburst`), 교차·분포(`heatmap`, `pivot_table`, `histogram`, `box_plot`, `bubble`), 관계·기타(`radar`, `sankey`, `word_cloud`). 유형별 예시는 [reference/chart-catalog.md](reference/chart-catalog.md) 3절과 `projects/chart-gallery/`에, 필드 대응은 [contracts/chart-shorthand.md](contracts/chart-shorthand.md)에 있습니다.
 - 축약 문법에 없는 옵션은 `params:`에 Superset 원본 파라미터로 씁니다. 생성된 값 위에 마지막으로 덮어씁니다.
 - 지표 참조: 문자열이면 데이터셋 `metrics`의 이름, `{ sql, label }`이면 그 차트에서만 쓰는 식입니다.
 - 설정에서 지운 차트는 Superset에서도 지워집니다(prune).
@@ -256,7 +256,8 @@ make test        # 전체 스택이 필요한 통합 테스트
 - 순서:
   1. devtracker로 `up`, `apply`한 뒤 `tests/` 전체를 실행합니다. 단위 테스트에 더해 로더(임시 DB), sync(임시 프로젝트 이름), 지표 정합성(Superset 차트 데이터 API), 백엔드와 guest token 권한 경계를 봅니다.
   2. sales-sample로 `apply`한 뒤 전환을 검사합니다(`tests/test_switch.py`). 탭·차트·위젯 데이터가 바뀌고 이전 Superset 객체가 남지 않는지 봅니다.
-  3. 성공하든 실패하든 테스트 스택과 그 볼륨, `.test/`를 지웁니다. `make test KEEP=1`이면 남기고, `make test-down`으로 내립니다.
+  3. chart-gallery로 `apply`한 뒤 차트 유형마다 데이터 조회가 되는지 봅니다(`tests/test_gallery.py`).
+  4. 성공하든 실패하든 테스트 스택과 그 볼륨, `.test/`를 지웁니다. `make test KEEP=1`이면 남기고, `make test-down`으로 내립니다.
 - Superset을 하나 더 띄우므로 메모리가 2GB쯤 더 필요합니다. 부족하면 `make down`으로 개발 스택을 내린 뒤 실행하세요.
 
 CI: PR마다 `make test-unit`을 돌리고(`.github/workflows/tests.yml`), 코드·설정·계약이 바뀐 PR은 화면 캡처 워크플로가 `make test`도 돌립니다.
@@ -274,3 +275,5 @@ UI 화면은 자동 테스트에 넣지 않았습니다.
 | `.env`의 DB 비밀번호를 바꿨더니 접속 실패 | DB 계정은 처음 만들 때만 생깁니다. `make reset CONFIRM=1` 후 `make up && make apply` |
 
 버전: Superset 6.1.0, @superset-ui/embedded-sdk 0.4.0, PostgreSQL 16.10, nginx 1.29.3, Python 3.12.16. 모든 이미지와 패키지는 정확한 버전으로 고정했습니다.
+
+Superset 버전은 `.env.example`의 `SUPERSET_VERSION` 한 곳에 있습니다. 올리는 절차는 [contracts/superset-upgrade.md](contracts/superset-upgrade.md)에 있습니다. `docker compose`를 make 없이 직접 부를 때는 `docker compose --env-file .env.example --env-file .env …`처럼 두 파일을 함께 줍니다(예전에 만든 `.env`에 없는 변수를 `.env.example`에서 읽습니다).

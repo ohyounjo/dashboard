@@ -1,0 +1,22 @@
+slice_name: "\uB9C8\uC77C\uC2A4\uD1A4\uBCC4 \uC9C4\uCC99\uB960"
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_bar
+params:
+  viz_type: echarts_timeseries_bar
+  x_axis: title
+  metrics:
+  - expressionType: SQL
+    sqlExpression: MAX(progress)
+    label: "\uC9C4\uCC99\uB960"
+  groupby: []
+  orientation: vertical
+  y_axis_format: .0f
+  datasource: 56__table
+  annotation_layers: []
+query_context: null
+cache_timeout: null
+uuid: a6181da3-33ba-5565-a20e-40ff41b61015
+version: 1.0.0
+dataset_uuid: 0be869ce-1a0b-58f2-9dba-3f38466e73a5

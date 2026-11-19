@@ -9,6 +9,12 @@ x-superset-env: &superset-env
   WEB_ORIGINS: ${WEB_ORIGINS}
   SUPERSET_LOAD_EXAMPLES: "no"
 
+# Superset 버전은 .env.example의 SUPERSET_VERSION 한 곳에서 온다(Makefile이 .env.example → .env 순으로 읽는다)
+x-superset-build: &superset-build
+  context: ./superset
+  args:
+    SUPERSET_VERSION: ${SUPERSET_VERSION:?SUPERSET_VERSION이 없음. make로 실행하거나 .env.example의 값을 .env에 추가}
+
 x-data-db-env: &data-db-env
   DATA_DB_HOST: ${DATA_DB_HOST}
   DATA_DB_PORT: ${DATA_DB_PORT}
@@ -56,8 +62,8 @@ services:
 
   # 일회성: db upgrade → 관리자 → superset init → EmbedGuest 역할. 재실행해도 성공한다.
   superset-init:
-    build: ./superset
-    image: dashkit-superset:6.1.0
+    build: *superset-build
+    image: dashkit-superset:${SUPERSET_VERSION:?SUPERSET_VERSION이 없음. make로 실행하거나 .env.example의 값을 .env에 추가}
     command: ["/app/superset_init/init.sh"]
     restart: "no"
     environment:
@@ -69,8 +75,8 @@ services:
         condition: service_healthy
 
   superset:
-    build: ./superset
-    image: dashkit-superset:6.1.0
+    build: *superset-build
+    image: dashkit-superset:${SUPERSET_VERSION:?SUPERSET_VERSION이 없음. make로 실행하거나 .env.example의 값을 .env에 추가}
     restart: unless-stopped
     environment:
       <<: *superset-env

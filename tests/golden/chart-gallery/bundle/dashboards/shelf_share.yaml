@@ -1,0 +1,108 @@
+dashboard_title: 비율·단계 4종
+description: null
+css: null
+slug: chart-gallery-shelf-share
+certified_by: null
+certification_details: null
+published: true
+uuid: 70426372-880c-536f-8a55-0eb2c681c797
+position:
+  DASHBOARD_VERSION_KEY: v2
+  ROOT_ID:
+    type: ROOT
+    id: ROOT_ID
+    children:
+    - GRID_ID
+  GRID_ID:
+    type: GRID
+    id: GRID_ID
+    children:
+    - ROW-1
+    - ROW-2
+    parents:
+    - ROOT_ID
+  ROW-1:
+    type: ROW
+    id: ROW-1
+    children:
+    - CHART-g_funnel
+    - CHART-g_gauge
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-g_funnel:
+    type: CHART
+    id: CHART-g_funnel
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: 3f4ffece-aca8-5d93-8d02-94ccbcc7a359
+      sliceName: 퍼널(funnel)
+      width: 6
+      height: 50
+  CHART-g_gauge:
+    type: CHART
+    id: CHART-g_gauge
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: 5347442d-0625-5ce1-b55e-1ce77f8928df
+      sliceName: 게이지(gauge)
+      width: 6
+      height: 50
+  ROW-2:
+    type: ROW
+    id: ROW-2
+    children:
+    - CHART-g_treemap
+    - CHART-g_sunburst
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-g_treemap:
+    type: CHART
+    id: CHART-g_treemap
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 0
+      uuid: b41aee17-9467-5ab4-bfe3-a1e6ed7686d0
+      sliceName: 트리맵(treemap)
+      width: 6
+      height: 50
+  CHART-g_sunburst:
+    type: CHART
+    id: CHART-g_sunburst
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 0
+      uuid: 90c89419-ed1c-5be9-b4b8-dfc0bb14a407
+      sliceName: 선버스트(sunburst)
+      width: 6
+      height: 50
+metadata:
+  native_filter_configuration: []
+  color_scheme: ''
+  cross_filters_enabled: false
+  refresh_frequency: 0
+theme_uuid: null
+version: 1.0.0

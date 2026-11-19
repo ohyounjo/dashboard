@@ -1,0 +1,16 @@
+slice_name: 게이지(gauge)
+description: null
+certified_by: null
+certification_details: null
+viz_type: gauge_chart
+params:
+  viz_type: gauge_chart
+  metric: top_grade_pct
+  groupby: []
+  min_val: 0
+  max_val: 100
+query_context: null
+cache_timeout: null
+uuid: 5347442d-0625-5ce1-b55e-1ce77f8928df
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

@@ -1,6 +1,6 @@
 """범용성: 템플릿 코드(dashkit/, web/, superset/)에 예시 도메인 단어가 없어야 한다.
 
-금지어 = 두 예시 프로젝트의 테이블명·열 이름·enum 값·데이터셋·대시보드·탭 키와 라벨(설정에서 자동 수집)
+금지어 = 세 예시 프로젝트(devtracker, sales-sample, chart-gallery)의 테이블명·열 이름·enum 값·데이터셋·대시보드·탭 키와 라벨(설정에서 자동 수집)
        + tests/domain_words.txt의 고정 단어.
 일반 단어(id, title 등)는 tests/domain_words.txt의 [allow] 목록으로 뺀다.
 """
@@ -33,7 +33,7 @@ def _word_lists() -> tuple[set[str], set[str]]:
 
 def collect_domain_words() -> set[str]:
     words: set[str] = set()
-    for proj in ("devtracker", "sales-sample"):
+    for proj in ("devtracker", "sales-sample", "chart-gallery"):
         schema = yaml.safe_load((PROJECTS / proj / "schema.yaml").read_text(encoding="utf-8"))
         dash = yaml.safe_load((PROJECTS / proj / "dashboard.yaml").read_text(encoding="utf-8"))
         for t, spec in schema["tables"].items():

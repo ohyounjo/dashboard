@@ -1,0 +1,16 @@
+slice_name: "\uC804\uCCB4 \uC9C4\uCC99\uB960(%)"
+description: null
+certified_by: null
+certification_details: null
+viz_type: big_number_total
+params:
+  viz_type: big_number_total
+  metric: weighted_progress
+  y_axis_format: .0f
+  datasource: 56__table
+  annotation_layers: []
+query_context: null
+cache_timeout: null
+uuid: 1a48d16a-b967-5f07-b247-5f1864bafae2
+version: 1.0.0
+dataset_uuid: 0be869ce-1a0b-58f2-9dba-3f38466e73a5

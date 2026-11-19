@@ -1,0 +1,9 @@
+viz: box_plot
+viz_type: box_plot
+label: 상자 수염
+fields:
+  groupby: { kind: columns, default: [], description: 상자 하나가 되는 묶음 }
+  columns: { kind: columns, required: true, min_items: 1, description: 분포를 이루는 단위. 이 열 값마다 지표 값 하나가 나온다 }
+  metrics: { kind: metrics, required: true }
+  whiskers: { kind: enum, param: whiskerOptions, default: tukey, values: { tukey: Tukey, min_max: "Min/max (no outliers)", p2_98: "2/98 percentiles", p9_91: "9/91 percentiles" } }
+  format: { kind: d3format, param: number_format }

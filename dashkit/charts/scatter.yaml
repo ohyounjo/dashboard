@@ -1,0 +1,9 @@
+viz: scatter
+viz_type: echarts_timeseries_scatter
+label: 시계열 산점
+fields:
+  x: { kind: column, required: true, param: x_axis }
+  time_grain: { kind: time_grain, param: time_grain_sqla }
+  metrics: { kind: metrics, required: true }
+  groupby: { kind: columns, default: [] }
+  format: { kind: d3format, param: y_axis_format }

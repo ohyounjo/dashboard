@@ -1,0 +1,30 @@
+slice_name: "\uC774\uC288 \uBAA9\uB85D"
+description: null
+certified_by: null
+certification_details: null
+viz_type: table
+params:
+  viz_type: table
+  query_mode: raw
+  all_columns:
+  - resolved_mark
+  - id
+  - title
+  - severity
+  - status
+  - assignee_name
+  - milestone_short
+  - updated
+  order_by_cols:
+  - '["updated", false]'
+  - '["id", false]'
+  row_limit: 1000
+  table_timestamp_format: '%Y-%m-%d'
+  include_search: true
+  datasource: 54__table
+  annotation_layers: []
+query_context: null
+cache_timeout: null
+uuid: 71fb44a7-44cb-5376-a537-e1e52a96d921
+version: 1.0.0
+dataset_uuid: 8eb7db6f-3a8a-5988-9179-62e63a96d3ce

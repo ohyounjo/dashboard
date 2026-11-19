@@ -1,0 +1,7 @@
+viz: sunburst
+viz_type: sunburst_v2
+label: 선버스트
+fields:
+  columns: { kind: columns, required: true, min_items: 1, description: 계층 열. 안쪽 → 바깥쪽 순서 }
+  metric: { kind: metric, required: true }
+  format: { kind: d3format, param: number_format }

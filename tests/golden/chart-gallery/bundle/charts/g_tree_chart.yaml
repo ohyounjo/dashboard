@@ -1,0 +1,17 @@
+slice_name: 트리(tree_chart)
+description: null
+certified_by: null
+certification_details: null
+viz_type: tree_chart
+params:
+  viz_type: tree_chart
+  id: unit_no
+  parent: parent_no
+  name: unit_title
+  root_node_id: '1'
+  metric: staff_total
+query_context: null
+cache_timeout: null
+uuid: 4acb899c-0318-59ae-bc64-75f6fd0779ea
+version: 1.0.0
+dataset_uuid: b2210950-cb3d-5b8b-8a20-d2eb9e06c157

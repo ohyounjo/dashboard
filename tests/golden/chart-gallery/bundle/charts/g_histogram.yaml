@@ -1,0 +1,15 @@
+slice_name: 히스토그램(histogram)
+description: null
+certified_by: null
+certification_details: null
+viz_type: histogram_v2
+params:
+  viz_type: histogram_v2
+  column: weight_kg
+  groupby: []
+  bins: 12
+query_context: null
+cache_timeout: null
+uuid: 0552f5af-dbbe-5af3-b154-9b9b58a1e666
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

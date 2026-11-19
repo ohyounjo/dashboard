@@ -1,0 +1,7 @@
+viz: sankey
+viz_type: sankey_v2
+label: 생키
+fields:
+  source: { kind: column, required: true }
+  target: { kind: column, required: true }
+  metric: { kind: metric, required: true }

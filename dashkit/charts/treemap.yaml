@@ -1,0 +1,7 @@
+viz: treemap
+viz_type: treemap_v2
+label: 트리맵
+fields:
+  groupby: { kind: columns, required: true, min_items: 1 }
+  metric: { kind: metric, required: true }
+  format: { kind: d3format, param: number_format }

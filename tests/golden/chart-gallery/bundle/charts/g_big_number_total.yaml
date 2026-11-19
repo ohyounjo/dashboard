@@ -1,0 +1,15 @@
+slice_name: 숫자(big_number_total)
+description: null
+certified_by: null
+certification_details: null
+viz_type: big_number_total
+params:
+  viz_type: big_number_total
+  metric: crate_total
+  subtitle: 상자
+  y_axis_format: ',d'
+query_context: null
+cache_timeout: null
+uuid: 2095393a-5540-5dbc-9c5e-4f03066f0095
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

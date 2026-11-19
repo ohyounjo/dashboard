@@ -1,0 +1,30 @@
+slice_name: 레이더(radar)
+description: null
+certified_by: null
+certification_details: null
+viz_type: radar
+params:
+  viz_type: radar
+  groupby:
+  - valley
+  metrics:
+  - expressionType: SQL
+    sqlExpression: SUM(crates) FILTER (WHERE grade = '특')
+    label: 특
+  - expressionType: SQL
+    sqlExpression: SUM(crates) FILTER (WHERE grade = '상')
+    label: 상
+  - expressionType: SQL
+    sqlExpression: SUM(crates) FILTER (WHERE grade = '보통')
+    label: 보통
+  - expressionType: SQL
+    sqlExpression: SUM(crates) FILTER (WHERE outlet = '온라인')
+    label: 온라인
+  - expressionType: SQL
+    sqlExpression: SUM(crates) FILTER (WHERE outlet = '대형마트')
+    label: 대형마트
+query_context: null
+cache_timeout: null
+uuid: e11bec6e-338f-5b19-aa2c-67322e4347e0
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

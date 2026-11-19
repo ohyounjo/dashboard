@@ -1,0 +1,7 @@
+viz: radar
+viz_type: radar
+label: 레이더
+fields:
+  groupby: { kind: columns, required: true, min_items: 1 }
+  metrics: { kind: metrics, required: true }
+  format: { kind: d3format, param: number_format }

@@ -1,0 +1,8 @@
+viz: funnel
+viz_type: funnel
+label: 퍼널
+fields:
+  groupby: { kind: columns, required: true, min_items: 1 }
+  metric: { kind: metric, required: true }
+  format: { kind: d3format, param: number_format }
+defaults: { sort_by_metric: true }

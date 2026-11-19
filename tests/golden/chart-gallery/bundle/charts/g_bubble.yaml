@@ -1,0 +1,17 @@
+slice_name: 버블(bubble)
+description: null
+certified_by: null
+certification_details: null
+viz_type: bubble_v2
+params:
+  viz_type: bubble_v2
+  entity: orchard
+  series: valley
+  x: avg_crate_won
+  y: weight_total
+  size: crate_total
+query_context: null
+cache_timeout: null
+uuid: 2b40a759-1c81-55c6-bc78-9c61cc887192
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

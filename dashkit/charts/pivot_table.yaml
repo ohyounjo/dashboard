@@ -1,0 +1,10 @@
+viz: pivot_table
+viz_type: pivot_table_v2
+label: 피벗 테이블
+fields:
+  rows: { kind: columns, param: groupbyRows, default: [] }
+  columns: { kind: columns, param: groupbyColumns, default: [] }
+  metrics: { kind: metrics, required: true }
+  aggregate: { kind: enum, param: aggregateFunction, values: [Sum, Average, Median, Minimum, Maximum, Count], default: Sum, description: 셀을 합칠 때 쓰는 함수 }
+  format: { kind: d3format, param: valueFormat }
+defaults: { metricsLayout: COLUMNS }
