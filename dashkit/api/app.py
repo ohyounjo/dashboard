@@ -1,8 +1,8 @@
 """백엔드 API. 계약: contracts/api.md.
 
-uvicorn dashkit.api.app:app 으로 띄운다. 설정은 시작 때 env PROJECT로 읽고, 그 뒤로는 요청마다 설정 파일의
-서명(mtime, 크기, inode)을 확인해 바뀌었을 때만 다시 읽는다(state.ProjectState). 다시 읽은 설정이 검증에 실패하면
-마지막으로 유효했던 설정을 계속 쓴다.
+uvicorn dashkit.api.app:app 으로 띄운다. 현재 프로젝트는 `.state/embed.json`의 project(마지막으로 sync에 성공한
+프로젝트)이고, 쓸 수 없으면 env PROJECT다(state.CurrentState). 요청마다 embed.json과 설정 파일의 서명(mtime, 크기,
+inode)을 확인해 바뀌었을 때만 다시 읽는다. 다시 읽은 설정이 검증에 실패하면 마지막으로 유효했던 설정을 계속 쓴다.
 backend는 Superset 계정을 갖지 않고 Superset에 요청하지 않는다(guest token은 직접 서명).
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import config, widgets
 from . import data
-from .state import EmbedState, ProjectState, default_state_dir
+from .state import Current, CurrentState, default_state_dir
 
 log = logging.getLogger("dashkit.api")
 if not log.handlers:
@@ -46,13 +46,12 @@ class ApiError(Exception):
 
 
 class _Ctx:
-    project_state: ProjectState
-    embed_state: EmbedState
+    state: CurrentState
 
-    @property
-    def project(self) -> config.Project:
-        """지금 유효한 설정. 요청 하나 안에서는 한 번만 읽어 지역 변수로 쓴다(도중에 설정이 바뀌어도 응답이 섞이지 않게)."""
-        return self.project_state.project()
+    def current(self) -> Current:
+        """현재 프로젝트의 설정과 임베드. 요청 하나 안에서는 한 번만 읽어 지역 변수로 쓴다
+        (도중에 프로젝트나 설정이 바뀌어도 응답이 섞이지 않게)."""
+        return self.state.current()
 
 
 ctx = _Ctx()
@@ -61,21 +60,19 @@ ctx = _Ctx()
 def _load() -> None:
     name = os.environ.get("PROJECT", "")
     try:
-        state = ProjectState(name)
+        state = CurrentState(name, default_state_dir() / "embed.json")
     except config.ConfigError as exc:
         log.error("설정 오류로 시작할 수 없습니다 (PROJECT=%s, 오류 %d개):", name, len(exc.errors))
         for e in exc.errors:
             log.error("  %s", e)
         raise
-    ctx.project_state = state
-    project = state.project()
-    ctx.embed_state = EmbedState(default_state_dir() / "embed.json", project.name)
+    ctx.state = state
+    project = state.current().project
     if not os.environ.get("GUEST_TOKEN_JWT_SECRET"):
         log.warning("GUEST_TOKEN_JWT_SECRET이 없음. /api/guest-token은 500을 돌려줍니다")
     if not os.environ.get("GUEST_TOKEN_JWT_AUDIENCE"):
         log.warning("GUEST_TOKEN_JWT_AUDIENCE가 없음. /api/guest-token은 500을 돌려줍니다")
     log.info("프로젝트 '%s'를 읽음. 위젯 데이터셋 %d개", project.name, len(config.widget_datasets(project)))
-    ctx.embed_state.embeds()  # 시작 시 상태를 한 번 로그에 남긴다
 
 
 @asynccontextmanager
@@ -160,8 +157,8 @@ def _applied(project: config.Project, embeds: dict[str, str]) -> bool:
 
 @app.get("/api/app")
 def get_app():
-    project = ctx.project
-    embeds = ctx.embed_state.embeds()
+    cur = ctx.current()
+    project, embeds = cur.project, cur.embeds
     tabs, applied = _sections_with_embeds(project, embeds)
     app_cfg = project.dashboard["app"]
     return {
@@ -187,9 +184,10 @@ class GuestTokenRequest(BaseModel):
 @app.post("/api/guest-token")
 def post_guest_token(body: GuestTokenRequest):
     key = body.dashboard
-    if key not in ctx.project.dashboard["dashboards"]:
+    cur = ctx.current()
+    if key not in cur.project.dashboard["dashboards"]:
         raise ApiError(404, "unknown_dashboard", "설정에 없는 대시보드입니다")
-    embed_id = ctx.embed_state.embeds().get(key)
+    embed_id = cur.embeds.get(key)
     if not embed_id:
         raise ApiError(409, "not_applied", "대시보드가 아직 적용되지 않았습니다(make apply)")
     secret = os.environ.get("GUEST_TOKEN_JWT_SECRET")
@@ -214,7 +212,7 @@ def post_guest_token(body: GuestTokenRequest):
 
 @app.get("/api/data/{dataset}")
 def get_data(dataset: str):
-    allowed = config.widget_datasets(ctx.project)
+    allowed = config.widget_datasets(ctx.current().project)
     if dataset not in allowed:
         raise ApiError(404, "unknown_dataset", "위젯이 참조하지 않는 데이터셋입니다")
     # 이후에는 허용 목록 쪽 문자열만 SQL에 넣는다
@@ -232,15 +230,15 @@ def get_data(dataset: str):
 @app.get("/api/health")
 def get_health():
     ok = data.ping()
-    project = ctx.project
-    status = ctx.project_state.status()
+    cur = ctx.current()
+    project = cur.project
     body = {
         "status": "ok" if ok else "degraded",
         "project": project.name,
         "db": ok,
-        "applied": _applied(project, ctx.embed_state.embeds()),
+        "applied": _applied(project, cur.embeds),
         # 설정 파일이 바뀌었는데 검증에 실패해 이전 설정을 쓰는 중이면 valid가 false다(오류 내용은 backend 로그)
-        "config": {"valid": status["valid"], "errors": status["errors"]},
+        "config": {"valid": cur.valid, "errors": len(cur.errors)},
     }
     if not ok:
         log.warning("health: 데이터 DB SELECT 1 실패")

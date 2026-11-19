@@ -1,4 +1,4 @@
-"""python -m dashkit {check|plan|load|sync|migrate|api|gen|new}
+"""python -m dashkit {check|plan|load|sync|migrate|api|gen|new|studio}
 
 `new <이름> --from <CSV 폴더>`는 CSV에서 프로젝트 초안을 만든다(PROJECT를 쓰지 않는다).
 PROJECT(필수), PROJECTS_DIR(선택) 환경변수를 쓴다. 오류는 한 줄에 하나씩 출력하고 종료 코드 1로 끝낸다.
@@ -136,6 +136,15 @@ def cmd_api(args) -> int:
     return 0
 
 
+def cmd_studio(args) -> int:
+    """구성 화면 Studio(contracts/studio.md). 인증이 없다. 외부에 열지 않는다(compose가 127.0.0.1에만 연다)."""
+    import uvicorn
+
+    os.environ.setdefault("STUDIO_LISTEN_PORT", str(args.port))
+    uvicorn.run("dashkit.studio.app:app", host=args.host, port=args.port)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="dashkit")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -160,6 +169,10 @@ def main(argv: list[str] | None = None) -> int:
     api.add_argument("--host", default="0.0.0.0")
     api.add_argument("--port", type=int, default=8000)
     api.set_defaults(fn=cmd_api)
+    studio = sub.add_parser("studio", help="구성 화면 Studio(로컬 전용, 인증 없음)")
+    studio.add_argument("--host", default="0.0.0.0")
+    studio.add_argument("--port", type=int, default=8090)
+    studio.set_defaults(fn=cmd_studio)
     args = parser.parse_args(argv)
     try:
         return args.fn(args)

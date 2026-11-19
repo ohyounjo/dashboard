@@ -15,7 +15,7 @@ import pytest
 import yaml
 
 from dashkit import config
-from dashkit.api.state import ProjectState, file_signature
+from dashkit.api.state import CurrentState, ProjectState, file_signature
 from dashkit.config import ConfigError
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -250,3 +250,176 @@ def test_api_keeps_serving_last_valid_config_and_health_says_so(api, root, recor
     for _ in range(5):
         api.get_app()
     assert len([m for m in errors_logged(records) if "마지막으로 유효했던 설정" in m]) == 1
+
+
+# ---------------------------------------------------------------- 현재 프로젝트(embed.json의 project를 따른다)
+
+def write_embed(state_dir: Path, project, dashboards=("main",)) -> None:
+    doc = {"version": 1, "project": project, "synced_at": "2026-11-20T00:00:00Z",
+           "dashboards": {k: {"dashboard_uuid": f"d-{k}", "embed_uuid": f"e-{project}-{k}"} for k in dashboards}}
+    tmp = state_dir / "embed.json.tmp"
+    tmp.write_text(json.dumps(doc), encoding="utf-8")
+    os.replace(tmp, state_dir / "embed.json")       # sync처럼 원자적으로
+
+
+def add_project(root: Path, name: str, title: str) -> None:
+    shutil.copytree(FIXTURES / "basic", root / name)
+    path = root / name / "dashboard.yaml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc["app"]["title"] = title
+    path.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+@pytest.fixture
+def state_dir(tmp_path) -> Path:
+    d = tmp_path / "state"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def test_current_project_is_env_project_without_embed_file(root, state_dir):
+    cur = CurrentState("basic", state_dir / "embed.json", root).current()
+    assert (cur.project.name, cur.source, cur.embeds) == ("basic", "env", {})
+
+
+def test_current_project_follows_embed_file(root, state_dir):
+    add_project(root, "other", "다른 프로젝트")
+    state = CurrentState("basic", state_dir / "embed.json", root)
+    write_embed(state_dir, "basic")
+    cur = state.current()
+    assert (cur.project.name, cur.source, cur.embeds) == ("basic", "env", {"main": "e-basic-main"})
+
+    write_embed(state_dir, "other")                 # 다른 프로젝트를 sync함(Studio의 apply, PROJECT=other make apply)
+    cur = state.current()
+    assert (cur.project.name, cur.source) == ("other", "embed")
+    assert cur.project.dashboard["app"]["title"] == "다른 프로젝트"
+    assert cur.embeds == {"main": "e-other-main"}
+
+    write_embed(state_dir, "basic")                 # 되돌아옴
+    cur = state.current()
+    assert (cur.project.name, cur.embeds) == ("basic", {"main": "e-basic-main"})
+
+
+def test_followed_project_reloads_config_changes_and_keeps_last_valid(root, state_dir, records):
+    add_project(root, "other", "처음 제목")
+    write_embed(state_dir, "other")
+    state = CurrentState("basic", state_dir / "embed.json", root)
+    assert state.current().project.dashboard["app"]["title"] == "처음 제목"
+
+    path = root / "other" / "dashboard.yaml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc["app"]["title"] = "고친 제목입니다"
+    path.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    cur = state.current()
+    assert cur.project.dashboard["app"]["title"] == "고친 제목입니다" and cur.valid
+
+    path.write_text("tabs: [", encoding="utf-8")    # 깨진 설정: 마지막으로 유효했던 설정을 유지하고 env PROJECT로 넘어가지 않는다
+    for _ in range(3):
+        cur = state.current()
+        assert cur.project.name == "other" and cur.project.dashboard["app"]["title"] == "고친 제목입니다"
+        assert not cur.valid and len(cur.errors) == 1
+        assert cur.embeds == {"main": "e-other-main"}
+    assert len([m for m in errors_logged(records) if "마지막으로 유효했던 설정" in m]) == 1
+
+
+@pytest.mark.parametrize("case", ["missing_folder", "invalid_config", "bad_name", "broken_json", "no_project_key"])
+def test_unusable_embed_project_falls_back_to_env_project(root, state_dir, records, case):
+    """embed.json을 쓸 수 없으면 env PROJECT를 보여 주고, 그 프로젝트는 미적용(임베드 없음)이다."""
+    if case == "missing_folder":
+        write_embed(state_dir, "gone")
+    elif case == "invalid_config":
+        add_project(root, "other", "x")
+        (root / "other" / "dashboard.yaml").write_text("tabs: [", encoding="utf-8")
+        write_embed(state_dir, "other")
+    elif case == "bad_name":
+        write_embed(state_dir, "../basic")
+    elif case == "broken_json":
+        (state_dir / "embed.json").write_text("{", encoding="utf-8")
+    else:
+        (state_dir / "embed.json").write_text(json.dumps({"version": 1, "dashboards": {}}), encoding="utf-8")
+    loader, calls = counting_loader()
+    state = CurrentState("basic", state_dir / "embed.json", root, loader)
+    for _ in range(5):
+        cur = state.current()
+        assert (cur.project.name, cur.source, cur.embeds) == ("basic", "env", {})
+    # 쓸 수 없는 프로젝트를 요청마다 다시 검증하지 않는다(파일이 바뀔 때까지)
+    assert len(calls) == (2 if case == "invalid_config" else 1)
+    if case == "invalid_config":
+        assert len([m for m in errors_logged(records) if "env PROJECT를 씁니다" in m]) == 1
+
+
+def test_embed_project_is_picked_up_once_its_config_becomes_valid(root, state_dir):
+    add_project(root, "other", "나중에 고침")
+    good = (root / "other" / "dashboard.yaml").read_text(encoding="utf-8")
+    (root / "other" / "dashboard.yaml").write_text("tabs: [", encoding="utf-8")
+    write_embed(state_dir, "other")
+    state = CurrentState("basic", state_dir / "embed.json", root)
+    assert state.current().project.name == "basic"
+    (root / "other" / "dashboard.yaml").write_text(good + "\n", encoding="utf-8")
+    cur = state.current()
+    assert (cur.project.name, cur.embeds) == ("other", {"main": "e-other-main"})
+
+
+def test_removed_project_folder_is_not_served_from_memory(root, state_dir):
+    add_project(root, "other", "지워질 프로젝트")
+    write_embed(state_dir, "other")
+    state = CurrentState("basic", state_dir / "embed.json", root)
+    assert state.current().project.name == "other"
+    shutil.rmtree(root / "other")
+    cur = state.current()
+    assert (cur.project.name, cur.source, cur.embeds) == ("basic", "env", {})
+
+
+def test_starts_with_embed_project_even_if_env_project_is_unusable(root, state_dir):
+    write_embed(state_dir, "basic")
+    cur = CurrentState("no-such-project", state_dir / "embed.json", root).current()
+    assert (cur.project.name, cur.source) == ("basic", "embed")
+    (state_dir / "embed.json").unlink()
+    with pytest.raises(ConfigError):                # 둘 다 쓸 수 없으면 시작하지 않는다
+        CurrentState("no-such-project", state_dir / "embed.json", root)
+
+
+def test_keeps_last_state_when_nothing_is_usable(root, state_dir):
+    write_embed(state_dir, "basic")
+    state = CurrentState("no-such-project", state_dir / "embed.json", root)
+    before = state.current()
+    (state_dir / "embed.json").unlink()
+    cur = state.current()
+    assert cur.project is before.project and cur.source == "stale" and not cur.valid
+    assert state.current() is cur
+
+
+def test_all_endpoints_use_the_same_current_project(api, root, state_dir, monkeypatch):
+    """/api/app, /api/health, /api/guest-token, /api/data가 모두 embed.json의 프로젝트를 따른다."""
+    monkeypatch.setenv("GUEST_TOKEN_JWT_SECRET", "s" * 40)
+    monkeypatch.setenv("GUEST_TOKEN_JWT_AUDIENCE", "aud")
+    add_project(root, "other", "다른 프로젝트")
+    path = root / "other" / "dashboard.yaml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc["dashboards"]["second"] = doc["dashboards"].pop("main")
+    for tab in doc["tabs"]:
+        for sec in tab["sections"]:
+            if sec.get("dashboard") == "main":
+                sec["dashboard"] = "second"
+    doc["tabs"] = [t for t in doc["tabs"] if any(s["type"] == "superset" for s in t["sections"])]
+    path.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    # 처음: embed.json이 없으므로 env PROJECT, 미적용
+    body = api.get_app()
+    assert body["project"] == "basic" and body["applied"] is False
+    with pytest.raises(api.ApiError) as exc:
+        api.post_guest_token(api.GuestTokenRequest(dashboard="main"))
+    assert (exc.value.status, exc.value.detail) == (409, "not_applied")
+
+    write_embed(state_dir, "other", dashboards=("second",))
+    body = api.get_app()
+    assert body["project"] == "other" and body["app"]["title"] == "다른 프로젝트" and body["applied"] is True
+    assert [s["embed_id"] for t in body["tabs"] for s in t["sections"] if s["type"] == "superset"] == ["e-other-second"]
+    assert health(api)["project"] == "other" and health(api)["applied"] is True
+    assert api.post_guest_token(api.GuestTokenRequest(dashboard="second"))["token"]
+    with pytest.raises(api.ApiError) as exc:        # 이전 프로젝트의 대시보드 키는 이제 설정에 없다
+        api.post_guest_token(api.GuestTokenRequest(dashboard="main"))
+    assert (exc.value.status, exc.value.detail) == (404, "unknown_dashboard")
+    with pytest.raises(api.ApiError) as exc:        # 위젯 탭을 뺐으므로 허용 데이터셋도 없다
+        api.get_data("things")
+    assert exc.value.detail == "unknown_dataset"

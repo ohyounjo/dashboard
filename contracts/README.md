@@ -7,13 +7,14 @@
 | 1 | `schema.yaml` 형식 | [schema.schema.json](schema.schema.json) |
 | 2 | `dashboard.yaml` 형식 | [dashboard.schema.json](dashboard.schema.json), 아이콘 [icons.md](icons.md) |
 | 3 | 차트 축약 문법 → Superset 파라미터 | [chart-shorthand.md](chart-shorthand.md). 유형별 대응의 원본은 차트 유형 레지스트리 `dashkit/charts/<viz>.yaml`이고, 대응표와 스키마의 유형별 정의는 거기서 생성·합성한다 |
-| 4 | 백엔드 API | [api.md](api.md) |
+| 4 | 백엔드 API, 현재 프로젝트 규칙(`embed.json`의 `project`를 따른다) | [api.md](api.md) |
 | 5 | 웹앱 위젯 | [widgets.md](widgets.md) |
 | 6 | 상태 파일 `.state/embed.json`, `.state/managed.json` | [state-and-uuid.md](state-and-uuid.md) |
 | 7 | Superset 객체 UUID | [state-and-uuid.md](state-and-uuid.md) |
 | 8 | `make new`의 추론 결과(JSON)와 추론 규칙 | [scaffold.md](scaffold.md). Studio의 프로젝트 마법사가 같은 형식을 주고받는다 |
 | 9 | 적용 전 차이 보기(`make plan`)의 비교 규칙·권한·결과 형식(JSON), 로더가 남기는 적재 기록(`dashkit_meta` 스키마) | [plan.md](plan.md). plan은 `dash_reader` 계정만 쓴다. Studio의 데이터 화면이 같은 함수를 쓴다 |
 | 10 | 설정 형식 버전(`version`)과 `dashkit migrate` | 아래 "설정 버전", 형식 변경 기록 [../CHANGELOG.md](../CHANGELOG.md) |
+| 11 | Studio(구성 화면) API, 변경 연산, 요청 보호, 저장 방식 | [studio.md](studio.md). 화면(`web/studio/`)과 API(`dashkit/studio/`)의 약속이다. 프로젝트 마법사는 8번, 데이터 화면의 차이는 9번의 형식을 그대로 쓴다 |
 | — | Superset 6.1.0 확인 기록(Explore) | [superset-notes.md](superset-notes.md), 원본 export [superset-6.1.0-export/](superset-6.1.0-export/)(`managed/`는 sync가 만든 객체의 export) |
 | — | Superset 버전 관리와 업그레이드 절차 | [superset-upgrade.md](superset-upgrade.md). 버전은 `.env.example`의 `SUPERSET_VERSION` 한 곳, 키 대조는 `tests/test_superset_keys.py` |
 | — | 구현 계획(A~E 분담, 환경변수, 의존성) | [implementation-plan.md](implementation-plan.md) |

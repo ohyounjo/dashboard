@@ -230,16 +230,15 @@ def test_new_widget_is_one_folder(tmp_path, widgets_dir):
 
 def test_new_widget_is_listed_by_api_app(tmp_path, widgets_dir, monkeypatch):
     from dashkit.api import app as api_app
-    from dashkit.api.state import EmbedState, ProjectState
+    from dashkit.api.state import CurrentState
 
     write_manifest(widgets_dir, "sample_list", SAMPLE)
     widgets.clear_cache()
     section = {"type": "sample_list", "dataset": "owners", "item": "label"}
     root = make_project(tmp_path, mutate_dash=add_sample_tab(section))
     project = load_project("basic", root)
-    # backend는 설정을 ProjectState로 읽는다(변경 감지). ctx.project는 그 값을 돌려주는 속성이다
-    monkeypatch.setattr(api_app.ctx, "project_state", ProjectState("basic", root), raising=False)
-    monkeypatch.setattr(api_app.ctx, "embed_state", EmbedState(tmp_path / "embed.json", project.name), raising=False)
+    # backend는 현재 프로젝트를 CurrentState로 읽는다(embed.json이 없으면 env PROJECT 자리의 이름)
+    monkeypatch.setattr(api_app.ctx, "state", CurrentState(project.name, tmp_path / "embed.json", root), raising=False)
 
     body = api_app.get_app()
     builtin = [{"type": t.type, "label": t.label} for t in widgets.load_registry(WIDGETS).values()]

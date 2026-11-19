@@ -7,6 +7,8 @@ x-superset-env: &superset-env
   GUEST_TOKEN_JWT_SECRET: ${GUEST_TOKEN_JWT_SECRET:?make env 필요}
   GUEST_TOKEN_JWT_AUDIENCE: ${GUEST_TOKEN_JWT_AUDIENCE}
   WEB_ORIGINS: ${WEB_ORIGINS}
+  # Studio(make studio)를 띄울 때만 값이 있다. 있으면 frame-ancestors에 더한다(미리보기의 중첩 iframe)
+  STUDIO_ORIGIN: ${STUDIO_ORIGIN:-}
   SUPERSET_LOAD_EXAMPLES: "no"
 
 # Superset 버전은 .env.example의 SUPERSET_VERSION 한 곳에서 온다(Makefile이 .env.example → .env 순으로 읽는다)
@@ -98,6 +100,7 @@ services:
     build:
       context: .
       dockerfile: dashkit/Dockerfile
+      target: app
     image: dashkit-app:local
     restart: unless-stopped
     # SUPERSET_ADMIN_PASSWORD, DATA_DB_OWNER_PASSWORD는 주지 않는다
@@ -129,8 +132,10 @@ services:
     restart: unless-stopped
     environment:
       SUPERSET_PUBLIC_URL: ${SUPERSET_PUBLIC_URL}
-      # envsubst 대상을 이 변수 하나로 제한한다($uri 등 nginx 변수 보호)
-      NGINX_ENVSUBST_FILTER: "^SUPERSET_PUBLIC_URL$$"
+      # 웹앱을 iframe에 넣을 수 있는 출처. 평소에는 'none'이고 Studio(make studio)를 띄울 때만 그 출처가 된다
+      WEB_FRAME_ANCESTORS: ${STUDIO_ORIGIN:-'none'}
+      # envsubst 대상을 이 두 변수로 제한한다($uri 등 nginx 변수 보호)
+      NGINX_ENVSUBST_FILTER: "^(SUPERSET_PUBLIC_URL|WEB_FRAME_ANCESTORS)$$"
     volumes:
       - ./web:/usr/share/nginx/html:ro
       - ./web/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
@@ -148,6 +153,7 @@ services:
     build:
       context: .
       dockerfile: dashkit/Dockerfile
+      target: app
     image: dashkit-app:local
     restart: "no"
     environment:
@@ -170,6 +176,53 @@ services:
       DATA_MAX_ROWS: ${DATA_MAX_ROWS}
     volumes:
       - .:/app
+
+  # 구성 화면(보강설계서 6절). `make studio`로만 띄운다. projects/를 고치고 check·load·sync를 실행하므로
+  # tools와 같은 권한(owner DB 계정, Superset 관리자 계정)을 가진다. 인증이 없으니 127.0.0.1에만 연다. 운영 배포에 넣지 않는다.
+  studio:
+    profiles: ["studio"]
+    build:
+      context: .
+      dockerfile: dashkit/Dockerfile
+      target: studio
+    image: dashkit-studio:local
+    restart: "no"
+    # projects/에 쓰는 파일이 호스트 사용자 소유가 되도록 같은 uid:gid로 실행한다(Makefile이 넘긴다)
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      <<: *data-db-env
+      PROJECT: ${PROJECT}
+      TZ: ${TZ}
+      WEB_ORIGINS: ${WEB_ORIGINS}
+      SUPERSET_URL: ${SUPERSET_URL}
+      SUPERSET_PUBLIC_URL: ${SUPERSET_PUBLIC_URL}
+      SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?make env 필요}
+      DATA_DB_OWNER_USER: ${DATA_DB_OWNER_USER}
+      DATA_DB_OWNER_PASSWORD: ${DATA_DB_OWNER_PASSWORD:?make env 필요}
+      STATE_DIR: ${STATE_DIR}
+      BUILD_DIR: ${BUILD_DIR}
+      SYNC_LOCK_UI: ${SYNC_LOCK_UI:-1}
+      # 브라우저가 Studio와 웹앱(미리보기 iframe)에 접속하는 주소. Studio는 Host·Origin이 STUDIO_ORIGIN일 때만 요청을 받는다
+      STUDIO_ORIGIN: ${STUDIO_ORIGIN:-http://localhost:8090}
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:8080}
+      HOME: /tmp
+    volumes:
+      - ./projects:/app/projects
+      - ${HOST_STATE_DIR:-./.state}:${STATE_DIR:-/app/.state}
+      - ${HOST_BUILD_DIR:-./.build}:${BUILD_DIR:-/app/.build}
+      - ./web/studio:/app/web/studio:ro
+    ports:
+      - "127.0.0.1:${STUDIO_PORT:-8090}:8090"
+    depends_on:
+      data-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/studio/api/health', timeout=5).status == 200 else 1)"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
 
 volumes:
   data-db:
