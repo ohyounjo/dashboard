@@ -1,6 +1,6 @@
 """설정 + 뷰 열 정보 → Superset 6.1.0 asset 번들(파일 dict). 순수 함수만 둔다(DB·네트워크 없음).
 
-기준: contracts/chart-shorthand.md(축약 → 파라미터), contracts/state-and-uuid.md(UUID),
+기준: contracts/chart-shorthand.md(축약 → 파라미터. 유형별 대응은 dashkit/charts/), contracts/state-and-uuid.md(UUID),
 contracts/superset-notes.md 2절(번들 형식 함정), contracts/superset-6.1.0-export/(키 구성).
 
 결정성: 모든 dict는 고정된 삽입 순서로 만들고 YAML은 sort_keys=False로 쓴다.
@@ -9,7 +9,6 @@ contracts/superset-notes.md 2절(번들 형식 함정), contracts/superset-6.1.0
 from __future__ import annotations
 
 import io
-import json
 import os
 import shutil
 import zipfile
@@ -19,6 +18,7 @@ from typing import Any, Iterable, Mapping
 
 import yaml
 
+from ..charts import build_params
 from ..config import Project, charts, layout_rows, object_uuid
 
 BUNDLE_ROOT = "bundle"              # zip 안 최상위 폴더(= .build/<프로젝트>/bundle/)
@@ -31,24 +31,6 @@ DATABASE_KEY = "main"
 
 # 종류 순서: import 의존 순서(DB → 데이터셋 → 차트 → 대시보드). prune은 이 역순.
 KINDS = ("database", "dataset", "chart", "dashboard")
-
-# 축약 viz → Superset viz_type
-VIZ_TYPES = {
-    "big_number_total": "big_number_total",
-    "big_number": "big_number",
-    "line": "echarts_timeseries_line",
-    "bar": "echarts_timeseries_bar",
-    "pie": "pie",
-    "table": "table",
-}
-# format → 파라미터 이름(table은 쓰지 않음)
-FORMAT_PARAM = {
-    "big_number_total": "y_axis_format",
-    "big_number": "y_axis_format",
-    "line": "y_axis_format",
-    "bar": "y_axis_format",
-    "pie": "number_format",
-}
 
 ViewColumns = Mapping[str, "Iterable[tuple[str, str]] | Mapping[str, str]"]
 
@@ -192,101 +174,12 @@ def dataset_yaml(project: Project, key: str, cols: Any, env: Mapping[str, str]) 
 
 # ---------------------------------------------------------------- 차트
 
-def metric_param(ref: Any) -> Any:
-    """지표 참조: 문자열은 데이터셋 지표 이름 그대로, {sql, label}은 adhoc SQL 지표."""
-    if isinstance(ref, str):
-        return ref
-    return {"expressionType": "SQL", "sqlExpression": ref["sql"], "label": ref["label"]}
-
-
-def _metric_label(ref: Any) -> str:
-    return ref if isinstance(ref, str) else ref["label"]
-
-
-def _order_by_col(col: str, direction: str) -> str:
-    # Superset은 JSON 문자열 배열을 쓴다: '["c", false]' (asc=true)
-    return json.dumps([col, direction == "asc"])
-
-
 def chart_params(chart: Mapping[str, Any]) -> dict:
-    """차트 설정 → Superset params. chart-shorthand.md 표를 그대로 옮긴다."""
+    """차트 설정 → Superset params. 축약 유형의 대응은 차트 유형 레지스트리(dashkit/charts/)가 맡는다."""
     if "viz_type" in chart:
         return {"viz_type": chart["viz_type"], **(chart.get("params") or {})}
-
-    viz = chart["viz"]
-    p: dict[str, Any] = {"viz_type": VIZ_TYPES[viz]}
-
-    if viz == "big_number_total":
-        p["metric"] = metric_param(chart["metric"])
-        if chart.get("subtitle") is not None:
-            p["subtitle"] = chart["subtitle"]
-
-    elif viz == "big_number":
-        p["metric"] = metric_param(chart["metric"])
-        p["x_axis"] = chart["time_column"]
-        p["time_grain_sqla"] = chart.get("time_grain") or "P1D"
-        p["compare_lag"] = chart.get("compare_lag") or 1
-        if chart.get("compare_suffix") is not None:
-            p["compare_suffix"] = chart["compare_suffix"]
-        p["show_trend_line"] = True
-        p["aggregation"] = "LAST_VALUE"
-
-    elif viz in ("line", "bar"):
-        p["x_axis"] = chart["x"]
-        if chart.get("time_grain"):
-            p["time_grain_sqla"] = chart["time_grain"]
-        p["metrics"] = [metric_param(m) for m in chart["metrics"]]
-        p["groupby"] = list(chart.get("groupby") or [])
-        if viz == "bar":
-            p["orientation"] = "horizontal" if chart.get("horizontal") else "vertical"
-
-    elif viz == "pie":
-        p["groupby"] = list(chart["groupby"])
-        p["metric"] = metric_param(chart["metric"])
-        if chart.get("donut") is not None:
-            p["donut"] = bool(chart["donut"])
-
-    elif viz == "table":
-        order_by = chart.get("order_by") or []
-        if "columns" in chart:
-            p["query_mode"] = "raw"
-            p["all_columns"] = list(chart["columns"])
-            if order_by:
-                p["order_by_cols"] = [_order_by_col(c, d) for c, d in order_by]
-        else:
-            p["query_mode"] = "aggregate"
-            p["groupby"] = list(chart.get("groupby") or [])
-            metrics = list(chart.get("metrics") or [])
-            p["metrics"] = [metric_param(m) for m in metrics]
-            by_label = {_metric_label(m): m for m in metrics}
-            col_order = []
-            for c, d in order_by:
-                if c in by_label:
-                    # 지표 정렬은 하나만 쓸 수 있다: 첫 지표 항목만 반영
-                    if "timeseries_limit_metric" not in p:
-                        p["timeseries_limit_metric"] = metric_param(by_label[c])
-                        p["order_desc"] = d == "desc"
-                else:
-                    col_order.append(_order_by_col(c, d))
-            if col_order:
-                p["order_by_cols"] = col_order
-        if chart.get("row_limit") is not None:
-            p["row_limit"] = chart["row_limit"]
-        p["table_timestamp_format"] = "%Y-%m-%d"
-        if chart.get("search") is not None:
-            p["include_search"] = bool(chart["search"])
-
-    else:  # 스키마 검증을 통과했다면 오지 않는다
-        raise ValueError(f"알 수 없는 viz: {viz}")
-
-    fmt_key = FORMAT_PARAM.get(viz)
-    if fmt_key and chart.get("format") is not None:
-        p[fmt_key] = chart["format"]
-    if chart.get("where"):
-        p["adhoc_filters"] = [{"expressionType": "SQL", "clause": "WHERE", "sqlExpression": chart["where"]}]
-
     # params는 마지막에 얕게 덮어쓴다
-    return {**p, **(chart.get("params") or {})}
+    return {**build_params(chart), **(chart.get("params") or {})}
 
 
 def chart_yaml(project: Project, chart: Mapping[str, Any]) -> dict:

@@ -1,0 +1,7 @@
+viz: big_number_total
+viz_type: big_number_total
+label: 숫자
+fields:
+  metric: { kind: metric, required: true }
+  subtitle: { kind: string }      # 6.1.0 controlPanel 이름. 예전 버전의 subheader 아님
+  format: { kind: d3format, param: y_axis_format }

@@ -1,0 +1,24 @@
+viz: table
+viz_type: table
+label: 표
+hook: dashkit.charts.hooks:table
+fields:
+  columns: { kind: columns, min_items: 1 }
+  groupby: { kind: columns, min_items: 1 }
+  metrics: { kind: metrics }
+  order_by: { kind: order_by }
+  row_limit: { kind: int, min: 1, max: 50000 }
+  search: { kind: bool, description: 표 위 검색 상자 }
+  format: { kind: d3format, emit: false }
+schema:
+  description: columns가 있으면 원본 행 모드, groupby/metrics가 있으면 집계 모드
+  oneOf:
+    - required: [columns]
+      not: { anyOf: [ { required: [groupby] }, { required: [metrics] } ] }
+    - required: [metrics]
+      not: { required: [columns] }
+notes: >-
+  원본 행 모드(`columns`): `columns` → `all_columns`, `order_by: [[c, asc|desc]]` → `order_by_cols: ["[\"c\", true|false]"]`(JSON 문자열, asc=true),
+  `query_mode: "raw"`. 집계 모드(`metrics`): `groupby` → `groupby`(생략 시 `[]`), `metrics` → `metrics`,
+  `order_by`는 지표면 `timeseries_limit_metric` + `order_desc`(첫 지표 항목만), 열이면 `order_by_cols`, `query_mode: "aggregate"`.
+  공통: `row_limit` → `row_limit`, `search` → `include_search`, `table_timestamp_format: "%Y-%m-%d"`.

@@ -21,6 +21,7 @@ import yaml
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import best_match
 
+from . import charts as chart_registry
 from .reserved_words import is_reserved
 
 NAMESPACE = uuid.UUID("867a0be0-cbd2-5438-8e90-40ddf6d53a0d")
@@ -83,9 +84,16 @@ def fmt_path(parts) -> str:
 
 
 def _validator(name: str) -> Draft202012Validator:
+    return Draft202012Validator(load_schema(name))
+
+
+def load_schema(name: str) -> dict:
+    """계약의 JSON Schema. dashboard.schema.json에는 차트 유형 레지스트리의 유형별 정의를 합성한다."""
     with open(_contracts_dir() / name, encoding="utf-8") as f:
         schema = json.load(f)
-    return Draft202012Validator(schema)
+    if name == "dashboard.schema.json":
+        chart_registry.extend_schema(schema)
+    return schema
 
 
 def _schema_errors(validator: Draft202012Validator, doc: Any, file: str) -> list[str]:
@@ -313,14 +321,8 @@ def charts(project: Project) -> Iterator[tuple[str, dict]]:
 
 
 def _metric_names(chart: dict) -> list[tuple[list, str]]:
-    """차트가 이름으로 참조한 데이터셋 지표 (경로, 이름)."""
-    out = []
-    if isinstance(chart.get("metric"), str):
-        out.append((["metric"], chart["metric"]))
-    for i, m in enumerate(chart.get("metrics") or []):
-        if isinstance(m, str):
-            out.append((["metrics", i], m))
-    return out
+    """차트가 이름으로 참조한 데이터셋 지표 (경로, 이름). 원본(viz_type) 차트는 검사하지 않는다."""
+    return chart_registry.metric_refs(chart) if "viz" in chart else []
 
 
 def _layout_widths(row: list) -> list[tuple[str, int | None]]:
@@ -409,6 +411,75 @@ def _check_dashboard_refs(project: Project) -> list[str]:
                 errors.append(f"{f}:{fmt_path(dpath + ['layout'])}: 차트 '{key}'가 layout에 {n}번 배치됨")
 
         fkeys = set()
+        for i, flt in enumerate(d["filters"]):
+            fpath = dpath + ["filters", i]
+            if flt["key"] in fkeys:
+                errors.append(f"{f}:{fmt_path(fpath + ['key'])}: 필터 키 '{flt['key']}'가 중복됨")
+            fkeys.add(flt["key"])
+            if flt["dataset"] not in datasets:
+                errors.append(f"{f}:{fmt_path(fpath + ['dataset'])}: 데이터셋 '{flt['dataset']}'이 없음")
+
+    tab_keys = set()
+    for t, tab in enumerate(dash["tabs"]):
+        tpath = ["tabs", t]
+        if tab["key"] in tab_keys:
+            errors.append(f"{f}:{fmt_path(tpath + ['key'])}: 탭 키 '{tab['key']}'가 중복됨")
+        tab_keys.add(tab["key"])
+        for s, sec in enumerate(tab["sections"]):
+            spath = tpath + ["sections", s]
+            if sec["type"] == "superset":
+                if sec["dashboard"] not in dash["dashboards"]:
+                    errors.append(f"{f}:{fmt_path(spath + ['dashboard'])}: 대시보드 '{sec['dashboard']}'가 없음")
+                continue
+            if sec["dataset"] not in datasets:
+                errors.append(f"{f}:{fmt_path(spath + ['dataset'])}: 데이터셋 '{sec['dataset']}'이 없음")
+            if sec["type"] == "kanban":
+                values = [c["value"] for c in sec["columns"]]
+                dup = {v for v in values if values.count(v) > 1}
+                if dup:
+                    errors.append(f"{f}:{fmt_path(spath + ['columns'])}: 칸 value가 중복됨 ({', '.join(sorted(dup))})")
+            if sec["type"] == "gantt" and sec["range"]:
+                a, b = _parse_date(sec["range"]["start"]), _parse_date(sec["range"]["end"])
+                if a is None or b is None:
+                    errors.append(f"{f}:{fmt_path(spath + ['range'])}: 날짜 형식 오류")
+                elif a > b:
+                    errors.append(f"{f}:{fmt_path(spath + ['range'])}: start가 end보다 늦음")
+
+    if dash["app"]["as_of"] != "today" and _parse_date(dash["app"]["as_of"]) is None:
+        errors.append(f"{f}:app.as_of: 날짜 형식 오류")
+
+    # table: 데이터셋은 열을 schema.yaml로 바로 확인할 수 있다
+    if not errors:
+        static_cols = {
+            k: set(tables[ds["table"]]["columns"]) for k, ds in datasets.items() if "table" in ds
+        }
+        errors += check_view_columns(project, static_cols, only_known=True)
+    return errors
+
+
+# ---------------------------------------------------------------- 열 참조
+
+def referenced_columns(project: Project) -> dict[str, dict[str, list[str]]]:
+    """{데이터셋: {열: [설정 경로, …]}}. viz_type 원본 차트의 params는 포함하지 않는다."""
+    refs: dict[str, dict[str, list[str]]] = {}
+
+    def add(ds: str, col: str | None, path: list) -> None:
+        if col:
+            refs.setdefault(ds, {}).setdefault(col, []).append(fmt_path(path))
+
+    dash = project.dashboard
+    for dskey, ds in dash["datasets"].items():
+        for col in (ds.get("labels") or {}):
+            if col not in ds["metrics"]:
+                add(dskey, col, ["datasets", dskey, "labels", col])
+    for dkey, d in dash["dashboards"].items():
+        for i, chart in enumerate(d["charts"]):
+            if "viz" not in chart:
+                continue
+            base = ["dashboards", dkey, "charts", i]
+            ds = chart["dataset"]
+            for path, col in chart_registry.column_refs(chart):
+                add(ds, col, base + path)
         for i, flt in enumerate(d["filters"]):
             fpath = dpath + ["filters", i]
             if flt["key"] in fkeys:

@@ -10,7 +10,7 @@ HOST_GID := $(shell id -g)
 TOOLS    := $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) tools
 
 .NOTPARALLEL:
-.PHONY: help env up check load sync apply test test-unit test-down unit-image golden reset down logs dirs _test _test_run
+.PHONY: help env up check load sync apply test test-unit test-down unit-image golden gen reset down logs dirs _test _test_run
 
 # ---- 테스트 스택(보강설계서 3-2, 7절 D5): 개발 스택과 이름·포트·볼륨·상태 디렉터리가 모두 다르다.
 # 상태·빌드 디렉터리는 .test/ 고정이다(아래 정리 단계가 이 경로를 그대로 쓴다).
@@ -36,6 +36,7 @@ help:
 	@echo "make test-unit  단위 테스트(스택 불필요: 설정 검증, 번들 스냅샷, CSV 검증, 도메인 단어)"
 	@echo "make test    통합 테스트(별도 테스트 스택을 띄우고 끝나면 내림. KEEP=1이면 남김)"
 	@echo "make golden  번들 스냅샷(tests/golden/) 갱신"
+	@echo "make gen     레지스트리에서 계약 문서의 생성 구간 갱신"
 	@echo "make reset CONFIRM=1   볼륨과 .state/.build 삭제"
 	@echo "make down / make logs"
 
@@ -119,6 +120,10 @@ ifeq ($(COLUMNS),1)
 	$(TOOLS) python -m tests.golden --columns
 endif
 	$(UNIT_RUN) python -m tests.golden
+
+# 차트 유형 레지스트리(dashkit/charts/)에서 계약 문서의 생성 구간을 다시 쓴다.
+gen: unit-image
+	$(UNIT_RUN) python -m dashkit gen
 
 # 통합 테스트는 별도 compose 프로젝트(dashkit-test)에서 돈다. 개발 스택과 .state/, .build/는 건드리지 않는다.
 # 1) devtracker로 up·apply → 전체 pytest

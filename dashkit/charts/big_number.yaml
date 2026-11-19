@@ -1,0 +1,11 @@
+viz: big_number
+viz_type: big_number
+label: 숫자와 추이
+fields:
+  metric: { kind: metric, required: true }
+  time_column: { kind: column, required: true, param: x_axis }
+  time_grain: { kind: time_grain, param: time_grain_sqla, default: P1D }
+  compare_lag: { kind: int, min: 1, default: 1, description: 몇 구간 전과 비교할지. 생략하면 1 }
+  compare_suffix: { kind: string }
+  format: { kind: d3format, param: y_axis_format }
+defaults: { show_trend_line: true, aggregation: LAST_VALUE }

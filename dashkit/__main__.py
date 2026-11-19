@@ -1,4 +1,4 @@
-"""python -m dashkit {check|load|sync|api}
+"""python -m dashkit {check|load|sync|api|gen}
 
 PROJECT(필수), PROJECTS_DIR(선택) 환경변수를 쓴다. 오류는 한 줄에 하나씩 출력하고 종료 코드 1로 끝낸다.
 """
@@ -56,6 +56,16 @@ def cmd_sync(_args) -> int:
     return 0
 
 
+def cmd_gen(args) -> int:
+    from . import generated
+
+    stale = generated.check() if args.check else generated.write()
+    if args.check and stale:
+        return _fail("생성 구간이 최신이 아님(make gen)", stale)
+    print("✔ gen: 생성 구간이 최신임" if args.check else f"✔ gen: {len(stale)}개 파일 갱신")
+    return 0
+
+
 def cmd_api(args) -> int:
     import uvicorn
 
@@ -69,6 +79,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check", help="설정 검사(DB 불필요)").set_defaults(fn=cmd_check)
     sub.add_parser("load", help="CSV 검증 후 raw·dash 스키마 재생성").set_defaults(fn=cmd_load)
     sub.add_parser("sync", help="asset 번들 생성·가져오기, 임베드, prune").set_defaults(fn=cmd_sync)
+    gen = sub.add_parser("gen", help="레지스트리에서 계약 파일의 생성 구간을 다시 쓴다")
+    gen.add_argument("--check", action="store_true", help="쓰지 않고 최신인지만 확인")
+    gen.set_defaults(fn=cmd_gen)
     api = sub.add_parser("api", help="백엔드 API 서버")
     api.add_argument("--host", default="0.0.0.0")
     api.add_argument("--port", type=int, default=8000)
