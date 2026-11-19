@@ -62,14 +62,20 @@ jobs:
             --json baseRefName,headRefOid --jq '"\(.baseRefName) \(.headRefOid)"')
           # 변경 전 = PR이 갈라져 나온 지점이 아니라 지금의 base 브랜치 끝
           base_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$base_ref" --jq .sha)
-          # 화면에 영향을 주는 파일이 바뀌었는지
+          # 화면에 영향을 주는 파일이 바뀌었는지.
+          # 파일 목록을 모든 페이지까지 먼저 다 받은 뒤 검색한다. gh를 grep -q에 바로 연결하면
+          # grep이 먼저 끝나 gh가 broken pipe로 실패하고(pipefail), UI 변경이 있어도 false가 될 수 있다.
+          # gh 자체가 실패하면 set -e로 이 작업이 실패한다(조용히 캡처를 건너뛰지 않는다).
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             ui_changed=true
-          elif gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/files" --jq '.[].filename' \
-               | grep -qE '^(web|projects|superset)/'; then
-            ui_changed=true
           else
-            ui_changed=false
+            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/files" --jq '.[].filename')
+            echo "바뀐 파일 $(printf '%s\n' "$files" | grep -c .)개"
+            if printf '%s\n' "$files" | grep -E '^(web|projects|superset)/' > /dev/null; then
+              ui_changed=true
+            else
+              ui_changed=false
+            fi
           fi
           if [ "$ui_changed" = true ]; then sides='["base","head"]'; else sides='["head"]'; fi
           echo "화면 파일 변경: $ui_changed"
