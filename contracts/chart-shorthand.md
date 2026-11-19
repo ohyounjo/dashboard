@@ -18,21 +18,57 @@
 | `title` | 차트 YAML `slice_name` | params 아님 |
 | `dataset` | 차트 YAML `dataset_uuid` = uuid5(`<프로젝트>/dataset/<키>`) | |
 | `where: "<SQL>"` | `adhoc_filters: [{"expressionType":"SQL","clause":"WHERE","sqlExpression":"<SQL>"}]` | |
-| `format: "<d3>"` | big_number_total, big_number → `y_axis_format` / line, bar → `y_axis_format` / pie → `number_format` / table → 쓰지 않음(params로) | |
+| `format: "<d3>"` | 유형마다 다르다(아래 표의 `format` 행). table은 쓰지 않음(params로) | |
 | 지표 참조 문자열 `"m"` | `"m"` (데이터셋 지표 이름 그대로) | 데이터셋 `metrics`에 있어야 한다 |
 | 지표 참조 `{sql, label}` | `{"expressionType":"SQL","sqlExpression":sql,"label":label}` | |
 
 ## 유형별
 
-| 축약 `viz` | `viz_type` | 축약 필드 → 파라미터 | 기본값으로 함께 쓰는 파라미터 |
-|---|---|---|---|
-| `big_number_total` | `big_number_total` | `metric` → `metric`<br>`subtitle` → `subtitle`(6.1.0 controlPanel 이름. 예전 버전의 `subheader` 아님) | — |
-| `big_number` | `big_number` | `metric` → `metric`<br>`time_column` → `x_axis`<br>`time_grain` → `time_grain_sqla`<br>`compare_lag` → `compare_lag`<br>`compare_suffix` → `compare_suffix` | `time_grain_sqla: "P1D"`(생략 시), `compare_lag: 1`(생략 시), `show_trend_line: true`, `aggregation: "LAST_VALUE"` |
-| `line` | `echarts_timeseries_line` | `x` → `x_axis`<br>`time_grain` → `time_grain_sqla`<br>`metrics` → `metrics`<br>`groupby` → `groupby` | `groupby: []`(생략 시) |
-| `bar` | `echarts_timeseries_bar` | `x` → `x_axis`<br>`time_grain` → `time_grain_sqla`<br>`metrics` → `metrics`<br>`groupby` → `groupby`<br>`horizontal: true` → `orientation: "horizontal"` | `groupby: []`, `orientation: "vertical"` |
-| `pie` | `pie` | `groupby` → `groupby`<br>`metric` → `metric`<br>`donut` → `donut` | — |
-| `table` (원본 행) | `table` | `columns` → `all_columns`<br>`order_by: [[c, asc\|desc]]` → `order_by_cols: ["[\"c\", true\|false]"]`(JSON 문자열, asc=true)<br>`row_limit` → `row_limit`<br>`search` → `include_search` | `query_mode: "raw"`, `table_timestamp_format: "%Y-%m-%d"` |
-| `table` (집계) | `table` | `groupby` → `groupby`<br>`metrics` → `metrics`<br>`order_by` → 지표면 `timeseries_limit_metric` + `order_desc`, 열이면 `order_by_cols`<br>`row_limit` → `row_limit`<br>`search` → `include_search` | `query_mode: "aggregate"`, `groupby: []`(생략 시), `table_timestamp_format: "%Y-%m-%d"` |
+유형 하나가 `dashkit/charts/<viz>.yaml` 파일 하나다. 아래 표는 그 파일들에서 생성한다(`make gen`). 손으로 고치지 않는다.
+
+- 괄호 안은 필드의 `kind`(값의 종류와 검사), 필수 여부, 생략했을 때 쓰는 값이다. 기본값이 없는 선택 필드는 생략하면 파라미터를 쓰지 않는다.
+- params에 쓰는 순서: `viz_type` → 필드(선언 순서) → "함께 쓰는 파라미터" → `format` → `where`.
+
+<!-- 생성 시작: chart-types -->
+| 축약 `viz` | 이름 | `viz_type` | 축약 필드 → 파라미터 | 함께 쓰는 파라미터 |
+|---|---|---|---|---|
+| `bar` | 막대 | `echarts_timeseries_bar` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metrics` → `metrics` (metrics, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`horizontal` → `orientation` (true → `"horizontal"`, false → `"vertical"`) (bool, 생략 시 `false`)<br>`format` → `y_axis_format` (d3format) | — |
+| `big_number` | 숫자와 추이 | `big_number` | `metric` → `metric` (metric, 필수)<br>`time_column` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain, 생략 시 `"P1D"`)<br>`compare_lag` → `compare_lag` (int, 생략 시 `1`)<br>`compare_suffix` → `compare_suffix` (string)<br>`format` → `y_axis_format` (d3format) | `show_trend_line: true`, `aggregation: "LAST_VALUE"` |
+| `big_number_total` | 숫자 | `big_number_total` | `metric` → `metric` (metric, 필수)<br>`subtitle` → `subtitle` (string)<br>`format` → `y_axis_format` (d3format) | — |
+| `line` | 선 | `echarts_timeseries_line` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metrics` → `metrics` (metrics, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`format` → `y_axis_format` (d3format) | — |
+| `pie` | 원 | `pie` | `groupby` → `groupby` (columns, 필수)<br>`metric` → `metric` (metric, 필수)<br>`donut` → `donut` (bool)<br>`format` → `number_format` (d3format) | — |
+| `table` | 표 | `table` | `columns` → 설명 참고 (columns)<br>`groupby` → 설명 참고 (columns)<br>`metrics` → 설명 참고 (metrics)<br>`order_by` → 설명 참고 (order_by)<br>`row_limit` → 설명 참고 (int)<br>`search` → 설명 참고 (bool)<br>`format` → 쓰지 않음 (d3format)<br>원본 행 모드(`columns`): `columns` → `all_columns`, `order_by: [[c, asc\|desc]]` → `order_by_cols: ["[\"c\", true\|false]"]`(JSON 문자열, asc=true), `query_mode: "raw"`. 집계 모드(`metrics`): `groupby` → `groupby`(생략 시 `[]`), `metrics` → `metrics`, `order_by`는 지표면 `timeseries_limit_metric` + `order_desc`(첫 지표 항목만), 열이면 `order_by_cols`, `query_mode: "aggregate"`. 공통: `row_limit` → `row_limit`, `search` → `include_search`, `table_timestamp_format: "%Y-%m-%d"`. | — |
+<!-- 생성 끝: chart-types -->
+
+### 유형 추가
+
+1. `dashkit/charts/<viz>.yaml`을 만든다. 형식은 `dashkit/charts/__init__.py` 머리말에 있다.
+
+   ```yaml
+   viz: funnel                      # dashboard.yaml에서 쓰는 이름(= 파일 이름)
+   viz_type: funnel                 # Superset 이름
+   label: 퍼널
+   fields:                          # 축약 필드 → Superset 파라미터(선언 순서대로 쓴다)
+     groupby: { kind: columns, required: true }
+     metric:  { kind: metric, required: true }
+     format:  { kind: d3format, param: number_format }
+   defaults: { sort_by_metric: true }
+   ```
+
+2. `make gen`으로 위 표를 다시 만들고 `make golden`, `make test-unit`을 돌린다.
+
+| `kind` | 값 | 검사 |
+|---|---|---|
+| `column`, `columns` | 열 이름(들) | 뷰에 열이 있는지 |
+| `metric`, `metrics` | 지표 이름 또는 `{ sql, label }` | 이름이면 데이터셋에 지표가 있는지 |
+| `order_by` | `[[열 또는 지표 라벨, asc\|desc], …]` | 지표 라벨이 아니면 뷰에 열이 있는지 |
+| `time_grain` | `P1D` `P1W` `P1M` `P3M` `P1Y` | enum |
+| `bool`, `int`, `string`, `enum`, `d3format` | 값 | 형식(`min`, `max`, `values`) |
+
+- `param`을 생략하면 필드 이름과 같은 파라미터가 된다. `default`가 있으면 생략했을 때 그 값을 쓴다.
+- `bool` 필드에 `values: { true: a, false: b }`를 주면 참·거짓을 그 값으로 바꿔 쓴다.
+- 필드 하나가 파라미터 하나로 대응되지 않으면 `hook: <모듈>:<함수>`로 함수를 지정한다(`dashkit/charts/hooks.py`의 `table`).
+- 스키마(`contracts/dashboard.schema.json`)의 `viz` 허용 값과 유형별 정의 `v_<viz>`는 파일에 없고 로딩 때 합성한다(`dashkit.charts.extend_schema`).
 
 `time_grain`은 x 열이 date/timestamp일 때만 의미가 있다. 범주 열(text)이면 쓰지 않는다(쓰면 `make check`가 경고하지 않고 Superset이 무시한다).
 

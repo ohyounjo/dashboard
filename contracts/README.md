@@ -6,7 +6,7 @@
 |---|---|---|
 | 1 | `schema.yaml` 형식 | [schema.schema.json](schema.schema.json) |
 | 2 | `dashboard.yaml` 형식 | [dashboard.schema.json](dashboard.schema.json), 아이콘 [icons.md](icons.md) |
-| 3 | 차트 축약 문법 → Superset 파라미터 | [chart-shorthand.md](chart-shorthand.md) |
+| 3 | 차트 축약 문법 → Superset 파라미터 | [chart-shorthand.md](chart-shorthand.md). 유형별 대응의 원본은 차트 유형 레지스트리 `dashkit/charts/<viz>.yaml`이고, 대응표와 스키마의 유형별 정의는 거기서 생성·합성한다 |
 | 4 | 백엔드 API | [api.md](api.md) |
 | 5 | 웹앱 위젯 | [widgets.md](widgets.md) |
 | 6 | 상태 파일 `.state/embed.json`, `.state/managed.json` | [state-and-uuid.md](state-and-uuid.md) |
@@ -31,7 +31,7 @@
 | `datasets` 키 | 예약어 금지 |
 | 차트 `key` | 프로젝트 전체에서 유일 |
 | 차트 `dataset` | `datasets`에 있음 (**없는 데이터셋 참조**) |
-| 차트 지표 문자열 | 그 데이터셋의 `metrics`에 있음 |
+| 차트 지표 문자열 | 그 데이터셋의 `metrics`에 있음(레지스트리의 `kind`가 `metric`·`metrics`인 필드) |
 | `layout` 항목 | 같은 대시보드 `charts`에 있음 (**배치에 없는 차트 키**). 모든 차트가 정확히 한 번 배치됨. 행의 지정 너비 합 ≤ 12, 너비 없는 항목 수 ≤ 남은 칸 |
 | `filters[].key` | 대시보드 안에서 유일 |
 | `filters[].dataset` | `datasets`에 있음 |
@@ -46,7 +46,7 @@
 
 `config.referenced_columns(project)`가 `{데이터셋: {열: [출처, …]}}`를 돌려준다. 로더는 `information_schema.columns`의 실제 뷰 열과 비교하고, 없으면 롤백하며 `dashboard.yaml:<출처>: 데이터셋 '<d>' 뷰에 열 '<c>'가 없음`을 출력한다. **뷰에 없는 필터 열**도 이 단계에서 잡는다.
 
-출처: 데이터셋 `labels`의 열(지표 이름 제외), 필터 `column`, 차트 `x`·`time_column`·`groupby`·`columns`·`order_by`의 열(지표 라벨 제외), gantt `fields.*`·`sort`, kanban `group_by`·`card.title`·`card.chips`·`filter.column`. `viz_type` 원본 차트의 `params`는 검사하지 않는다.
+출처: 데이터셋 `labels`의 열(지표 이름 제외), 필터 `column`, 축약 차트에서 레지스트리의 `kind`가 `column`·`columns`·`order_by`인 필드(지금은 `x`·`time_column`·`groupby`·`columns`·`order_by`. `order_by`의 지표 라벨은 제외), gantt `fields.*`·`sort`, kanban `group_by`·`card.title`·`card.chips`·`filter.column`. `viz_type` 원본 차트의 `params`는 검사하지 않는다.
 
 ## `dashkit/config.py` 공개 인터페이스
 
@@ -69,6 +69,7 @@ def widget_datasets(project: Project) -> set[str]               # gantt·kanban�
 def referenced_columns(project: Project) -> dict[str, dict[str, list[str]]]
 def check_view_columns(project: Project, view_columns: dict[str, set[str]]) -> list[str]   # 오류 목록(없으면 [])
 def charts(project: Project) -> Iterator[tuple[str, dict]]       # (대시보드 키, 차트)
+def load_schema(name: str) -> dict                               # 계약의 JSON Schema(dashboard.schema.json은 차트 유형 정의를 합성한 결과)
 ```
 
-CLI: `python -m dashkit {check|load|sync|api}`. 모든 하위 명령은 `PROJECT`, `PROJECTS_DIR`(기본 `/app/projects`) 환경변수를 쓴다.
+CLI: `python -m dashkit {check|load|sync|api|gen}`. `gen`은 계약 문서의 생성 구간을 레지스트리에서 다시 쓴다(`--check`는 확인만). 모든 하위 명령은 `PROJECT`, `PROJECTS_DIR`(기본 `/app/projects`) 환경변수를 쓴다.

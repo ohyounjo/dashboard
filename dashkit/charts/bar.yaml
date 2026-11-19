@@ -1,0 +1,10 @@
+viz: bar
+viz_type: echarts_timeseries_bar
+label: 막대
+fields:
+  x: { kind: column, required: true, param: x_axis }
+  time_grain: { kind: time_grain, param: time_grain_sqla }
+  metrics: { kind: metrics, required: true }
+  groupby: { kind: columns, default: [] }
+  horizontal: { kind: bool, param: orientation, default: false, values: { true: horizontal, false: vertical } }
+  format: { kind: d3format, param: y_axis_format }

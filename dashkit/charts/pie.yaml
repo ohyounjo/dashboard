@@ -1,0 +1,8 @@
+viz: pie
+viz_type: pie
+label: 원
+fields:
+  groupby: { kind: columns, required: true, min_items: 1 }
+  metric: { kind: metric, required: true }
+  donut: { kind: bool }
+  format: { kind: d3format, param: number_format }
