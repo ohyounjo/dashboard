@@ -200,9 +200,35 @@ function supersetSection(container, sec, ctx) {
     }).catch(() => { /* 다음 주기에 다시 */ });
   }
 
+  // 첫 로드는 boot()에서 받은 embed_id를 쓴다. 다시 시도할 때는 그 사이 make apply(또는 reset)로
+  // 임베드 UUID가 생기거나 바뀌었을 수 있으므로 /api/app에서 이 대시보드의 최신 값을 다시 읽는다.
+  let firstLoad = true;
+
+  async function latestEmbedId() {
+    try {
+      const res = await fetch("/api/app", { cache: "no-store", headers: { Accept: "application/json" } });
+      if (!res.ok) return sec.embed_id;
+      const cfg = await res.json();
+      for (const tab of (cfg && cfg.tabs) || []) {
+        for (const s of tab.sections || []) {
+          if (s.type === "superset" && s.dashboard === sec.dashboard) return s.embed_id || null;
+        }
+      }
+    } catch (e) { /* 백엔드에 닿지 않으면 가진 값으로 시도한다 */ }
+    return sec.embed_id;
+  }
+
   async function load() {
     const my = ++gen;
     teardown();
+    if (!firstLoad) {
+      wrap.className = "embed is-loading";
+      overlay.replaceChildren(dashboardSkeleton());
+      const id = await latestEmbedId();
+      if (my !== gen) return;
+      sec.embed_id = id;
+    }
+    firstLoad = false;
     if (!sec.embed_id) { showError(new SectionError("notApplied")); return; }
     wrap.className = "embed is-loading";
     overlay.replaceChildren(dashboardSkeleton());
