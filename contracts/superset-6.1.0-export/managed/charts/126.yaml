@@ -1,0 +1,24 @@
+slice_name: "\uC5F4\uB9B0 \uC774\uC288 \uCD94\uC774"
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_line
+params:
+  viz_type: echarts_timeseries_line
+  x_axis: week_start
+  time_grain_sqla: P1W
+  metrics:
+  - expressionType: SQL
+    sqlExpression: MAX(open_issues)
+    label: "\uC5F4\uB9B0 \uC774\uC288"
+  - expressionType: SQL
+    sqlExpression: MAX(critical_open)
+    label: "Critical \uBBF8\uD574\uACB0"
+  groupby: []
+  datasource: 55__table
+  annotation_layers: []
+query_context: null
+cache_timeout: null
+uuid: 7cf313e3-7a30-5158-b7ed-ec1326ab086b
+version: 1.0.0
+dataset_uuid: dfcadfa0-715d-5f72-a6b1-047df47406d3

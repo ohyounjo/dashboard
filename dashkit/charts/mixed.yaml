@@ -1,0 +1,15 @@
+viz: mixed
+viz_type: mixed_timeseries
+label: 혼합(두 묶음)
+fields:
+  x: { kind: column, required: true, param: x_axis }
+  time_grain: { kind: time_grain, param: time_grain_sqla }
+  metrics: { kind: metrics, required: true, description: 첫째 묶음의 지표 }
+  groupby: { kind: columns, default: [] }
+  series_type: { kind: enum, param: seriesType, values: [line, bar, scatter, smooth], default: line }
+  metrics_b: { kind: metrics, required: true, description: 둘째 묶음의 지표 }
+  groupby_b: { kind: columns, default: [] }
+  series_type_b: { kind: enum, param: seriesTypeB, values: [line, bar, scatter, smooth], default: bar }
+  secondary_axis: { kind: bool, param: yAxisIndexB, values: { true: 1, false: 0 }, description: 둘째 묶음을 오른쪽 축에 그릴지 }
+  format: { kind: d3format, param: y_axis_format }
+  format_b: { kind: d3format, param: y_axis_format_secondary }

@@ -1,0 +1,16 @@
+slice_name: "\uB2E4\uC74C \uB9C8\uC77C\uC2A4\uD1A4\uAE4C\uC9C0(\uC77C)"
+description: null
+certified_by: null
+certification_details: null
+viz_type: big_number_total
+params:
+  viz_type: big_number_total
+  metric: next_due_days
+  y_axis_format: .0f
+  datasource: 56__table
+  annotation_layers: []
+query_context: null
+cache_timeout: null
+uuid: 7cd8c1d3-79f7-5b4f-926a-4be4c44bda64
+version: 1.0.0
+dataset_uuid: 0be869ce-1a0b-58f2-9dba-3f38466e73a5

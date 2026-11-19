@@ -1,0 +1,8 @@
+viz: heatmap
+viz_type: heatmap_v2
+label: 히트맵
+fields:
+  x: { kind: column, required: true, param: x_axis }
+  y: { kind: column, required: true, param: groupby }      # heatmap_v2의 groupby는 목록이 아니라 열 하나
+  metric: { kind: metric, required: true }
+  format: { kind: d3format, param: y_axis_format }

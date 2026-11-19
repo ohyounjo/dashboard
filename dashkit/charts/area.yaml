@@ -1,0 +1,10 @@
+viz: area
+viz_type: echarts_area
+label: 영역
+fields:
+  x: { kind: column, required: true, param: x_axis }
+  time_grain: { kind: time_grain, param: time_grain_sqla }
+  metrics: { kind: metrics, required: true }
+  groupby: { kind: columns, default: [] }
+  stacked: { kind: bool, param: stack, values: { true: Stack, false: null }, description: 계열을 쌓아 그릴지 }
+  format: { kind: d3format, param: y_axis_format }

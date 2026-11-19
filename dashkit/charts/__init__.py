@@ -71,7 +71,7 @@ class Field:
     param: str | None = None          # 생략하면 필드 이름
     has_default: bool = False
     default: Any = None
-    values: Mapping[Any, Any] | None = None   # 값 → 파라미터 값(bool은 대응표, enum은 허용 값 목록)
+    values: Mapping[Any, Any] | None = None   # bool: 참·거짓 → 파라미터 값. enum: 허용 값 목록, 또는 값 → 파라미터 값 대응표
     emit: bool = True                 # False면 스키마에서만 받고 params에는 쓰지 않는다
     min: int | None = None
     max: int | None = None
@@ -322,6 +322,10 @@ def shorthand_table(types: Mapping[str, ChartType] | None = None) -> str:
             target = f"`{f.param_name}`" if f.emit and not t.hook else ("쓰지 않음" if not f.emit else "설명 참고")
             if f.kind == "bool" and f.values:
                 target += " (" + ", ".join(f"{str(k).lower()} → {_code(v)}" for k, v in f.values.items()) + ")"
+            if f.kind == "enum" and isinstance(f.values, Mapping):
+                target += " (" + ", ".join(f"{k} → {_code(v)}" for k, v in f.values.items()) + ")"
+            elif f.kind == "enum":
+                target += " (" + ", ".join(f"`{v}`" for v in f.values or []) + ")"
             marks = [f.kind] + (["필수"] if f.required else []) + ([f"생략 시 {_code(f.default)}"] if f.has_default else [])
             cells.append(f"`{f.name}` → {target} ({', '.join(marks)})")
         extra = [f"`{k}: {_code(v)[1:-1]}`" for k, v in t.defaults.items()]

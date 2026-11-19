@@ -1,0 +1,22 @@
+slice_name: 피벗 테이블(pivot_table)
+description: null
+certified_by: null
+certification_details: null
+viz_type: pivot_table_v2
+params:
+  viz_type: pivot_table_v2
+  groupbyRows:
+  - valley
+  - orchard
+  groupbyColumns:
+  - grade
+  metrics:
+  - crate_total
+  aggregateFunction: Sum
+  metricsLayout: COLUMNS
+  valueFormat: ',d'
+query_context: null
+cache_timeout: null
+uuid: 87c7b3a4-cadb-5050-8b1f-5c5d4090b1ab
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

@@ -1,0 +1,9 @@
+viz: gauge
+viz_type: gauge_chart
+label: 게이지
+fields:
+  metric: { kind: metric, required: true }
+  groupby: { kind: columns, default: [] }
+  min_value: { kind: int, param: min_val }
+  max_value: { kind: int, param: max_val }
+  format: { kind: d3format, param: number_format }

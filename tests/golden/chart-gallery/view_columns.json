@@ -1,0 +1,8 @@
+{
+ "crate_ledger": [["entry_no", "text"], ["booked_on", "date"], ["delta_crates", "bigint"]],
+ "depot_hauls": [["haul_no", "text"], ["from_depot", "text"], ["to_depot", "text"], ["pallets", "bigint"]],
+ "farm_units": [["unit_no", "bigint"], ["parent_no", "bigint"], ["unit_title", "text"], ["staff", "bigint"]],
+ "field_jobs": [["job_no", "text"], ["job_title", "text"], ["crew", "text"], ["begins_at", "timestamp with time zone"], ["finishes_at", "timestamp with time zone"]],
+ "harvests": [["harvest_no", "text"], ["picked_on", "date"], ["valley", "text"], ["orchard", "text"], ["fruit", "text"], ["grade", "text"], ["outlet", "text"], ["buyer", "text"], ["crates", "bigint"], ["weight_kg", "numeric"], ["crate_won", "bigint"]],
+ "sorting_steps": [["step_no", "bigint"], ["step_title", "text"], ["crates_left", "bigint"]]
+}

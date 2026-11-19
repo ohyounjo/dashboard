@@ -1,0 +1,20 @@
+slice_name: 영역(area)
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_area
+params:
+  viz_type: echarts_area
+  x_axis: picked_on
+  time_grain_sqla: P1M
+  metrics:
+  - weight_total
+  groupby:
+  - fruit
+  stack: Stack
+  y_axis_format: ',d'
+query_context: null
+cache_timeout: null
+uuid: aa73bd56-4716-5e2f-b8aa-6fa34e62ea72
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

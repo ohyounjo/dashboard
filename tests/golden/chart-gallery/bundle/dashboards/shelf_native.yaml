@@ -1,0 +1,93 @@
+dashboard_title: 원본 유형
+description: null
+css: null
+slug: chart-gallery-shelf-native
+certified_by: null
+certification_details: null
+published: true
+uuid: c8639368-8369-5662-ad01-9ed843adb6c2
+position:
+  DASHBOARD_VERSION_KEY: v2
+  ROOT_ID:
+    type: ROOT
+    id: ROOT_ID
+    children:
+    - GRID_ID
+  GRID_ID:
+    type: GRID
+    id: GRID_ID
+    children:
+    - ROW-1
+    - ROW-2
+    parents:
+    - ROOT_ID
+  ROW-1:
+    type: ROW
+    id: ROW-1
+    children:
+    - CHART-g_graph_chart
+    - CHART-g_tree_chart
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-g_graph_chart:
+    type: CHART
+    id: CHART-g_graph_chart
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: b815dd91-3be7-52aa-9ca0-1faf24be23ea
+      sliceName: 관계망(graph_chart)
+      width: 6
+      height: 50
+  CHART-g_tree_chart:
+    type: CHART
+    id: CHART-g_tree_chart
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: 4acb899c-0318-59ae-bc64-75f6fd0779ea
+      sliceName: 트리(tree_chart)
+      width: 6
+      height: 50
+  ROW-2:
+    type: ROW
+    id: ROW-2
+    children:
+    - CHART-g_gantt_chart
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-g_gantt_chart:
+    type: CHART
+    id: CHART-g_gantt_chart
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 0
+      uuid: bf545337-c339-57ee-b856-10f87e81e224
+      sliceName: 간트(gantt_chart)
+      width: 12
+      height: 50
+metadata:
+  native_filter_configuration: []
+  color_scheme: ''
+  cross_filters_enabled: false
+  refresh_frequency: 0
+theme_uuid: null
+version: 1.0.0

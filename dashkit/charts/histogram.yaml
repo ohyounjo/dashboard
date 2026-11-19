@@ -1,0 +1,7 @@
+viz: histogram
+viz_type: histogram_v2
+label: 히스토그램
+fields:
+  column: { kind: column, required: true, description: 숫자 열 하나 }
+  groupby: { kind: columns, default: [] }
+  bins: { kind: int, min: 1, description: 구간 수. 생략하면 Superset 기본(5) }

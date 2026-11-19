@@ -1,0 +1,148 @@
+dashboard_title: 기존 6종
+description: null
+css: null
+slug: chart-gallery-shelf-basic
+certified_by: null
+certification_details: null
+published: true
+uuid: 0838bc79-9dbf-58d9-8b58-f10616c5b314
+position:
+  DASHBOARD_VERSION_KEY: v2
+  ROOT_ID:
+    type: ROOT
+    id: ROOT_ID
+    children:
+    - GRID_ID
+  GRID_ID:
+    type: GRID
+    id: GRID_ID
+    children:
+    - ROW-1
+    - ROW-2
+    - ROW-3
+    parents:
+    - ROOT_ID
+  ROW-1:
+    type: ROW
+    id: ROW-1
+    children:
+    - CHART-g_big_number_total
+    - CHART-g_big_number
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-g_big_number_total:
+    type: CHART
+    id: CHART-g_big_number_total
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: 2095393a-5540-5dbc-9c5e-4f03066f0095
+      sliceName: 숫자(big_number_total)
+      width: 4
+      height: 50
+  CHART-g_big_number:
+    type: CHART
+    id: CHART-g_big_number
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: 95f5b878-ecea-508c-b4cc-614f690e5901
+      sliceName: 숫자와 추이(big_number)
+      width: 8
+      height: 50
+  ROW-2:
+    type: ROW
+    id: ROW-2
+    children:
+    - CHART-g_line
+    - CHART-g_bar
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-g_line:
+    type: CHART
+    id: CHART-g_line
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 0
+      uuid: 2a435dcc-251a-598f-a5fe-0cbbd88f6ce9
+      sliceName: 선(line)
+      width: 6
+      height: 50
+  CHART-g_bar:
+    type: CHART
+    id: CHART-g_bar
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 0
+      uuid: f18a07cd-9aa4-5ec3-88f3-384ad2f82686
+      sliceName: 막대(bar)
+      width: 6
+      height: 50
+  ROW-3:
+    type: ROW
+    id: ROW-3
+    children:
+    - CHART-g_pie
+    - CHART-g_table
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-g_pie:
+    type: CHART
+    id: CHART-g_pie
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-3
+    meta:
+      chartId: 0
+      uuid: 7f847a49-51f0-5728-b111-d13c7119df2f
+      sliceName: 원(pie)
+      width: 4
+      height: 50
+  CHART-g_table:
+    type: CHART
+    id: CHART-g_table
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-3
+    meta:
+      chartId: 0
+      uuid: e9f62edf-ad5b-5793-bf57-d4513bb2791e
+      sliceName: 표(table)
+      width: 8
+      height: 50
+metadata:
+  native_filter_configuration: []
+  color_scheme: ''
+  cross_filters_enabled: false
+  refresh_frequency: 0
+theme_uuid: null
+version: 1.0.0

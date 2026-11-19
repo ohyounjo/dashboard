@@ -2,7 +2,9 @@
 SHELL := /bin/sh
 .DEFAULT_GOAL := help
 
-COMPOSE      ?= docker compose
+# .env.example을 먼저, .env를 나중에 읽는다(.env가 이긴다). 예전에 만든 .env에 없는 새 변수는 .env.example의 값을 쓴다.
+# 예: SUPERSET_VERSION은 .env.example 한 곳에만 둔다.
+COMPOSE      ?= docker compose --env-file .env.example --env-file .env
 WAIT_TIMEOUT ?= 300
 # tools가 만든 파일(.state/, .build/, 캐시)이 호스트 사용자 소유가 되도록 같은 uid:gid로 실행한다
 HOST_UID := $(shell id -u)
@@ -128,6 +130,7 @@ gen: unit-image
 # 통합 테스트는 별도 compose 프로젝트(dashkit-test)에서 돈다. 개발 스택과 .state/, .build/는 건드리지 않는다.
 # 1) devtracker로 up·apply → 전체 pytest
 # 2) sales-sample로 apply → 전환 검사(tests/test_switch.py)와 스냅샷 열 정보 대조
+# 3) chart-gallery로 apply → 차트 유형별 데이터 조회(tests/test_gallery.py)와 스냅샷 열 정보 대조
 # 끝나면 테스트 스택과 그 볼륨, .test/를 지운다(KEEP=1이면 남긴다). 실패가 하나라도 있으면 종료 코드 1.
 test:
 	@before=$$(cat .state/*.json 2>/dev/null | cksum); \
@@ -150,7 +153,7 @@ _test:
 
 # 테스트 스택과 그 볼륨만 지운다(프로젝트 이름을 직접 지정하므로 개발 스택에는 닿지 않는다)
 test-down:
-	docker compose -p $(TEST_NAME) down -v --remove-orphans
+	$(COMPOSE) -p $(TEST_NAME) down -v --remove-orphans
 	rm -rf ./.test
 
 _test_run:
@@ -164,6 +167,10 @@ _test_run:
 	if PROJECT=$$b $(MAKE) --no-print-directory apply; then \
 	  PROJECT=$$b $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) -e SWITCH_FROM=$$a tools \
 	    python -m pytest -q -p no:cacheprovider tests/test_switch.py tests/test_bundle_golden.py || rc=1; \
+	else rc=1; fi; \
+	echo "== 3단계: PROJECT=chart-gallery 로 전환해 차트 유형별 데이터 조회 확인"; \
+	if PROJECT=chart-gallery $(MAKE) --no-print-directory apply; then \
+	  PROJECT=chart-gallery $(TOOLS) python -m pytest -q -p no:cacheprovider tests/test_gallery.py tests/test_bundle_golden.py || rc=1; \
 	else rc=1; fi; \
 	exit $$rc
 

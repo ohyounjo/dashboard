@@ -1,0 +1,7 @@
+viz: word_cloud
+viz_type: word_cloud
+label: 워드 클라우드
+fields:
+  series: { kind: column, required: true }
+  metric: { kind: metric, required: true }
+  rotation: { kind: enum, values: [square, flat, random] }

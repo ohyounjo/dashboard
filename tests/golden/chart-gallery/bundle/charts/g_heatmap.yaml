@@ -1,0 +1,15 @@
+slice_name: 히트맵(heatmap)
+description: null
+certified_by: null
+certification_details: null
+viz_type: heatmap_v2
+params:
+  viz_type: heatmap_v2
+  x_axis: orchard
+  groupby: fruit
+  metric: crate_total
+query_context: null
+cache_timeout: null
+uuid: ddf53c0a-4a1d-581c-b85b-64cfa29c4592
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

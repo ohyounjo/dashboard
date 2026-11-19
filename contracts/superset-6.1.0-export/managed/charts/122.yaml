@@ -1,0 +1,24 @@
+slice_name: "\uC5F4\uB9B0 \uC774\uC288"
+description: null
+certified_by: null
+certification_details: null
+viz_type: big_number
+params:
+  viz_type: big_number
+  metric:
+    expressionType: SQL
+    sqlExpression: MAX(open_issues)
+    label: "\uC5F4\uB9B0 \uC774\uC288"
+  x_axis: week_start
+  time_grain_sqla: P1W
+  compare_lag: 1
+  compare_suffix: "\uC9C0\uB09C\uC8FC \uB300\uBE44"
+  show_trend_line: true
+  aggregation: LAST_VALUE
+  datasource: 55__table
+  annotation_layers: []
+query_context: null
+cache_timeout: null
+uuid: 7a38b7d7-249d-5c1a-8e3a-83eed00167c4
+version: 1.0.0
+dataset_uuid: dfcadfa0-715d-5f72-a6b1-047df47406d3

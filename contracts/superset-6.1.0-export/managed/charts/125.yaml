@@ -1,0 +1,28 @@
+slice_name: "\uB0A8\uC740 \uB9C8\uC77C\uC2A4\uD1A4"
+description: null
+certified_by: null
+certification_details: null
+viz_type: table
+params:
+  viz_type: table
+  query_mode: raw
+  all_columns:
+  - status_label
+  - title
+  - end_date
+  - days_left
+  - progress
+  order_by_cols:
+  - '["end_date", true]'
+  table_timestamp_format: '%Y-%m-%d'
+  adhoc_filters:
+  - expressionType: SQL
+    clause: WHERE
+    sqlExpression: status <> 'done'
+  datasource: 56__table
+  annotation_layers: []
+query_context: null
+cache_timeout: null
+uuid: 930faba8-c08c-5553-a167-daad2693ebe4
+version: 1.0.0
+dataset_uuid: 0be869ce-1a0b-58f2-9dba-3f38466e73a5

@@ -1,0 +1,18 @@
+slice_name: 폭포(waterfall)
+description: null
+certified_by: null
+certification_details: null
+viz_type: waterfall
+params:
+  viz_type: waterfall
+  x_axis: booked_on
+  time_grain_sqla: P1M
+  metric: net_crates
+  groupby: []
+  show_value: true
+  x_axis_time_format: '%Y-%m'
+query_context: null
+cache_timeout: null
+uuid: 3feecc79-6d17-5905-9777-249389cdaf77
+version: 1.0.0
+dataset_uuid: efd4de59-6303-5c28-8bb5-63effc980ca2

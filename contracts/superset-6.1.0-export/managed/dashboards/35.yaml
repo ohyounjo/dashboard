@@ -1,0 +1,178 @@
+dashboard_title: "\uAC1C\uC694"
+description: null
+css: null
+slug: devtracker-overview
+certified_by: null
+certification_details: null
+published: true
+uuid: 6d4bf338-0f54-5af0-a238-5790f308a919
+position:
+  DASHBOARD_VERSION_KEY: v2
+  ROOT_ID:
+    type: ROOT
+    id: ROOT_ID
+    children:
+    - GRID_ID
+  GRID_ID:
+    type: GRID
+    id: GRID_ID
+    children:
+    - ROW-1
+    - ROW-2
+    - ROW-3
+    parents:
+    - ROOT_ID
+  ROW-1:
+    type: ROW
+    id: ROW-1
+    children:
+    - CHART-kpi_progress
+    - CHART-kpi_dday
+    - CHART-kpi_open
+    - CHART-kpi_critical
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-kpi_progress:
+    type: CHART
+    id: CHART-kpi_progress
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 123
+      uuid: 1a48d16a-b967-5f07-b247-5f1864bafae2
+      sliceName: "\uC804\uCCB4 \uC9C4\uCC99\uB960(%)"
+      width: 3
+      height: 50
+  CHART-kpi_dday:
+    type: CHART
+    id: CHART-kpi_dday
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 121
+      uuid: 7cd8c1d3-79f7-5b4f-926a-4be4c44bda64
+      sliceName: "\uB2E4\uC74C \uB9C8\uC77C\uC2A4\uD1A4\uAE4C\uC9C0(\uC77C)"
+      width: 3
+      height: 50
+  CHART-kpi_open:
+    type: CHART
+    id: CHART-kpi_open
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 122
+      uuid: 7a38b7d7-249d-5c1a-8e3a-83eed00167c4
+      sliceName: "\uC5F4\uB9B0 \uC774\uC288"
+      width: 3
+      height: 50
+  CHART-kpi_critical:
+    type: CHART
+    id: CHART-kpi_critical
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 120
+      uuid: 70d4c5de-1cfe-57f0-a152-3cac8b497008
+      sliceName: "Critical \uBBF8\uD574\uACB0"
+      width: 3
+      height: 50
+  ROW-2:
+    type: ROW
+    id: ROW-2
+    children:
+    - CHART-trend_open
+    - CHART-ms_bar
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-trend_open:
+    type: CHART
+    id: CHART-trend_open
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 126
+      uuid: 7cf313e3-7a30-5158-b7ed-ec1326ab086b
+      sliceName: "\uC5F4\uB9B0 \uC774\uC288 \uCD94\uC774"
+      width: 6
+      height: 50
+  CHART-ms_bar:
+    type: CHART
+    id: CHART-ms_bar
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 124
+      uuid: a6181da3-33ba-5565-a20e-40ff41b61015
+      sliceName: "\uB9C8\uC77C\uC2A4\uD1A4\uBCC4 \uC9C4\uCC99\uB960"
+      width: 6
+      height: 50
+  ROW-3:
+    type: ROW
+    id: ROW-3
+    children:
+    - CHART-ms_remaining
+    - CHART-issues_recent
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-ms_remaining:
+    type: CHART
+    id: CHART-ms_remaining
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-3
+    meta:
+      chartId: 125
+      uuid: 930faba8-c08c-5553-a167-daad2693ebe4
+      sliceName: "\uB0A8\uC740 \uB9C8\uC77C\uC2A4\uD1A4"
+      width: 6
+      height: 50
+  CHART-issues_recent:
+    type: CHART
+    id: CHART-issues_recent
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-3
+    meta:
+      chartId: 119
+      uuid: 704a5ce5-8be0-5914-81a2-2a6c43cebbbc
+      sliceName: "\uCD5C\uADFC \uAC31\uC2E0 \uC774\uC288 5\uAC74"
+      width: 6
+      height: 50
+metadata:
+  native_filter_configuration: []
+  color_scheme: ''
+  cross_filters_enabled: false
+  refresh_frequency: 0
+theme_uuid: null
+version: 1.0.0

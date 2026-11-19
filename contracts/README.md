@@ -11,7 +11,8 @@
 | 5 | 웹앱 위젯 | [widgets.md](widgets.md) |
 | 6 | 상태 파일 `.state/embed.json`, `.state/managed.json` | [state-and-uuid.md](state-and-uuid.md) |
 | 7 | Superset 객체 UUID | [state-and-uuid.md](state-and-uuid.md) |
-| — | Superset 6.1.0 확인 기록(Explore) | [superset-notes.md](superset-notes.md), 원본 export [superset-6.1.0-export/](superset-6.1.0-export/) |
+| — | Superset 6.1.0 확인 기록(Explore) | [superset-notes.md](superset-notes.md), 원본 export [superset-6.1.0-export/](superset-6.1.0-export/)(`managed/`는 sync가 만든 객체의 export) |
+| — | Superset 버전 관리와 업그레이드 절차 | [superset-upgrade.md](superset-upgrade.md). 버전은 `.env.example`의 `SUPERSET_VERSION` 한 곳, 키 대조는 `tests/test_superset_keys.py` |
 | — | 구현 계획(A~E 분담, 환경변수, 의존성) | [implementation-plan.md](implementation-plan.md) |
 
 ## 참조 검사 (`dashkit/config.py`, JSON Schema 다음 단계)
@@ -46,7 +47,7 @@
 
 `config.referenced_columns(project)`가 `{데이터셋: {열: [출처, …]}}`를 돌려준다. 로더는 `information_schema.columns`의 실제 뷰 열과 비교하고, 없으면 롤백하며 `dashboard.yaml:<출처>: 데이터셋 '<d>' 뷰에 열 '<c>'가 없음`을 출력한다. **뷰에 없는 필터 열**도 이 단계에서 잡는다.
 
-출처: 데이터셋 `labels`의 열(지표 이름 제외), 필터 `column`, 축약 차트에서 레지스트리의 `kind`가 `column`·`columns`·`order_by`인 필드(지금은 `x`·`time_column`·`groupby`·`columns`·`order_by`. `order_by`의 지표 라벨은 제외), gantt `fields.*`·`sort`, kanban `group_by`·`card.title`·`card.chips`·`filter.column`. `viz_type` 원본 차트의 `params`는 검사하지 않는다.
+출처: 데이터셋 `labels`의 열(지표 이름 제외), 필터 `column`, 축약 차트에서 레지스트리의 `kind`가 `column`·`columns`·`order_by`인 필드(예: `x`·`time_column`·`groupby`·`columns`·`order_by`, `heatmap`의 `y`, `sankey`의 `source`·`target`. 유형별 필드는 `chart-shorthand.md`의 표. `order_by`의 지표 라벨은 제외), gantt `fields.*`·`sort`, kanban `group_by`·`card.title`·`card.chips`·`filter.column`. `viz_type` 원본 차트의 `params`는 검사하지 않는다.
 
 ## `dashkit/config.py` 공개 인터페이스
 

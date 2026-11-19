@@ -1,0 +1,25 @@
+slice_name: 표(table)
+description: null
+certified_by: null
+certification_details: null
+viz_type: table
+params:
+  viz_type: table
+  query_mode: raw
+  all_columns:
+  - harvest_no
+  - picked_on
+  - orchard
+  - fruit
+  - grade
+  - crates
+  - weight_kg
+  order_by_cols:
+  - '["weight_kg", false]'
+  row_limit: 10
+  table_timestamp_format: '%Y-%m-%d'
+query_context: null
+cache_timeout: null
+uuid: e9f62edf-ad5b-5793-bf57-d4513bb2791e
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

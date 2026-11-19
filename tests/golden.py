@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = Path(__file__).resolve().parent / "golden"
 PROJECTS = ROOT / "projects"
-GOLDEN_PROJECTS = ("devtracker", "sales-sample")
+GOLDEN_PROJECTS = ("devtracker", "sales-sample", "chart-gallery")
 TIMESTAMP = datetime(2000, 1, 1, tzinfo=timezone.utc)
 ENV: dict[str, str] = {}   # DATA_DB_* 기본값만 쓴다(실행 환경과 무관하게 같은 출력)
 

@@ -1,0 +1,71 @@
+# 차트 갤러리(예시 3). 지어낸 과수 조합의 출하 기록이다. 차트 유형을 하나씩 보여 주는 것이 목적이라 표가 작다.
+# 테이블 키 = data/<키>.csv = raw.<키>. 다른 두 예시와 테이블명·열 이름이 겹치지 않는다.
+tables:
+  harvests:
+    description: 출하 기록(240건). 대부분의 차트가 이 표를 쓴다
+    primary_key: harvest_no
+    columns:
+      harvest_no: { type: text, pattern: "^H\\d{4}$" }
+      picked_on:  { type: date, required: true, min: "2026-01-01", max: "2026-06-30" }
+      valley:     { type: text, required: true, description: 골짜기(농원의 상위 묶음) }
+      orchard:    { type: text, required: true }
+      fruit:      { type: text, required: true }
+      grade:      { type: text, required: true, pattern: "^(특|상|보통)$" }
+      outlet:     { type: text, required: true, description: 판매 경로 }
+      buyer:      { type: text, required: true }
+      crates:     { type: integer, required: true, min: 1 }
+      weight_kg:  { type: number, required: true, min: 0 }
+      crate_won:  { type: integer, required: true, min: 0, description: 상자당 단가(원) }
+
+  sorting_steps:
+    description: 처리 단계별로 남은 상자 수(퍼널)
+    primary_key: step_no
+    columns:
+      step_no:     { type: integer, min: 1 }
+      step_title:  { type: text, required: true }
+      crates_left: { type: integer, required: true, min: 0 }
+
+  crate_ledger:
+    description: 상자 재고 증감(폭포). 들어오면 양수, 나가면 음수
+    primary_key: entry_no
+    columns:
+      entry_no:     { type: text, pattern: "^E\\d{3}$" }
+      booked_on:    { type: date, required: true }
+      delta_crates: { type: integer, required: true }
+
+  depot_hauls:
+    description: 창고 사이 이동(코드, 관계망)
+    primary_key: haul_no
+    columns:
+      haul_no:    { type: text, pattern: "^T\\d{3}$" }
+      from_depot: { type: text, required: true }
+      to_depot:   { type: text, required: true }
+      pallets:    { type: integer, required: true, min: 1 }
+    checks:
+      - name: 출발 창고와 도착 창고가 같음
+        sql: SELECT haul_no FROM raw.depot_hauls WHERE from_depot = to_depot
+
+  farm_units:
+    description: 조직 단위(트리). parent_no가 비어 있으면 뿌리
+    primary_key: unit_no
+    columns:
+      unit_no:    { type: integer, min: 1 }
+      parent_no:  { type: integer, min: 1 }
+      unit_title: { type: text, required: true }
+      staff:      { type: integer, required: true, min: 0 }
+    checks:
+      - name: 상위 단위가 없음
+        sql: SELECT u.unit_no FROM raw.farm_units u WHERE u.parent_no IS NOT NULL AND u.parent_no NOT IN (SELECT unit_no FROM raw.farm_units)
+
+  field_jobs:
+    description: 밭 작업 일정(Superset 간트)
+    primary_key: job_no
+    columns:
+      job_no:      { type: text, pattern: "^J\\d{2}$" }
+      job_title:   { type: text, required: true }
+      crew:        { type: text, required: true }
+      begins_at:   { type: timestamp, required: true }
+      finishes_at: { type: timestamp, required: true }
+    checks:
+      - name: 작업 시작이 끝보다 늦음
+        sql: SELECT job_no FROM raw.field_jobs WHERE begins_at > finishes_at

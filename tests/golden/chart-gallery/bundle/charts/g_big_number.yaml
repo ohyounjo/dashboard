@@ -1,0 +1,19 @@
+slice_name: 숫자와 추이(big_number)
+description: null
+certified_by: null
+certification_details: null
+viz_type: big_number
+params:
+  viz_type: big_number
+  metric: crate_total
+  x_axis: picked_on
+  time_grain_sqla: P1W
+  compare_lag: 1
+  compare_suffix: 전주 대비
+  show_trend_line: true
+  aggregation: LAST_VALUE
+query_context: null
+cache_timeout: null
+uuid: 95f5b878-ecea-508c-b4cc-614f690e5901
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

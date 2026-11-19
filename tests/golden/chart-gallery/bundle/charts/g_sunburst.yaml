@@ -1,0 +1,17 @@
+slice_name: 선버스트(sunburst)
+description: null
+certified_by: null
+certification_details: null
+viz_type: sunburst_v2
+params:
+  viz_type: sunburst_v2
+  columns:
+  - valley
+  - orchard
+  - fruit
+  metric: crate_total
+query_context: null
+cache_timeout: null
+uuid: 90c89419-ed1c-5be9-b4b8-dfc0bb14a407
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

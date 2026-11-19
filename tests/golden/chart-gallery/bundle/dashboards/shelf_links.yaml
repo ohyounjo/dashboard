@@ -1,0 +1,93 @@
+dashboard_title: 관계·기타 3종
+description: null
+css: null
+slug: chart-gallery-shelf-links
+certified_by: null
+certification_details: null
+published: true
+uuid: 1efe3943-4dcd-5411-996c-8678af2eede9
+position:
+  DASHBOARD_VERSION_KEY: v2
+  ROOT_ID:
+    type: ROOT
+    id: ROOT_ID
+    children:
+    - GRID_ID
+  GRID_ID:
+    type: GRID
+    id: GRID_ID
+    children:
+    - ROW-1
+    - ROW-2
+    parents:
+    - ROOT_ID
+  ROW-1:
+    type: ROW
+    id: ROW-1
+    children:
+    - CHART-g_radar
+    - CHART-g_sankey
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-g_radar:
+    type: CHART
+    id: CHART-g_radar
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: e11bec6e-338f-5b19-aa2c-67322e4347e0
+      sliceName: 레이더(radar)
+      width: 6
+      height: 50
+  CHART-g_sankey:
+    type: CHART
+    id: CHART-g_sankey
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: 5db8116e-91b1-5363-a9fa-104ab395978b
+      sliceName: 생키(sankey)
+      width: 6
+      height: 50
+  ROW-2:
+    type: ROW
+    id: ROW-2
+    children:
+    - CHART-g_word_cloud
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-g_word_cloud:
+    type: CHART
+    id: CHART-g_word_cloud
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 0
+      uuid: 526d13e1-2efe-5c58-acac-ae1c14a03098
+      sliceName: 워드 클라우드(word_cloud)
+      width: 12
+      height: 50
+metadata:
+  native_filter_configuration: []
+  color_scheme: ''
+  cross_filters_enabled: false
+  refresh_frequency: 0
+theme_uuid: null
+version: 1.0.0

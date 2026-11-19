@@ -1,0 +1,9 @@
+viz: bubble
+viz_type: bubble_v2
+label: 버블
+fields:
+  entity: { kind: column, required: true, description: 버블 하나가 되는 열 }
+  series: { kind: column, description: 색을 나누는 열 }
+  x: { kind: metric, required: true }
+  y: { kind: metric, required: true }
+  size: { kind: metric, required: true }

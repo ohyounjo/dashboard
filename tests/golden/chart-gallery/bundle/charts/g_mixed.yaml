@@ -1,0 +1,25 @@
+slice_name: '혼합(mixed): 막대 + 선'
+description: null
+certified_by: null
+certification_details: null
+viz_type: mixed_timeseries
+params:
+  viz_type: mixed_timeseries
+  x_axis: picked_on
+  time_grain_sqla: P1M
+  metrics:
+  - crate_total
+  groupby: []
+  seriesType: bar
+  metrics_b:
+  - avg_crate_won
+  groupby_b: []
+  seriesTypeB: line
+  yAxisIndexB: 1
+  y_axis_format: ',d'
+  y_axis_format_secondary: ',d'
+query_context: null
+cache_timeout: null
+uuid: 546e6c2a-ee54-5c88-bc89-f4f624e4e30d
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

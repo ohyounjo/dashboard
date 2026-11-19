@@ -1,0 +1,18 @@
+slice_name: 시계열 산점(scatter)
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_scatter
+params:
+  viz_type: echarts_timeseries_scatter
+  x_axis: picked_on
+  time_grain_sqla: P1D
+  metrics:
+  - avg_crate_won
+  groupby: []
+  y_axis_format: ',d'
+query_context: null
+cache_timeout: null
+uuid: e5dc48b7-d439-5077-8cd5-41ba2b0a3209
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

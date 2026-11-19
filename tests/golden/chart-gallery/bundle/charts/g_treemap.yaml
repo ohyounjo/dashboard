@@ -1,0 +1,16 @@
+slice_name: 트리맵(treemap)
+description: null
+certified_by: null
+certification_details: null
+viz_type: treemap_v2
+params:
+  viz_type: treemap_v2
+  groupby:
+  - valley
+  - orchard
+  metric: weight_total
+query_context: null
+cache_timeout: null
+uuid: b41aee17-9467-5ab4-bfe3-a1e6ed7686d0
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9

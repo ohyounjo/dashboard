@@ -1,0 +1,10 @@
+viz: waterfall
+viz_type: waterfall
+label: 폭포
+fields:
+  x: { kind: column, required: true, param: x_axis }
+  time_grain: { kind: time_grain, param: time_grain_sqla }
+  metric: { kind: metric, required: true }
+  groupby: { kind: columns, default: [], description: x 안에서 다시 나눌 열 }
+  show_value: { kind: bool }
+  format: { kind: d3format, param: y_axis_format }
