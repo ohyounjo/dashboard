@@ -16,7 +16,7 @@ from typing import Callable, Mapping
 
 from ..config import Project, check_view_columns, object_uuid
 from .bundle import (DATABASE_FILE, KINDS, _column_pairs, build_bundle, database_name, lock_ui, managed_objects,
-                     write_build, zip_bundle)
+                     write_applied, write_build, zip_bundle)
 from .client import SupersetClient, _rison_str
 from .errors import SyncError
 
@@ -208,6 +208,8 @@ def sync(
 
     # 4. import
     client.import_bundle(zip_bytes, {DATABASE_FILE: password})
+    # import에 성공한 번들만 plan의 비교 기준으로 남긴다(실패한 sync의 번들이 '적용된 상태'로 보이지 않게)
+    write_applied(files, build_dir / project.name)
     log(f"· import: Superset에 번들 가져오기 완료({client.base_url})")
 
     # 5. 임베드

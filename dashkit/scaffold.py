@@ -64,7 +64,8 @@ _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})?")
 _BIGINT_MIN, _BIGINT_MAX = -(2 ** 63), 2 ** 63 - 1
 _PLAIN_RE = re.compile(r"[A-Za-z가-힣_][A-Za-z0-9가-힣_.-]*")
-_UNPRINTABLE_RE = re.compile("[^\t\n\r\x20-\x7e\x85\xa0-퟿-�\U00010000-\U0010ffff]")
+# YAML이 줄바꿈으로 읽는 NEL(U+0085), LS(U+2028), PS(U+2029)도 이스케이프 대상이다(따옴표 안에서도 공백으로 접힌다)
+_UNPRINTABLE_RE = re.compile("[^\t\n\r\x20-\x7e\xa0-\u2027\u202a-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
 _MAX_ERRORS_PER_FILE = 20
 
 

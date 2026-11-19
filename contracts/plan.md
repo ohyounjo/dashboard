@@ -27,7 +27,7 @@ plan은 조회 전용이므로 **`dash_reader` 계정만 쓴다**(AGENTS.md "읽
 |---|---|
 | 지금 `dash` 뷰의 열 | `information_schema.columns`(dash_reader) |
 | 지난 적재의 내용과 구조 | 적재 기록 `dashkit_meta`(dash_reader, SELECT만) |
-| 지난 번들, 상태 파일 | `.build/<프로젝트>/bundle/`, `.state/managed.json`(파일) |
+| 지난 번들, 상태 파일 | `.build/<프로젝트>/applied/`(마지막으로 import에 성공한 번들), `.state/managed.json`(파일) |
 
 `dash_reader`는 `raw` 스키마를 읽을 수 없고(`tests/test_loader.py`), plan을 위해 그 권한을 주지도 않는다. 그래서 plan은 raw 테이블을 직접 보지 않고, 로더가 적재할 때 남긴 **적재 기록**과 CSV를 비교한다. 기록으로 알 수 없는 것은 추측하지 않고 "비교할 수 없음"·"적용해야 알 수 있음"으로 표시한다.
 
@@ -93,7 +93,7 @@ CREATE TABLE dashkit_meta.load_snapshot (
 |---|---|---|---|
 | 데이터 | `data/<테이블>.csv`(검증 통과분)의 행 지문 | 적재 기록의 행 지문 | 기본 키로 행을 맞춘다. `+` 새 키, `−` 없어진 키, `~` 키는 같고 해시가 다른 행 |
 | 뷰 | 새 설정으로 만들어질 `dash.<데이터셋>`의 열 | 지금 `dash.<데이터셋>`의 열 | 열 추가·삭제·타입 변경·순서 변경 |
-| Superset | 새 번들 | 지난 sync가 남긴 `.build/<프로젝트>/bundle/` | 파일 단위. `metadata.yaml`(타임스탬프)은 무시 |
+| Superset | 새 번들 | 마지막으로 import에 성공한 sync가 남긴 `.build/<프로젝트>/applied/` | 파일 단위. `metadata.yaml`(타임스탬프)은 무시. sync가 import 전에 쓰는 `bundle/`은 실패한 실행의 것일 수 있어 기준으로 쓰지 않는다. `applied/`가 없으면(이 기록이 생기기 전에 적용한 프로젝트 포함) "처음 적용"으로 본다 |
 
 ### 데이터
 

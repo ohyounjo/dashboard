@@ -705,3 +705,19 @@ def test_names_yaml_reads_as_non_strings_are_quoted(word, tmp_path):
         assert all(isinstance(c, str) for c in schema["tables"][tname]["columns"])
     scaffold.create_project("p", sources, tmp_path)
     loaded("p", tmp_path)
+
+
+@pytest.mark.parametrize("char", ["\x85", " ", " "])
+def test_yaml_line_break_characters_round_trip(char, tmp_path):
+    """NEL·LS·PS는 YAML이 따옴표 안에서도 줄바꿈으로 읽는다. 이스케이프해서 값이 그대로 돌아와야 한다(리뷰 지적 회귀)."""
+    value = f"a{char}b"
+    assert yaml.safe_load(scaffold._scalar(value)) == value
+    assert yaml.safe_load(scaffold._flow({"values": [value]})) == {"values": [value]}
+    rows = "".join(f'{i},"{value if i % 2 else "plain"}"\n' for i in range(1, 7))
+    sources = {"things.csv": ("id,status\n" + rows).encode("utf-8")}
+    inference = scaffold.infer(sources)
+    column = next(c for c in inference["tables"][0]["columns"] if c["name"] == "status")
+    assert column["type"] == "enum" and value in column["values"]
+    scaffold.create_project("p", sources, tmp_path)
+    project, _data = loaded("p", tmp_path)
+    assert value in project.schema["tables"]["things"]["columns"]["status"]["values"]

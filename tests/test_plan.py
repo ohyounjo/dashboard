@@ -2,7 +2,7 @@
 
 - 숫자 검사: 임시 DB에 예시를 적재하고, 임시 폴더의 프로젝트 사본을 고친 뒤 plan의 숫자를 본다
   (tests/test_loader.py의 임시 DB, tests/test_sync.py의 임시 프로젝트 방식). 지난 번들은 sync가 쓰는 함수
-  (build_bundle, write_build)로 임시 폴더에 만든다. Superset에는 닿지 않는다.
+  (build_bundle, write_build, write_applied)로 임시 폴더에 만든다. Superset에는 닿지 않는다.
 - 현재 스택 검사: 방금 적용된 프로젝트(env PROJECT)에 plan을 돌려 "변경 없음"이고 아무것도 바뀌지 않았는지 본다.
 - plan은 dash_reader 계정만 쓴다. 이 파일의 owner 연결은 준비(적재)와 확인(전후 비교)에만 쓴다.
 """
@@ -23,7 +23,7 @@ from dashkit import db, plan
 from dashkit.__main__ import main
 from dashkit.config import load_project
 from dashkit.loader import current, load, record
-from dashkit.sync.bundle import build_bundle, write_build, zip_bundle
+from dashkit.sync.bundle import build_bundle, write_applied, write_build, zip_bundle
 
 from conftest import PROJECTS, broken_csv_copy, copy_project, live_project, read_csv, write_csv
 
@@ -64,7 +64,9 @@ def scratch_db():
 
 def _write_bundle(project, dbname: str, build: Path) -> None:
     files = build_bundle(project, current.reader_view_columns(dbname))
+    # 성공한 sync가 남기는 것과 같게: 이번 번들(bundle/)과 적용된 번들(applied/, plan의 비교 기준)
     write_build(files, zip_bundle(files), build / project.name)
+    write_applied(files, build / project.name)
 
 
 @pytest.fixture(scope="module")

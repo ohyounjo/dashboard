@@ -22,6 +22,7 @@ from ..charts import build_params, column_refs
 from ..config import Project, charts, layout_blocks, object_uuid
 
 BUNDLE_ROOT = "bundle"              # zip 안 최상위 폴더(= .build/<프로젝트>/bundle/)
+APPLIED_ROOT = "applied"            # 마지막으로 import에 성공한 번들(.build/<프로젝트>/applied/). plan의 비교 기준
 DATABASE_FILE = "databases/dashkit.yaml"
 DATASET_DIR = "datasets/dashkit"
 EXPORT_VERSION = "1.0.0"
@@ -502,16 +503,34 @@ def zip_bundle(files: Mapping[str, str], root: str = BUNDLE_ROOT) -> bytes:
     return buf.getvalue()
 
 
-def write_build(files: Mapping[str, str], zip_bytes: bytes, out_dir: Path) -> Path:
-    """<out_dir>/bundle.zip과 풀어 둔 <out_dir>/bundle/을 쓴다(이전 내용은 지운다). zip 경로를 돌려준다."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    tree = out_dir / BUNDLE_ROOT
+def _write_tree(files: Mapping[str, str], tree: Path) -> None:
     if tree.exists():
         shutil.rmtree(tree)
     for path, text in files.items():
         target = tree / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
+
+
+def write_applied(files: Mapping[str, str], out_dir: Path) -> Path:
+    """import에 성공한 번들을 <out_dir>/applied/에 남긴다. 새 폴더에 다 쓴 뒤 바꿔 끼워, 중간에 끊겨도 반쯤 쓴 기준이 남지 않는다."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tree = out_dir / APPLIED_ROOT
+    fresh = out_dir / f".{APPLIED_ROOT}.{os.getpid()}.tmp"
+    _write_tree(files, fresh)
+    if tree.exists():
+        shutil.rmtree(tree)
+    os.replace(fresh, tree)
+    return tree
+
+
+def write_build(files: Mapping[str, str], zip_bytes: bytes, out_dir: Path) -> Path:
+    """<out_dir>/bundle.zip과 풀어 둔 <out_dir>/bundle/을 쓴다(이전 내용은 지운다). zip 경로를 돌려준다.
+
+    이 폴더는 "이번에 만든 번들"이다(import 실패 원인을 볼 때 쓴다). 적용에 성공한 번들은 write_applied가 따로 남긴다.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_tree(files, out_dir / BUNDLE_ROOT)
     zip_path = out_dir / "bundle.zip"
     tmp = zip_path.with_suffix(".zip.tmp")
     tmp.write_bytes(zip_bytes)

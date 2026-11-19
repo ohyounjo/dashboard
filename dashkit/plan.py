@@ -435,7 +435,7 @@ def make_plan(
     """
     from .loader import current
     from .loader.validate import validate_csv
-    from .sync.bundle import BUNDLE_ROOT, DATASET_DIR, build_bundle
+    from .sync.bundle import APPLIED_ROOT, DATASET_DIR, build_bundle
 
     order = table_order(project)
     tables = project.schema["tables"]
@@ -496,7 +496,8 @@ def make_plan(
     # 다른 프로젝트가 적용되어 있으면 그 프로젝트의 Superset 객체는 이번 적용에서 지워지고, 이 프로젝트의 객체는
     # 전부 새로 생긴다. 이 프로젝트의 지난 번들 폴더가 남아 있어도 Superset에는 없는 것이므로 비교하지 않는다
     replaces = read_other_project(Path(state_dir or os.environ.get("STATE_DIR") or "/app/.state"), project.name)
-    old_files = None if replaces else read_bundle_dir(build_root / project.name / BUNDLE_ROOT)
+    # 비교 기준은 마지막으로 import에 성공한 번들이다. sync가 import 전에 쓰는 bundle/은 실패한 실행의 것일 수 있다
+    old_files = None if replaces else read_bundle_dir(build_root / project.name / APPLIED_ROOT)
     superset = diff_bundles(new_files, old_files, unknown_files)
     superset["assumed_columns"] = assumed   # 지금 뷰의 열을 그대로 쓴 데이터셋(적용 뒤 열이 달라질 수 있다)
     superset["replaces"] = replaces
