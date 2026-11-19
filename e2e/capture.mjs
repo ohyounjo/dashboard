@@ -83,7 +83,7 @@ async function main() {
         page.on("console", (msg) => {
           if (msg.type() !== "error") return;
           const src = msg.location()?.url || "";
-          if (src && !src.startsWith(BASE_URL)) return;
+          if (!src.startsWith(BASE_URL)) return;
           consoleErrors.push({ viewport: vp.name, theme, text: msg.text(), source: src });
         });
         page.on("pageerror", (err) => consoleErrors.push({ viewport: vp.name, theme, text: String(err) }));
