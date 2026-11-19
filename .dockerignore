@@ -1,0 +1,12 @@
+# 빌드 컨텍스트에서 비밀값과 산출물을 뺀다
+.env
+.env.*
+!.env.example
+.state/
+.build/
+projects/
+web/
+tests/
+reference/
+**/__pycache__/
+.pytest_cache/

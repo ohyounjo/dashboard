@@ -1,0 +1,17 @@
+id,title,stage,assignee,milestone_id
+T1,Matter 커미셔닝 플로우,done,m4,ms2
+T2,Wi-Fi 프로비저닝 UI,done,m2,ms2
+T3,기기 상태 폴링을 웹소켓으로 전환,review,m3,ms2
+T4,오프라인 기기 재연결 처리,doing,m4,ms2
+T5,루틴 조건 빌더 UI,doing,m2,ms3
+T6,루틴 스케줄러 API,doing,m3,ms3
+T7,지오펜스 트리거,todo,m2,ms3
+T8,루틴 실행 이력 저장,review,m3,ms3
+T9,루틴 템플릿 10종 디자인,done,m6,ms3
+T10,푸시 알림 큐 개선,todo,m3,ms3
+T11,베타 테스터 모집 페이지,todo,m1,ms4
+T12,회귀 테스트 자동화,doing,m5,ms4
+T13,크래시 리포팅 연동,todo,m5,ms4
+T14,앱스토어 등록 자료,todo,m6,ms5
+T15,접근성 점검,review,m6,ms3
+T16,요구사항 명세 확정,done,m1,ms1

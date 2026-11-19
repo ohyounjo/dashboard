@@ -18,3 +18,7 @@ venv/
 
 # Node
 node_modules/
+
+# 생성물(make apply가 만듦): asset 번들, 임베드 UUID·관리 객체 목록
+.state/
+.build/

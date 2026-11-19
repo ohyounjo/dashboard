@@ -1,0 +1,53 @@
+# nginx 공식 이미지가 시작할 때 envsubst로 /etc/nginx/conf.d/default.conf를 만든다.
+# 치환 대상은 NGINX_ENVSUBST_FILTER(docker-compose.yml)로 SUPERSET_PUBLIC_URL 하나로 제한한다.
+# 그래서 nginx 변수($uri, $host 등)는 그대로 남는다.
+
+# 정적 파일은 매번 재검증, /api/ 응답은 backend가 준 Cache-Control(no-store)을 그대로 둔다.
+map $uri $dashkit_cache_control {
+    ~^/api/  "";
+    default  "no-cache";
+}
+
+server {
+    listen 80;
+    server_name _;
+    server_tokens off;
+
+    root /usr/share/nginx/html;
+    index index.html;
+    charset utf-8;
+
+    # 컨테이너 내부 DNS로 요청 시점에 backend를 찾는다(backend가 늦게 떠도 nginx는 시작된다)
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
+    # add_header는 이 server 블록에만 둔다(location에서 add_header를 쓰면 여기 값이 상속되지 않는다)
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src ${SUPERSET_PUBLIC_URL}; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Cache-Control $dashkit_cache_control;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location /api/ {
+        set $dashkit_backend http://backend:8000;
+        proxy_pass $dashkit_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+
+    # 이 템플릿 파일도 web/ 아래에 있으므로 정적 파일로 내보내지 않는다
+    location ~ \.template$ {
+        return 404;
+    }
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}

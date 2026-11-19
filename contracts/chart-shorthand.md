@@ -26,13 +26,13 @@
 
 | 축약 `viz` | `viz_type` | 축약 필드 → 파라미터 | 기본값으로 함께 쓰는 파라미터 |
 |---|---|---|---|
-| `big_number_total` | `big_number_total` | `metric` → `metric`<br>`subtitle` → `subheader` | — |
+| `big_number_total` | `big_number_total` | `metric` → `metric`<br>`subtitle` → `subtitle`(6.1.0 controlPanel 이름. 예전 버전의 `subheader` 아님) | — |
 | `big_number` | `big_number` | `metric` → `metric`<br>`time_column` → `x_axis`<br>`time_grain` → `time_grain_sqla`<br>`compare_lag` → `compare_lag`<br>`compare_suffix` → `compare_suffix` | `time_grain_sqla: "P1D"`(생략 시), `compare_lag: 1`(생략 시), `show_trend_line: true`, `aggregation: "LAST_VALUE"` |
 | `line` | `echarts_timeseries_line` | `x` → `x_axis`<br>`time_grain` → `time_grain_sqla`<br>`metrics` → `metrics`<br>`groupby` → `groupby` | `groupby: []`(생략 시) |
 | `bar` | `echarts_timeseries_bar` | `x` → `x_axis`<br>`time_grain` → `time_grain_sqla`<br>`metrics` → `metrics`<br>`groupby` → `groupby`<br>`horizontal: true` → `orientation: "horizontal"` | `groupby: []`, `orientation: "vertical"` |
 | `pie` | `pie` | `groupby` → `groupby`<br>`metric` → `metric`<br>`donut` → `donut` | — |
-| `table` (원본 행) | `table` | `columns` → `all_columns`<br>`order_by: [[c, asc\|desc]]` → `order_by_cols: ["[\"c\", true\|false]"]`(JSON 문자열, asc=true)<br>`row_limit` → `row_limit`<br>`search` → `include_search` | `query_mode: "raw"` |
-| `table` (집계) | `table` | `groupby` → `groupby`<br>`metrics` → `metrics`<br>`order_by` → 지표면 `timeseries_limit_metric` + `order_desc`, 열이면 `order_by_cols`<br>`row_limit` → `row_limit`<br>`search` → `include_search` | `query_mode: "aggregate"`, `groupby: []`(생략 시) |
+| `table` (원본 행) | `table` | `columns` → `all_columns`<br>`order_by: [[c, asc\|desc]]` → `order_by_cols: ["[\"c\", true\|false]"]`(JSON 문자열, asc=true)<br>`row_limit` → `row_limit`<br>`search` → `include_search` | `query_mode: "raw"`, `table_timestamp_format: "%Y-%m-%d"` |
+| `table` (집계) | `table` | `groupby` → `groupby`<br>`metrics` → `metrics`<br>`order_by` → 지표면 `timeseries_limit_metric` + `order_desc`, 열이면 `order_by_cols`<br>`row_limit` → `row_limit`<br>`search` → `include_search` | `query_mode: "aggregate"`, `groupby: []`(생략 시), `table_timestamp_format: "%Y-%m-%d"` |
 
 `time_grain`은 x 열이 date/timestamp일 때만 의미가 있다. 범주 열(text)이면 쓰지 않는다(쓰면 `make check`가 경고하지 않고 Superset이 무시한다).
 
@@ -53,7 +53,8 @@
 | `datasets.<키>` | `table_name: <키>`, `schema: dash`, `sql: null`, `uuid` = uuid5(`<프로젝트>/dataset/<키>`), `database_uuid` |
 | 열 | `information_schema.columns`에서 읽은 뷰 열. `type`은 Postgres 타입 대문자, date/timestamp면 `is_dttm: true`, 모두 `groupby/filterable/is_active: true` |
 | `main_dttm_col` | 뷰의 첫 date/timestamp 열(없으면 null) |
-| `metrics.<이름>: <식>` | `{metric_name: <이름>, expression: <식>, verbose_name: null}` |
+| `metrics.<이름>: <식>` | `{metric_name: <이름>, expression: <식>, verbose_name: labels[<이름>] 또는 null}` |
+| `labels.<열>: <표시 이름>` | 열의 `verbose_name`(표 머리글, 필터·범례 라벨). 없으면 null(열 이름 그대로 표시) |
 
 ## 데이터베이스
 

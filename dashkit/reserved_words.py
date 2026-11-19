@@ -1,6 +1,6 @@
 """테이블·열·데이터셋 이름에 쓸 수 없는 SQL 예약어.
 
-PostgreSQL 16 문서 부록 C(SQL Key Words)에서 PostgreSQL 열이 "reserved"인 단어와
+PostgreSQL 16 매뉴얼 부록 C(SQL Key Words)에서 PostgreSQL 열이 "reserved"인 단어와
 "reserved (can be function or type)"인 단어, 그리고 SQL:2016 표준 예약어 중 열 이름으로
 자주 쓰이는 단어를 합쳤다. 표준 예약어를 포함하는 이유는 `start`, `end`, `value`처럼
 PostgreSQL에서는 통과하지만 다른 도구(Superset SQL 생성, 다른 DB)에서 따옴표를 요구하는

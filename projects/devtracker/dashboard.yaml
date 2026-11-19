@@ -1,0 +1,193 @@
+# 스마트홈 앱 개발 현황 대시보드(reference/plan.md 5-2절, 6-3절).
+app:
+  title: 스마트홈 앱
+  logo_text: SH
+  as_of: "2026-11-19"          # 예시 데이터라 고정. 실제 운영은 today
+  theme: { primary: { light: "#1428A0", dark: "#7B8CFF" } }
+
+datasets:                       # 키마다 dash.<키> 뷰가 된다. 조인은 LEFT JOIN(참조가 비어도 행이 빠지지 않게)
+  milestones:
+    labels: { title: "마일스톤", status_label: "상태", start_date: "시작일", end_date: "종료일", days_left: "남은 일수", progress: "진척률(%)" }
+    sql: |
+      SELECT m.*,
+             (m.end_date - m.start_date + 1) AS days,
+             (m.end_date - dash.as_of()) AS days_left,
+             CASE m.status
+               WHEN 'done' THEN '✅ 완료'
+               WHEN 'in-progress' THEN '🔄 진행'
+               WHEN 'planned' THEN '⏳ 예정'
+               WHEN 'delayed' THEN '⚠️ 지연'
+               ELSE m.status
+             END AS status_label
+      FROM raw.milestones m
+    metrics:
+      weighted_progress: "ROUND(SUM(progress * days)::numeric / NULLIF(SUM(days), 0))"
+      next_due_days: "MIN(days_left) FILTER (WHERE status <> 'done' AND days_left >= 0)"
+  issues:
+    labels: { resolved_mark: "해결", id: "ID", title: "제목", severity: "심각도", status: "상태", assignee_name: "담당자", milestone_short: "마일스톤", milestone: "마일스톤", updated: "수정일", created: "생성일" }
+    sql: |
+      SELECT i.id, i.title, i.severity, i.status, i.created, i.updated,
+             i.assignee, i.milestone_id,
+             m.title AS milestone,
+             split_part(m.title, ' ', 1) AS milestone_short,
+             p.name AS assignee_name,
+             i.status IN ('open', 'in-progress') AS is_open,
+             CASE WHEN i.status IN ('open', 'in-progress') THEN '❌' ELSE '✅' END AS resolved_mark
+      FROM raw.issues i
+      LEFT JOIN raw.milestones m ON m.id = i.milestone_id
+      LEFT JOIN raw.members p ON p.id = i.assignee
+    metrics:
+      open_issues: "COUNT(*) FILTER (WHERE is_open)"
+      critical_open: "COUNT(*) FILTER (WHERE is_open AND severity = 'critical')"
+  kpi_snapshots: { table: kpi_snapshots }    # SELECT * FROM raw.kpi_snapshots 축약
+  tasks:
+    sql: |
+      SELECT t.id, t.title, t.stage,
+             m.title AS milestone,
+             split_part(m.title, ' ', 1) AS milestone_short,
+             p.name AS assignee_name
+      FROM raw.tasks t
+      LEFT JOIN raw.milestones m ON m.id = t.milestone_id
+      LEFT JOIN raw.members p ON p.id = t.assignee
+  docs:
+    labels: { new_mark: "🆕", title: "제목", type: "유형", version: "버전", author_name: "작성자", updated: "수정일", milestone_short: "마일스톤" }
+    sql: |
+      SELECT d.id, d.title, d.type, d.version, d.updated,
+             p.name AS author_name,
+             m.title AS milestone,
+             split_part(m.title, ' ', 1) AS milestone_short,
+             (dash.as_of() - d.updated) BETWEEN 0 AND 7 AS is_new,
+             CASE WHEN (dash.as_of() - d.updated) BETWEEN 0 AND 7 THEN '🆕' ELSE '' END AS new_mark
+      FROM raw.docs d
+      LEFT JOIN raw.members p ON p.id = d.author
+      LEFT JOIN raw.milestones m ON m.id = d.milestone_id
+
+dashboards:                     # Superset 대시보드
+  overview:
+    title: 개요
+    charts:
+      - { key: kpi_progress, title: 전체 진척률(%), viz: big_number_total, dataset: milestones, metric: weighted_progress, format: ".0f" }
+      - { key: kpi_dday, title: 다음 마일스톤까지(일), viz: big_number_total, dataset: milestones, metric: next_due_days, format: ".0f" }
+      - key: kpi_open
+        title: 열린 이슈
+        viz: big_number            # 추이선과 직전 주 대비 증감
+        dataset: kpi_snapshots
+        metric: { sql: "MAX(open_issues)", label: 열린 이슈 }
+        time_column: week_start
+        time_grain: P1W
+        compare_lag: 1
+        compare_suffix: 지난주 대비
+      - key: kpi_critical
+        title: Critical 미해결
+        viz: big_number
+        dataset: kpi_snapshots
+        metric: { sql: "MAX(critical_open)", label: Critical 미해결 }
+        time_column: week_start
+        time_grain: P1W
+        compare_lag: 1
+        compare_suffix: 지난주 대비
+      - key: trend_open
+        title: 열린 이슈 추이
+        viz: line
+        dataset: kpi_snapshots
+        x: week_start
+        time_grain: P1W
+        metrics:
+          - { sql: "MAX(open_issues)", label: 열린 이슈 }
+          - { sql: "MAX(critical_open)", label: Critical 미해결 }
+      - key: ms_bar
+        title: 마일스톤별 진척률
+        viz: bar
+        dataset: milestones
+        x: title
+        metrics: [{ sql: "MAX(progress)", label: 진척률 }]
+        params: { y_axis_format: ".0f" }   # 축약 문법에 없는 옵션은 Superset 원본 파라미터로
+      - key: ms_remaining
+        title: 남은 마일스톤
+        viz: table
+        dataset: milestones
+        where: "status <> 'done'"
+        columns: [status_label, title, end_date, days_left, progress]
+        order_by: [[end_date, asc]]
+      - key: issues_recent
+        title: 최근 갱신 이슈 5건
+        viz: table
+        dataset: issues
+        columns: [resolved_mark, id, title, severity, status, assignee_name, updated]
+        order_by: [[updated, desc], [id, desc]]
+        row_limit: 5
+    layout:                      # 행 단위. 12칸 격자를 균등 분할, 필요하면 { chart, width }
+      - [kpi_progress, kpi_dday, kpi_open, kpi_critical]
+      - [trend_open, ms_bar]
+      - [ms_remaining, issues_recent]
+
+  issues:
+    title: 이슈
+    charts:
+      - key: issue_table
+        title: 이슈 목록
+        viz: table
+        dataset: issues
+        columns: [resolved_mark, id, title, severity, status, assignee_name, milestone_short, updated]
+        order_by: [[updated, desc], [id, desc]]
+        search: true
+        row_limit: 1000
+    layout:
+      - [{ chart: issue_table, height: 90 }]
+    filters:                     # 열 이름이 같은 차트에 적용된다
+      - { key: f_severity, label: 심각도, type: select, multi: true, dataset: issues, column: severity }
+      - { key: f_issue_status, label: 상태, type: select, multi: true, dataset: issues, column: status }
+      - { key: f_assignee, label: 담당자, type: select, multi: true, dataset: issues, column: assignee_name }
+
+  docs:
+    title: 문서
+    charts:
+      - key: doc_table
+        title: 문서 목록 (🆕 최근 7일 안에 수정)
+        viz: table
+        dataset: docs
+        columns: [new_mark, title, type, version, author_name, updated, milestone_short]
+        order_by: [[updated, desc], [id, asc]]
+    layout:
+      - [{ chart: doc_table, height: 60 }]
+    filters:
+      - { key: f_doc_type, label: 유형, type: select, multi: true, dataset: docs, column: type }
+
+tabs:                           # 웹앱 Rail. 순서대로 표시
+  - key: overview
+    label: 개요
+    icon: grid
+    sections: [{ type: superset, dashboard: overview }]
+  - key: schedule
+    label: 일정
+    icon: calendar
+    sections:
+      - type: gantt
+        title: 마일스톤 타임라인
+        dataset: milestones
+        fields: { label: title, start: start_date, end: end_date, progress: progress, status: status }
+        range: { start: "2026-08-03", end: "2027-02-26" }
+        statuses:
+          done:        { label: 완료, icon: "✅", tone: good }
+          in-progress: { label: 진행, icon: "🔄", tone: primary }
+          planned:     { label: 예정, icon: "⏳", tone: primary }
+          delayed:     { label: 지연, icon: "⚠️", tone: warn }
+      - type: kanban
+        title: 칸반보드
+        dataset: tasks
+        group_by: stage
+        columns:
+          - { value: todo, label: To Do }
+          - { value: doing, label: In Progress }
+          - { value: review, label: Review }
+          - { value: done, label: Done, icon: "✅" }
+        card: { title: title, chips: [milestone_short, assignee_name] }
+        filter: { column: milestone, label: 마일스톤 }
+  - key: issues
+    label: 이슈
+    icon: alert
+    sections: [{ type: superset, dashboard: issues }]
+  - key: docs
+    label: 문서
+    icon: doc
+    sections: [{ type: superset, dashboard: docs }]
