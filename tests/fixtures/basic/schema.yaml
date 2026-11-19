@@ -1,0 +1,19 @@
+# config.py 단위 테스트용 최소 프로젝트(도메인 없는 이름)
+tables:
+  owners:
+    primary_key: id
+    columns:
+      id:    { type: text, required: true }
+      label: { type: text, required: true }
+  things:
+    primary_key: id
+    columns:
+      id:       { type: text, pattern: "^T\\d+$" }
+      owner_id: { type: text, ref: owners.id }
+      phase:    { type: enum, values: [a, b, c] }
+      score:    { type: integer, min: 0, max: 10 }
+      begins:   { type: date, min: "2020-01-01" }
+      ends:     { type: date }
+    checks:
+      - name: 시작이 끝보다 늦음
+        sql: SELECT id FROM raw.things WHERE begins > ends

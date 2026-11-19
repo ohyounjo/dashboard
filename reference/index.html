@@ -1,0 +1,667 @@
+<title>스마트홈 앱 개발 현황</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: 왼쪽 Navigation Rail + 오른쪽 콘텐츠, 600px 이하에서는 하단 탭 바 */
+:root {
+  --primary: #1428A0; --primary-soft: #E6E9F8; --on-primary: #FFFFFF;
+  --bg: #F5F6FB; --surface: #FFFFFF; --surface-2: #EEF0F8; --line: #DDE0EE;
+  --fg: #141833; --muted: #5B6080;
+  --good: #1B8A4B; --warn: #C76A00; --bad: #C62828; --info: #2563C9; --neutral: #6B7088;
+  --good-bg: #E3F4EA; --warn-bg: #FCEFDD; --bad-bg: #FBE4E4; --info-bg: #E3ECFA; --neutral-bg: #ECEDF2;
+  --font-body: "Noto Sans KR", system-ui, -apple-system, "Malgun Gothic", sans-serif;
+  --font-num: "Space Grotesk", "Noto Sans KR", system-ui, sans-serif;
+  --radius: 12px; --rail: 76px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --primary: #7B8CFF; --primary-soft: #232A52; --on-primary: #0E1120;
+  --bg: #0E1120; --surface: #171B2E; --surface-2: #1F2439; --line: #2C3250;
+  --fg: #E7E9F5; --muted: #9AA0BE;
+  --good: #5BD08A; --warn: #F2A64A; --bad: #FF7A7A; --info: #7FAAF5; --neutral: #A3A8C0;
+  --good-bg: #173326; --warn-bg: #3A2A14; --bad-bg: #3D1C20; --info-bg: #1B2A45; --neutral-bg: #262A3D;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --primary: #7B8CFF; --primary-soft: #232A52; --on-primary: #0E1120;
+  --bg: #0E1120; --surface: #171B2E; --surface-2: #1F2439; --line: #2C3250;
+  --fg: #E7E9F5; --muted: #9AA0BE;
+  --good: #5BD08A; --warn: #F2A64A; --bad: #FF7A7A; --info: #7FAAF5; --neutral: #A3A8C0;
+  --good-bg: #173326; --warn-bg: #3A2A14; --bad-bg: #3D1C20; --info-bg: #1B2A45; --neutral-bg: #262A3D;
+  color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.55 }
+button, input, select { font: inherit; color: inherit }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px }
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums }
+
+/* Rail */
+.rail { position: fixed; top: 0; bottom: 0; left: 0; width: calc(var(--rail) + env(safe-area-inset-left, 0px));
+  padding: calc(16px + env(safe-area-inset-top, 0px)) 0 calc(16px + env(safe-area-inset-bottom, 0px)) env(safe-area-inset-left, 0px);
+  background: var(--surface); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 20 }
+.rail .logo { width: 40px; height: 40px; border-radius: 10px; background: var(--primary); color: var(--on-primary);
+  display: grid; place-items: center; font-family: var(--font-num); font-weight: 700; margin-bottom: 14px }
+.rail nav { display: flex; flex-direction: column; gap: 6px }
+.rail a, .rail button.theme { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 64px; padding: 6px 0;
+  text-decoration: none; color: var(--muted); font-size: 11.5px; font-weight: 500; border: 0; background: none; cursor: pointer; border-radius: 10px }
+.rail .ico { width: 52px; height: 30px; border-radius: 15px; display: grid; place-items: center; transition: background .2s }
+.rail svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round }
+.rail a:hover .ico, .rail button.theme:hover .ico { background: var(--surface-2) }
+.rail a[aria-current="page"] { color: var(--fg); font-weight: 700 }
+.rail a[aria-current="page"] .ico { background: var(--primary); color: var(--on-primary) }
+.rail .spacer { flex: 1 }
+
+main { margin-left: calc(var(--rail) + env(safe-area-inset-left, 0px));
+  padding-left: 28px; padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 22px 40px; max-width: 1320px }
+header.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 20px }
+header.top h1 { margin: 0; font-size: 22px; text-wrap: balance }
+header.top .meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--muted); font-size: 13px }
+.badge-ro { background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted) }
+
+.view { display: none; flex-direction: column; gap: 18px }
+.view.active { display: flex; animation: enter .2s ease-out }
+@keyframes enter { from { transform: translateY(4px); opacity: .6 } to { transform: none; opacity: 1 } }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-width: 0 }
+.panel h2 { margin: 0 0 14px; font-size: 15px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap }
+.panel h2 small { font-weight: 400; color: var(--muted); font-size: 12.5px }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 18px }
+
+/* KPI */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 14px }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 6px }
+.kpi .label { color: var(--muted); font-size: 12.5px; font-weight: 500; letter-spacing: .02em }
+.kpi .value { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 32px; font-weight: 700; line-height: 1.1 }
+.kpi .value .unit { font-size: 16px; font-weight: 500; color: var(--muted); margin-left: 2px }
+.kpi .sub { font-size: 12.5px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap }
+.delta { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-weight: 700; padding: 1px 8px; border-radius: 999px; font-size: 12px }
+.delta.good { color: var(--good); background: var(--good-bg) }
+.delta.bad { color: var(--bad); background: var(--bad-bg) }
+.delta.flat { color: var(--neutral); background: var(--neutral-bg) }
+.kpi.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary) }
+.kpi.primary .label, .kpi.primary .sub, .kpi.primary .unit { color: var(--on-primary); opacity: .85 }
+
+/* bars */
+.bars { display: flex; flex-direction: column; gap: 12px }
+.bar-row { display: grid; grid-template-columns: minmax(0, 170px) 1fr 52px; gap: 10px; align-items: center }
+.bar-row .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px }
+.track { height: 10px; background: var(--surface-2); border-radius: 999px; overflow: hidden }
+.fill { height: 100%; background: var(--primary); border-radius: 999px; transition: width .6s cubic-bezier(.2,.7,.2,1) }
+.fill.delayed { background: var(--warn) }
+.fill.done { background: var(--good) }
+.bar-row .pct { text-align: right; font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 13px }
+
+/* line chart */
+.chart svg { width: 100%; height: auto; display: block; overflow: visible }
+.chart .grid line { stroke: var(--line); stroke-width: 1 }
+.chart text { fill: var(--muted); font-size: 11px; font-family: var(--font-num) }
+.chart .line { fill: none; stroke: var(--primary); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round }
+.chart .area { fill: var(--primary); opacity: .1 }
+.chart .dot { fill: var(--surface); stroke: var(--primary); stroke-width: 2 }
+.chart .dot.end { fill: var(--primary) }
+.chart .endlabel { fill: var(--fg); font-weight: 700; font-size: 12px }
+
+/* lists */
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column }
+.list li { display: flex; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); min-width: 0 }
+.list li:first-child { border-top: 0 }
+.list .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.list .right { color: var(--muted); font-size: 12.5px; white-space: nowrap }
+
+/* chips & pills */
+.pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap }
+.sev-critical { color: var(--bad); background: var(--bad-bg) }
+.sev-major { color: var(--warn); background: var(--warn-bg) }
+.sev-minor { color: var(--info); background: var(--info-bg) }
+.sev-trivial { color: var(--neutral); background: var(--neutral-bg) }
+.ms-chip { color: var(--primary); background: var(--primary-soft); }
+.st { color: var(--muted); background: var(--surface-2) }
+
+.filters { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px }
+.frow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center }
+.frow .flabel { font-size: 12px; color: var(--muted); width: 52px; flex-shrink: 0; font-weight: 500 }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 3px 11px; font-size: 12.5px; cursor: pointer }
+.chip[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: var(--on-primary) }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between }
+.search { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 7px 11px; min-width: 0; width: min(100%, 280px) }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px }
+.btn:hover { background: var(--surface-2) }
+select.sel { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 10px }
+.count { color: var(--muted); font-size: 13px }
+
+/* table */
+.table-wrap { overflow-x: auto }
+table { width: 100%; border-collapse: collapse; min-width: 760px }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle }
+th { font-size: 12px; color: var(--muted); font-weight: 500; white-space: nowrap; background: var(--surface) }
+th button { border: 0; background: none; padding: 0; cursor: pointer; color: inherit; font-weight: 500 }
+th[aria-sort="ascending"] button, th[aria-sort="descending"] button { color: var(--fg); font-weight: 700 }
+td.id, td.date { font-family: var(--font-num); font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted) }
+tbody tr:hover { background: var(--surface-2) }
+.empty { text-align: center; color: var(--muted); padding: 28px }
+
+/* gantt */
+.gantt { overflow-x: auto }
+.gantt-inner { min-width: 680px; display: grid; grid-template-columns: 200px 1fr; row-gap: 10px; position: relative }
+.g-head { grid-column: 2; position: relative; height: 20px; font-size: 11.5px; color: var(--muted) }
+.g-head span { position: absolute; transform: translateX(-1px); padding-left: 4px; border-left: 1px solid var(--line); font-family: var(--font-num) }
+.g-label { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding-right: 10px }
+.g-label b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.g-label span { font-size: 11.5px; color: var(--muted); font-family: var(--font-num) }
+.g-track { position: relative; height: 34px; background: var(--surface-2); border-radius: 8px }
+.g-bar { position: absolute; top: 6px; bottom: 6px; border-radius: 6px; background: var(--primary-soft); border: 1px solid var(--primary); overflow: hidden }
+.g-bar .g-fill { height: 100%; background: var(--primary); transition: width .6s cubic-bezier(.2,.7,.2,1) }
+.g-bar.delayed { border-color: var(--warn); background: var(--warn-bg) } .g-bar.delayed .g-fill { background: var(--warn) }
+.g-bar.done { border-color: var(--good); background: var(--good-bg) } .g-bar.done .g-fill { background: var(--good) }
+.g-today { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed var(--bad); pointer-events: none }
+.g-today span { position: absolute; top: -2px; left: 4px; font-size: 11px; color: var(--bad); font-weight: 700; white-space: nowrap }
+.g-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--muted); margin-top: 12px }
+
+/* kanban */
+.kanban { display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 12px; overflow-x: auto; padding-bottom: 4px }
+.col { background: var(--surface-2); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0 }
+.col h3 { margin: 0 2px 4px; font-size: 13px; display: flex; justify-content: space-between }
+.col h3 .num { color: var(--muted); font-weight: 500 }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 11px; display: flex; flex-direction: column; gap: 6px; user-select: text }
+.card .t { font-size: 13px; font-weight: 500 }
+.card .m { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--muted) }
+.col-empty { color: var(--muted); font-size: 12.5px; text-align: center; padding: 10px }
+
+.legend-note { font-size: 12px; color: var(--muted) }
+
+@media (max-width: 600px) {
+  .rail { top: auto; right: 0; width: auto; height: auto; flex-direction: row; justify-content: space-around; border-right: 0; border-top: 1px solid var(--line);
+    padding: 6px max(8px, env(safe-area-inset-right, 0px)) calc(6px + env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px)) }
+  .rail .logo, .rail .spacer { display: none }
+  .rail nav { flex-direction: row; gap: 2px }
+  .rail a, .rail button.theme { width: 60px }
+  main { margin-left: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 16px 96px }
+  .bar-row { grid-template-columns: minmax(0, 110px) 1fr 44px }
+  .frow .flabel { width: 100% }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important }
+}
+</style>
+
+<aside class="rail" aria-label="주 메뉴">
+  <div class="logo" aria-hidden="true">SH</div>
+  <nav>
+    <a href="#overview" data-view="overview"><span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span>개요</a>
+    <a href="#schedule" data-view="schedule"><span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M7 14h5M7 17h8"/></svg></span>일정</a>
+    <a href="#issues" data-view="issues"><span class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg></span>이슈</a>
+    <a href="#docs" data-view="docs"><span class="ico"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></svg></span>문서</a>
+  </nav>
+  <div class="spacer"></div>
+  <button class="theme" id="themeBtn" type="button" aria-label="다크모드 전환"><span class="ico"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></span><span id="themeLabel">테마</span></button>
+</aside>
+
+<main>
+  <header class="top">
+    <h1 id="projName">스마트홈 앱</h1>
+    <div class="meta"><span>기준일 <b class="num" id="todayLabel"></b></span><span class="badge-ro">🔒 보기 전용</span></div>
+  </header>
+
+  <section class="view" id="view-overview" aria-label="개요">
+    <div class="kpis" id="kpis"></div>
+    <div class="grid-2">
+      <div class="panel"><h2>마일스톤별 진척률 <small>계획 대비 완료 비율</small></h2><div class="bars" id="msBars"></div></div>
+      <div class="panel chart"><h2>열린 이슈 추이 <small>최근 6주, 주말 기준</small></h2><div id="trend"></div></div>
+    </div>
+    <div class="grid-2">
+      <div class="panel"><h2>남은 마일스톤</h2><ul class="list" id="upcoming"></ul></div>
+      <div class="panel"><h2>최근 갱신된 이슈 <small>5건</small></h2><ul class="list" id="recentIssues"></ul></div>
+    </div>
+  </section>
+
+  <section class="view" id="view-schedule" aria-label="일정">
+    <div class="panel"><h2>마일스톤 타임라인 <small id="ganttRange"></small></h2>
+      <div class="gantt"><div class="gantt-inner" id="gantt"></div></div>
+      <div class="g-legend">✅ 완료 · 🔄 진행 · ⏳ 예정 · ⚠️ 지연 · <span style="color:var(--bad)">┆ 오늘</span></div>
+    </div>
+    <div class="panel"><h2>칸반보드 <small>보기 전용, 카드 이동 불가</small></h2>
+      <div class="toolbar" style="margin-bottom:12px">
+        <label class="count" for="kbMs">마일스톤
+          <select class="sel" id="kbMs"><option value="">전체</option></select></label>
+      </div>
+      <div class="kanban" id="kanban"></div>
+    </div>
+  </section>
+
+  <section class="view" id="view-issues" aria-label="이슈">
+    <div class="panel">
+      <h2>이슈 목록</h2>
+      <div class="filters" id="issueFilters"></div>
+      <div class="toolbar" style="margin-bottom:10px">
+        <input class="search" id="issueQ" type="search" placeholder="제목 또는 ID 검색" aria-label="이슈 검색">
+        <div style="display:flex;gap:10px;align-items:center"><span class="count" id="issueCount"></span><button class="btn" id="issueReset" type="button">필터 초기화</button></div>
+      </div>
+      <div class="table-wrap"><table id="issueTable"><thead></thead><tbody></tbody></table></div>
+      <p class="legend-note">해결 여부: ✅ 해결·종료, ❌ 미해결 · 정렬: 🔼 오름차순, 🔽 내림차순</p>
+    </div>
+  </section>
+
+  <section class="view" id="view-docs" aria-label="문서">
+    <div class="panel">
+      <h2>문서 <small>🆕 최근 7일 안에 수정</small></h2>
+      <div class="filters"><div class="frow" id="docFilters"><span class="flabel">유형</span></div></div>
+      <div class="table-wrap"><table id="docTable"><thead><tr><th>제목</th><th>유형</th><th>버전</th><th>작성자</th><th>최종 수정일</th><th>연결 마일스톤</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+</main>
+
+<!-- 데이터와 순수 계산 함수. 게시자는 DATA만 수정해 다시 게시한다. tests/core.test.js가 이 블록을 불러와 검증한다. -->
+<script id="core">
+const Core = (() => {
+  const DATA = {
+    project: { name: "스마트홈 앱", start: "2026-08-03", end: "2027-02-26", today: "2026-11-19" },
+    members: [
+      { id: "m1", name: "김서연", role: "PM" },
+      { id: "m2", name: "이준호", role: "프론트엔드" },
+      { id: "m3", name: "박지민", role: "백엔드" },
+      { id: "m4", name: "최유나", role: "IoT" },
+      { id: "m5", name: "정민수", role: "QA" },
+      { id: "m6", name: "한도윤", role: "디자인" }
+    ],
+    milestones: [
+      { id: "ms1", title: "M1 요구사항·설계", start: "2026-08-03", end: "2026-09-11", status: "done", progress: 100 },
+      { id: "ms2", title: "M2 기기 연동(Wi-Fi/Matter)", start: "2026-09-14", end: "2026-11-13", status: "delayed", progress: 85 },
+      { id: "ms3", title: "M3 자동화 루틴", start: "2026-10-19", end: "2026-12-18", status: "in-progress", progress: 55 },
+      { id: "ms4", title: "M4 베타 테스트", start: "2026-12-21", end: "2027-01-29", status: "planned", progress: 0 },
+      { id: "ms5", title: "M5 정식 출시", start: "2027-02-01", end: "2027-02-26", status: "planned", progress: 0 }
+    ],
+    tasks: [
+      ["T1", "Matter 커미셔닝 플로우", "done", "m4", "ms2"],
+      ["T2", "Wi-Fi 프로비저닝 UI", "done", "m2", "ms2"],
+      ["T3", "기기 상태 폴링을 웹소켓으로 전환", "review", "m3", "ms2"],
+      ["T4", "오프라인 기기 재연결 처리", "doing", "m4", "ms2"],
+      ["T5", "루틴 조건 빌더 UI", "doing", "m2", "ms3"],
+      ["T6", "루틴 스케줄러 API", "doing", "m3", "ms3"],
+      ["T7", "지오펜스 트리거", "todo", "m2", "ms3"],
+      ["T8", "루틴 실행 이력 저장", "review", "m3", "ms3"],
+      ["T9", "루틴 템플릿 10종 디자인", "done", "m6", "ms3"],
+      ["T10", "푸시 알림 큐 개선", "todo", "m3", "ms3"],
+      ["T11", "베타 테스터 모집 페이지", "todo", "m1", "ms4"],
+      ["T12", "회귀 테스트 자동화", "doing", "m5", "ms4"],
+      ["T13", "크래시 리포팅 연동", "todo", "m5", "ms4"],
+      ["T14", "앱스토어 등록 자료", "todo", "m6", "ms5"],
+      ["T15", "접근성 점검", "review", "m6", "ms3"],
+      ["T16", "요구사항 명세 확정", "done", "m1", "ms1"]
+    ].map(([id, title, column, assignee, milestoneId]) => ({ id, title, column, assignee, milestoneId })),
+    issues: [
+      ["ISS-101", "Wi-Fi 페어링 시 앱 크래시(Android 14)", "critical", "in-progress", "m2", "ms2", "2026-10-28", "2026-11-18"],
+      ["ISS-102", "Matter 브리지 기기 검색 누락", "critical", "open", "m4", "ms2", "2026-11-03", "2026-11-17"],
+      ["ISS-103", "자동화 루틴 시간 조건 타임존 오류", "major", "open", "m3", "ms3", "2026-11-05", "2026-11-16"],
+      ["ISS-104", "로그인 토큰 만료 후 재발급 실패", "major", "resolved", "m3", "ms1", "2026-09-02", "2026-09-10"],
+      ["ISS-105", "조명 밝기 슬라이더 반응 지연", "minor", "in-progress", "m2", "ms2", "2026-10-30", "2026-11-14"],
+      ["ISS-106", "온보딩 화면 다크모드 대비 부족", "minor", "closed", "m6", "ms1", "2026-08-25", "2026-09-05"],
+      ["ISS-107", "기기 목록 정렬 순서가 저장되지 않음", "trivial", "open", "m2", "ms3", "2026-11-10", "2026-11-12"],
+      ["ISS-108", "펌웨어 버전 표시 누락", "minor", "resolved", "m4", "ms2", "2026-10-01", "2026-10-15"],
+      ["ISS-109", "푸시 알림 중복 발송", "major", "in-progress", "m3", "ms3", "2026-11-07", "2026-11-19"],
+      ["ISS-110", "루틴 편집 시 조건 삭제 불가", "major", "open", "m2", "ms3", "2026-11-11", "2026-11-18"],
+      ["ISS-111", "Zigbee 센서 배터리 잔량 오표시", "minor", "open", "m4", "ms2", "2026-11-04", "2026-11-13"],
+      ["ISS-112", "스크린리더 접근성 라벨 누락", "minor", "open", "m6", "ms3", "2026-11-12", "2026-11-15"],
+      ["ISS-113", "회원가입 이메일 인증 링크 만료", "major", "closed", "m3", "ms1", "2026-08-28", "2026-09-08"],
+      ["ISS-114", "스마트 플러그 전력 그래프 단위 오류", "minor", "resolved", "m2", "ms2", "2026-10-20", "2026-11-02"],
+      ["ISS-115", "루틴 실행 이력 페이지 로딩 3초 이상", "major", "open", "m3", "ms3", "2026-11-13", "2026-11-18"],
+      ["ISS-116", "기기 공유 초대 수락 실패", "critical", "resolved", "m3", "ms2", "2026-10-12", "2026-10-25"],
+      ["ISS-117", "설정 화면 오탈자", "trivial", "closed", "m6", "ms1", "2026-09-01", "2026-09-03"],
+      ["ISS-118", "오프라인 기기 상태가 갱신되지 않음", "major", "in-progress", "m4", "ms2", "2026-11-01", "2026-11-17"],
+      ["ISS-119", "위젯 아이콘 해상도 저하", "trivial", "open", "m6", "ms3", "2026-11-14", "2026-11-14"],
+      ["ISS-120", "지오펜스 루틴 반경 설정 오류", "major", "open", "m2", "ms3", "2026-11-15", "2026-11-19"],
+      ["ISS-121", "QA 회귀 테스트 케이스 누락", "minor", "in-progress", "m5", "ms4", "2026-11-16", "2026-11-18"],
+      ["ISS-122", "앱 시작 시 스플래시 깜빡임", "trivial", "resolved", "m2", "ms1", "2026-09-05", "2026-09-09"],
+      ["ISS-123", "도어락 원격 해제 2단계 인증 우회 가능", "critical", "open", "m3", "ms3", "2026-11-17", "2026-11-19"],
+      ["ISS-124", "베타 피드백 수집 폼 제출 오류", "minor", "open", "m5", "ms4", "2026-11-18", "2026-11-18"]
+    ].map(([id, title, severity, status, assignee, milestoneId, created, updated]) => ({ id, title, severity, status, assignee, milestoneId, created, updated })),
+    docs: [
+      ["D1", "스마트홈 앱 서비스 기획안", "기획안", "v2.1", "m1", "2026-09-08", "ms1"],
+      ["D2", "기기 연동 PRD", "PRD", "v1.4", "m1", "2026-11-14", "ms2"],
+      ["D3", "자동화 루틴 PRD", "PRD", "v1.2", "m1", "2026-11-17", "ms3"],
+      ["D4", "Matter 연동 기술 설계", "기술 설계", "v1.0", "m4", "2026-10-02", "ms2"],
+      ["D5", "루틴 엔진 아키텍처", "기술 설계", "v0.9", "m3", "2026-11-12", "ms3"],
+      ["D6", "베타 테스트 운영 기획안", "기획안", "v1.0", "m5", "2026-11-18", "ms4"],
+      ["D7", "주간 회의록 W46", "회의록", "v1.0", "m1", "2026-11-13", "ms3"],
+      ["D8", "출시 체크리스트 PRD", "PRD", "v0.3", "m1", "2026-10-28", "ms5"]
+    ].map(([id, title, type, version, author, updated, milestoneId]) => ({ id, title, type, version, author, updated, milestoneId })),
+    // 주차별 스냅샷(주말 기준). 마지막 항목은 현재 데이터와 일치해야 한다.
+    kpiHistory: [
+      { week: "W42", progress: 30, openIssues: 8, criticalOpen: 1 },
+      { week: "W43", progress: 36, openIssues: 11, criticalOpen: 2 },
+      { week: "W44", progress: 41, openIssues: 13, criticalOpen: 2 },
+      { week: "W45", progress: 46, openIssues: 15, criticalOpen: 3 },
+      { week: "W46", progress: 51, openIssues: 14, criticalOpen: 2 },
+      { week: "W47", progress: 55, openIssues: 16, criticalOpen: 3 }
+    ]
+  };
+
+  const SEVERITIES = ["critical", "major", "minor", "trivial"];
+  const ISSUE_STATUSES = ["open", "in-progress", "resolved", "closed"];
+  const MS_STATUSES = ["done", "in-progress", "planned", "delayed"];
+  const COLUMNS = ["todo", "doing", "review", "done"];
+  const DOC_TYPES = ["기획안", "PRD", "기술 설계", "회의록"];
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  function toDay(s) { const [y, m, d] = s.split("-").map(Number); return Date.UTC(y, m - 1, d) / 864e5; }
+  function daysBetween(a, b) { return toDay(b) - toDay(a); }
+  function isOpenIssue(i) { return i.status === "open" || i.status === "in-progress"; }
+  function isResolved(i) { return !isOpenIssue(i); }
+
+  // 기간(일수) 가중 평균 진척률
+  function overallProgress(ms) {
+    let w = 0, s = 0;
+    for (const m of ms) { const d = daysBetween(m.start, m.end) + 1; w += d; s += d * m.progress; }
+    return w ? Math.round(s / w) : 0;
+  }
+  function countOpen(issues) { return issues.filter(isOpenIssue).length; }
+  function countCriticalOpen(issues) { return issues.filter(i => isOpenIssue(i) && i.severity === "critical").length; }
+  // 완료되지 않았고 종료일이 오늘 이후인 마일스톤 중 가장 먼저 끝나는 것
+  function nextMilestone(ms, today) {
+    const c = ms.filter(m => m.status !== "done" && toDay(m.end) >= toDay(today)).sort((a, b) => toDay(a.end) - toDay(b.end));
+    return c.length ? { milestone: c[0], days: daysBetween(today, c[0].end) } : null;
+  }
+  // 증감: higherIsBetter에 따라 good/bad 판정
+  function delta(cur, prev, higherIsBetter) {
+    const diff = cur - prev;
+    const tone = diff === 0 ? "flat" : (diff > 0) === higherIsBetter ? "good" : "bad";
+    const icon = diff > 0 ? "📈" : diff < 0 ? "📉" : "➖";
+    return { diff, tone, icon, text: (diff > 0 ? "▲ +" : diff < 0 ? "▼ " : "") + diff };
+  }
+  function filterIssues(issues, f) {
+    const q = (f.q || "").trim().toLowerCase();
+    const has = (set, v) => !set || set.length === 0 || set.includes(v);
+    return issues.filter(i => has(f.severity, i.severity) && has(f.status, i.status) && has(f.assignee, i.assignee)
+      && (!q || i.title.toLowerCase().includes(q) || i.id.toLowerCase().includes(q)));
+  }
+  function sortIssues(issues, key, dir, members) {
+    const names = Object.fromEntries((members || []).map(m => [m.id, m.name]));
+    const val = i => key === "severity" ? SEVERITIES.indexOf(i.severity)
+      : key === "status" ? ISSUE_STATUSES.indexOf(i.status)
+      : key === "assignee" ? (names[i.assignee] || i.assignee)
+      : i[key];
+    const sign = dir === "desc" ? -1 : 1;
+    return [...issues].sort((a, b) => {
+      const x = val(a), y = val(b);
+      const c = typeof x === "number" ? x - y : String(x).localeCompare(String(y), "ko");
+      return c !== 0 ? c * sign : a.id.localeCompare(b.id);
+    });
+  }
+  function isRecent(date, today, days = 7) { const d = daysBetween(date, today); return d >= 0 && d <= days; }
+  function timelinePct(date, start, end) {
+    const p = daysBetween(start, date) / daysBetween(start, end) * 100;
+    return Math.max(0, Math.min(100, p));
+  }
+
+  function validateData(D) {
+    const errs = [];
+    const ids = (arr) => new Set(arr.map(x => x.id));
+    const memberIds = ids(D.members), msIds = ids(D.milestones);
+    const date = (v, where) => { if (!DATE_RE.test(v) || Number.isNaN(toDay(v))) errs.push(`${where}: 날짜 형식 오류 ${v}`); };
+    for (const k of ["members", "milestones", "tasks", "issues", "docs"]) {
+      if (ids(D[k]).size !== D[k].length) errs.push(`${k}: 중복 ID`);
+    }
+    date(D.project.start, "project.start"); date(D.project.end, "project.end"); date(D.project.today, "project.today");
+    for (const m of D.milestones) {
+      date(m.start, m.id); date(m.end, m.id);
+      if (toDay(m.start) > toDay(m.end)) errs.push(`${m.id}: start > end`);
+      if (toDay(m.start) < toDay(D.project.start) || toDay(m.end) > toDay(D.project.end)) errs.push(`${m.id}: 프로젝트 기간 밖`);
+      if (!MS_STATUSES.includes(m.status)) errs.push(`${m.id}: 상태 오류`);
+      if (!(m.progress >= 0 && m.progress <= 100)) errs.push(`${m.id}: 진척률 범위 오류`);
+      if (m.status === "done" && m.progress !== 100) errs.push(`${m.id}: 완료인데 진척률 100 아님`);
+    }
+    for (const t of D.tasks) {
+      if (!COLUMNS.includes(t.column)) errs.push(`${t.id}: 컬럼 오류`);
+      if (!memberIds.has(t.assignee)) errs.push(`${t.id}: 담당자 없음`);
+      if (!msIds.has(t.milestoneId)) errs.push(`${t.id}: 마일스톤 없음`);
+    }
+    for (const i of D.issues) {
+      if (!SEVERITIES.includes(i.severity)) errs.push(`${i.id}: 심각도 오류`);
+      if (!ISSUE_STATUSES.includes(i.status)) errs.push(`${i.id}: 상태 오류`);
+      if (!memberIds.has(i.assignee)) errs.push(`${i.id}: 담당자 없음`);
+      if (!msIds.has(i.milestoneId)) errs.push(`${i.id}: 마일스톤 없음`);
+      date(i.created, i.id); date(i.updated, i.id);
+      if (toDay(i.created) > toDay(i.updated)) errs.push(`${i.id}: created > updated`);
+      if (toDay(i.updated) > toDay(D.project.today)) errs.push(`${i.id}: 미래 수정일`);
+    }
+    for (const d of D.docs) {
+      if (!DOC_TYPES.includes(d.type)) errs.push(`${d.id}: 문서 유형 오류`);
+      if (!/^v\d+\.\d+$/.test(d.version)) errs.push(`${d.id}: 버전 형식 오류`);
+      if (!memberIds.has(d.author)) errs.push(`${d.id}: 작성자 없음`);
+      if (!msIds.has(d.milestoneId)) errs.push(`${d.id}: 마일스톤 없음`);
+      date(d.updated, d.id);
+      if (toDay(d.updated) > toDay(D.project.today)) errs.push(`${d.id}: 미래 수정일`);
+    }
+    const last = D.kpiHistory[D.kpiHistory.length - 1];
+    if (last) {
+      if (last.openIssues !== countOpen(D.issues)) errs.push("kpiHistory: 마지막 openIssues가 현재 데이터와 다름");
+      if (last.criticalOpen !== countCriticalOpen(D.issues)) errs.push("kpiHistory: 마지막 criticalOpen이 현재 데이터와 다름");
+      if (last.progress !== overallProgress(D.milestones)) errs.push("kpiHistory: 마지막 progress가 현재 데이터와 다름");
+    }
+    return errs;
+  }
+
+  return { DATA, SEVERITIES, ISSUE_STATUSES, MS_STATUSES, COLUMNS, DOC_TYPES,
+    toDay, daysBetween, isOpenIssue, isResolved, overallProgress, countOpen, countCriticalOpen,
+    nextMilestone, delta, filterIssues, sortIssues, isRecent, timelinePct, validateData };
+})();
+</script>
+
+<script id="ui">
+(() => {
+  const C = Core, D = C.DATA, TODAY = D.project.today;
+  const reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const $ = (s, r = document) => r.querySelector(s);
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const member = id => D.members.find(m => m.id === id) || { name: id, role: "" };
+  const ms = id => D.milestones.find(m => m.id === id) || { title: id };
+  const short = s => s.slice(5).replace("-", ".");
+  const MS_ICON = { "done": "✅", "in-progress": "🔄", "planned": "⏳", "delayed": "⚠️" };
+  const MS_LABEL = { "done": "완료", "in-progress": "진행", "planned": "예정", "delayed": "지연" };
+  const SEV_LABEL = { critical: "Critical", major: "Major", minor: "Minor", trivial: "Trivial" };
+  const ST_LABEL = { "open": "열림", "in-progress": "처리 중", "resolved": "해결", "closed": "종료" };
+  const COL_LABEL = { todo: "To Do", doing: "In Progress", review: "Review", done: "Done" };
+  const msChip = id => `<span class="pill ms-chip" title="${esc(ms(id).title)}">${esc(ms(id).title.split(" ")[0])}</span>`;
+  const sevPill = s => `<span class="pill sev-${s}">${SEV_LABEL[s]}</span>`;
+
+  /* ---------- 테마 ---------- */
+  const root = document.documentElement;
+  function currentTheme() {
+    const t = root.getAttribute("data-theme");
+    if (t) return t;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function paintThemeLabel() { $("#themeLabel").textContent = currentTheme() === "dark" ? "라이트" : "다크"; }
+  try { const saved = localStorage.getItem("devdash-theme"); if (saved === "dark" || saved === "light") root.setAttribute("data-theme", saved); } catch (e) {}
+  $("#themeBtn").addEventListener("click", () => {
+    const next = currentTheme() === "dark" ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem("devdash-theme", next); } catch (e) {}
+    paintThemeLabel();
+  });
+  paintThemeLabel();
+
+  /* ---------- 모션 ---------- */
+  function countUp(el) {
+    const target = Number(el.dataset.count);
+    if (reduced) { el.textContent = target; return; }
+    const t0 = performance.now(), dur = 800;
+    const step = now => {
+      const p = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+      el.textContent = Math.round(target * e);
+      if (p < 1) requestAnimationFrame(step);
+    };
+    el.textContent = 0; requestAnimationFrame(step);
+  }
+  function growBars(scope) {
+    scope.querySelectorAll("[data-w]").forEach(el => {
+      if (reduced) { el.style.width = el.dataset.w + "%"; return; }
+      el.style.transition = "none"; el.style.width = "0%";
+      void el.offsetWidth; el.style.transition = ""; el.style.width = el.dataset.w + "%";
+    });
+  }
+  function drawLines(scope) {
+    scope.querySelectorAll("path.line").forEach(p => {
+      if (reduced || !p.getTotalLength) return;
+      const L = p.getTotalLength();
+      p.style.transition = "none"; p.style.strokeDasharray = L; p.style.strokeDashoffset = L;
+      void p.getBoundingClientRect();
+      p.style.transition = "stroke-dashoffset .9s ease-out"; p.style.strokeDashoffset = 0;
+    });
+  }
+  function animate(scope) { scope.querySelectorAll("[data-count]").forEach(countUp); growBars(scope); drawLines(scope); }
+
+  /* ---------- 개요 ---------- */
+  function renderOverview() {
+    const H = D.kpiHistory, prev = H[H.length - 2] || H[H.length - 1];
+    const prog = C.overallProgress(D.milestones), open = C.countOpen(D.issues), crit = C.countCriticalOpen(D.issues);
+    const nx = C.nextMilestone(D.milestones, TODAY);
+    const dP = C.delta(prog, prev.progress, true), dO = C.delta(open, prev.openIssues, false), dC = C.delta(crit, prev.criticalOpen, false);
+    const dl = d => `<span class="delta ${d.tone}">${d.icon} ${d.text}</span><span>지난주 대비</span>`;
+    $("#kpis").innerHTML = `
+      <div class="kpi primary"><span class="label">전체 진척률</span><span class="value"><span data-count="${prog}">${prog}</span><span class="unit">%</span></span><span class="sub">${dl(dP)}</span></div>
+      <div class="kpi"><span class="label">열린 이슈</span><span class="value"><span data-count="${open}">${open}</span><span class="unit">건</span></span><span class="sub">${dl(dO)}</span></div>
+      <div class="kpi"><span class="label">Critical 미해결</span><span class="value" style="color:var(--bad)"><span data-count="${crit}">${crit}</span><span class="unit">건</span></span><span class="sub">${dl(dC)}</span></div>
+      <div class="kpi"><span class="label">다음 마일스톤까지</span><span class="value">${nx ? `D-<span data-count="${nx.days}">${nx.days}</span>` : "–"}</span><span class="sub">${nx ? `${MS_ICON[nx.milestone.status]} ${esc(nx.milestone.title)} · ${short(nx.milestone.end)} 종료` : "남은 마일스톤 없음"}</span></div>`;
+
+    $("#msBars").innerHTML = D.milestones.map(m => `
+      <div class="bar-row"><span class="name" title="${esc(m.title)}">${MS_ICON[m.status]} ${esc(m.title)}</span>
+        <div class="track"><div class="fill ${m.status === "delayed" ? "delayed" : m.status === "done" ? "done" : ""}" data-w="${m.progress}" style="width:${m.progress}%"></div></div>
+        <span class="pct">${m.progress}%</span></div>`).join("");
+
+    // 추이 차트
+    const W = 520, Hh = 200, pl = 34, pr = 40, pt = 18, pb = 28;
+    const vals = H.map(h => h.openIssues), max = Math.ceil(Math.max(...vals) / 5) * 5;
+    const x = i => pl + i * (W - pl - pr) / (H.length - 1), y = v => pt + (1 - v / max) * (Hh - pt - pb);
+    const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+    const ticks = []; for (let v = 0; v <= max; v += 5) ticks.push(v);
+    const last = vals.length - 1;
+    $("#trend").innerHTML = `<svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="주간 열린 이슈 수: ${H.map(h => h.week + " " + h.openIssues + "건").join(", ")}">
+      <g class="grid">${ticks.map(v => `<line x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}"/><text x="${pl - 8}" y="${y(v) + 4}" text-anchor="end">${v}</text>`).join("")}</g>
+      ${H.map((h, i) => `<text x="${x(i)}" y="${Hh - 8}" text-anchor="middle">${h.week}</text>`).join("")}
+      <path class="area" d="M${pts[0]} L${pts.join(" L")} L${x(last)},${y(0)} L${x(0)},${y(0)} Z"/>
+      <path class="line" d="M${pts.join(" L")}"/>
+      ${vals.map((v, i) => `<circle class="dot ${i === last ? "end" : ""}" cx="${x(i)}" cy="${y(v)}" r="${i === last ? 4.5 : 3}"><title>${H[i].week}: ${v}건</title></circle>`).join("")}
+      <text class="endlabel" x="${x(last) + 9}" y="${y(vals[last]) + 4}">${vals[last]}</text>
+    </svg>`;
+
+    const up = D.milestones.filter(m => m.status !== "done").sort((a, b) => C.toDay(a.end) - C.toDay(b.end));
+    $("#upcoming").innerHTML = up.map(m => {
+      const d = C.daysBetween(TODAY, m.end);
+      return `<li><span>${MS_ICON[m.status]}</span><span class="grow">${esc(m.title)}</span><span class="right num">${short(m.start)}–${short(m.end)} · ${d >= 0 ? "D-" + d : "D+" + (-d) + " 초과"}</span></li>`;
+    }).join("");
+
+    const rec = [...D.issues].sort((a, b) => C.toDay(b.updated) - C.toDay(a.updated) || b.id.localeCompare(a.id)).slice(0, 5);
+    $("#recentIssues").innerHTML = rec.map(i => `<li><span title="${C.isResolved(i) ? "해결" : "미해결"}">${C.isResolved(i) ? "✅" : "❌"}</span>${sevPill(i.severity)}<span class="grow" title="${esc(i.title)}">${esc(i.title)}</span><span class="right num">${short(i.updated)}</span></li>`).join("");
+  }
+
+  /* ---------- 일정 ---------- */
+  function renderSchedule() {
+    const P = D.project;
+    $("#ganttRange").textContent = `${P.start.replace(/-/g, ".")} – ${P.end.replace(/-/g, ".")}`;
+    const months = [];
+    let [yy, mm] = P.start.split("-").map(Number);
+    while (true) {
+      const s = `${yy}-${String(mm).padStart(2, "0")}-01`;
+      if (C.toDay(s) > C.toDay(P.end)) break;
+      if (C.toDay(s) >= C.toDay(P.start)) months.push(s);
+      mm++; if (mm > 12) { mm = 1; yy++; }
+    }
+    const todayPct = C.timelinePct(TODAY, P.start, P.end);
+    const head = `<div></div><div class="g-head">${months.map(s => `<span style="left:${C.timelinePct(s, P.start, P.end)}%">${Number(s.slice(5, 7))}월</span>`).join("")}</div>`;
+    const rows = D.milestones.map(m => {
+      const l = C.timelinePct(m.start, P.start, P.end), r = C.timelinePct(m.end, P.start, P.end);
+      const cls = m.status === "delayed" ? "delayed" : m.status === "done" ? "done" : "";
+      return `<div class="g-label"><b title="${esc(m.title)}">${MS_ICON[m.status]} ${esc(m.title)}</b><span>${short(m.start)}–${short(m.end)} · ${MS_LABEL[m.status]} ${m.progress}%</span></div>
+        <div class="g-track"><div class="g-bar ${cls}" style="left:${l}%;width:${Math.max(1, r - l)}%" title="${esc(m.title)} ${m.progress}%"><div class="g-fill" data-w="${m.progress}" style="width:${m.progress}%"></div></div>
+        ${`<div class="g-today" style="left:${todayPct}%"></div>`}</div>`;
+    }).join("");
+    $("#gantt").innerHTML = head + rows;
+    // 오늘 라벨은 첫 줄에만
+    const firstToday = $("#gantt .g-today");
+    if (firstToday) firstToday.innerHTML = `<span>오늘 ${short(TODAY)}</span>`;
+
+    const sel = $("#kbMs");
+    if (sel.options.length === 1) sel.insertAdjacentHTML("beforeend", D.milestones.map(m => `<option value="${m.id}">${esc(m.title)}</option>`).join(""));
+    const f = sel.value;
+    $("#kanban").innerHTML = C.COLUMNS.map(col => {
+      const cards = D.tasks.filter(t => t.column === col && (!f || t.milestoneId === f));
+      return `<div class="col" aria-label="${COL_LABEL[col]}"><h3>${COL_LABEL[col]} <span class="num">${cards.length}</span></h3>
+        ${cards.length ? cards.map(t => `<article class="card" draggable="false"><span class="t">${col === "done" ? "✅ " : ""}${esc(t.title)}</span>
+          <span class="m">${msChip(t.milestoneId)}<span>${esc(member(t.assignee).name)}</span></span></article>`).join("") : `<div class="col-empty">카드 없음</div>`}</div>`;
+    }).join("");
+  }
+  $("#kbMs").addEventListener("change", renderSchedule);
+
+  /* ---------- 이슈 ---------- */
+  const IF = { severity: [], status: [], assignee: [], q: "" };
+  let sortKey = "updated", sortDir = "desc";
+  const COLS = [["id", "ID"], ["title", "제목"], ["severity", "심각도"], ["status", "상태"], ["assignee", "담당자"], ["milestoneId", "마일스톤"], ["updated", "수정일"]];
+  function renderIssueFilters() {
+    const group = (key, label, values, text) => `<div class="frow" role="group" aria-label="${label}"><span class="flabel">${label}</span>${values.map(v =>
+      `<button type="button" class="chip" data-f="${key}" data-v="${v}" aria-pressed="${IF[key].includes(v)}">${text(v)}</button>`).join("")}</div>`;
+    const assignees = D.members.filter(m => D.issues.some(i => i.assignee === m.id)).map(m => m.id);
+    $("#issueFilters").innerHTML = group("severity", "심각도", C.SEVERITIES, v => SEV_LABEL[v])
+      + group("status", "상태", C.ISSUE_STATUSES, v => ST_LABEL[v])
+      + group("assignee", "담당자", assignees, v => esc(member(v).name));
+  }
+  function renderIssueTable() {
+    const rows = C.sortIssues(C.filterIssues(D.issues, IF), sortKey, sortDir, D.members);
+    $("#issueTable thead").innerHTML = `<tr><th>해결</th>${COLS.map(([k, l]) => `<th aria-sort="${k === sortKey ? (sortDir === "asc" ? "ascending" : "descending") : "none"}"><button type="button" data-sort="${k}">${l} ${k === sortKey ? (sortDir === "asc" ? "🔼" : "🔽") : ""}</button></th>`).join("")}</tr>`;
+    $("#issueTable tbody").innerHTML = rows.length ? rows.map(i => `<tr>
+      <td>${C.isResolved(i) ? "✅" : "❌"}</td><td class="id">${i.id}</td><td>${esc(i.title)}</td><td>${sevPill(i.severity)}</td>
+      <td><span class="pill st">${ST_LABEL[i.status]}</span></td><td>${esc(member(i.assignee).name)}</td><td>${msChip(i.milestoneId)}</td><td class="date">${i.updated}</td></tr>`).join("")
+      : `<tr><td colspan="8" class="empty">조건에 맞는 이슈가 없습니다. 필터를 줄여 보세요.</td></tr>`;
+    $("#issueCount").textContent = `${rows.length} / ${D.issues.length}건`;
+  }
+  $("#issueFilters").addEventListener("click", e => {
+    const b = e.target.closest(".chip"); if (!b) return;
+    const arr = IF[b.dataset.f], v = b.dataset.v, k = arr.indexOf(v);
+    k >= 0 ? arr.splice(k, 1) : arr.push(v);
+    b.setAttribute("aria-pressed", String(k < 0));
+    renderIssueTable();
+  });
+  $("#issueTable").addEventListener("click", e => {
+    const b = e.target.closest("[data-sort]"); if (!b) return;
+    const k = b.dataset.sort;
+    if (k === sortKey) sortDir = sortDir === "asc" ? "desc" : "asc"; else { sortKey = k; sortDir = "asc"; }
+    renderIssueTable();
+  });
+  $("#issueQ").addEventListener("input", e => { IF.q = e.target.value; renderIssueTable(); });
+  $("#issueReset").addEventListener("click", () => {
+    IF.severity = []; IF.status = []; IF.assignee = []; IF.q = ""; $("#issueQ").value = "";
+    sortKey = "updated"; sortDir = "desc"; renderIssueFilters(); renderIssueTable();
+  });
+
+  /* ---------- 문서 ---------- */
+  let docType = "";
+  function renderDocs() {
+    const types = ["", ...C.DOC_TYPES];
+    $("#docFilters").innerHTML = `<span class="flabel">유형</span>` + types.map(t =>
+      `<button type="button" class="chip" data-t="${t}" aria-pressed="${t === docType}">${t || "전체"}</button>`).join("");
+    const rows = D.docs.filter(d => !docType || d.type === docType).sort((a, b) => C.toDay(b.updated) - C.toDay(a.updated));
+    $("#docTable tbody").innerHTML = rows.map(d => `<tr><td>${C.isRecent(d.updated, TODAY) ? "🆕 " : ""}${esc(d.title)}</td><td>${esc(d.type)}</td>
+      <td class="id">${d.version}</td><td>${esc(member(d.author).name)}</td><td class="date">${d.updated}</td><td>${msChip(d.milestoneId)}</td></tr>`).join("");
+  }
+  $("#docFilters").addEventListener("click", e => { const b = e.target.closest("[data-t]"); if (!b) return; docType = b.dataset.t; renderDocs(); });
+
+  /* ---------- 라우팅 ---------- */
+  const VIEWS = ["overview", "schedule", "issues", "docs"];
+  function route() {
+    const h = location.hash.slice(1), v = VIEWS.includes(h) ? h : "overview";
+    VIEWS.forEach(n => {
+      $("#view-" + n).classList.toggle("active", n === v);
+      const a = $(`.rail a[data-view="${n}"]`); n === v ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current");
+    });
+    animate($("#view-" + v));
+  }
+  window.addEventListener("hashchange", route);
+
+  $("#projName").textContent = D.project.name;
+  $("#todayLabel").textContent = TODAY.replace(/-/g, ".");
+  const errs = C.validateData(D);
+  if (errs.length) console.warn("데이터 검증 오류", errs);
+  renderOverview(); renderSchedule(); renderIssueFilters(); renderIssueTable(); renderDocs();
+  route();
+})();
+</script>
