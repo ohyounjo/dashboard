@@ -1,0 +1,22 @@
+slice_name: Critical 미해결
+description: null
+certified_by: null
+certification_details: null
+viz_type: big_number
+params:
+  viz_type: big_number
+  metric:
+    expressionType: SQL
+    sqlExpression: MAX(critical_open)
+    label: Critical 미해결
+  x_axis: week_start
+  time_grain_sqla: P1W
+  compare_lag: 1
+  compare_suffix: 지난주 대비
+  show_trend_line: true
+  aggregation: LAST_VALUE
+query_context: null
+cache_timeout: null
+uuid: 70d4c5de-1cfe-57f0-a152-3cac8b497008
+version: 1.0.0
+dataset_uuid: dfcadfa0-715d-5f72-a6b1-047df47406d3

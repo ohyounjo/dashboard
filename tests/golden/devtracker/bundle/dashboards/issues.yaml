@@ -1,0 +1,125 @@
+dashboard_title: 이슈
+description: null
+css: null
+slug: devtracker-issues
+certified_by: null
+certification_details: null
+published: true
+uuid: 534f104c-c0ea-522b-afa8-41226c852d72
+position:
+  DASHBOARD_VERSION_KEY: v2
+  ROOT_ID:
+    type: ROOT
+    id: ROOT_ID
+    children:
+    - GRID_ID
+  GRID_ID:
+    type: GRID
+    id: GRID_ID
+    children:
+    - ROW-1
+    parents:
+    - ROOT_ID
+  ROW-1:
+    type: ROW
+    id: ROW-1
+    children:
+    - CHART-issue_table
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-issue_table:
+    type: CHART
+    id: CHART-issue_table
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-1
+    meta:
+      chartId: 0
+      uuid: 71fb44a7-44cb-5376-a537-e1e52a96d921
+      sliceName: 이슈 목록
+      width: 12
+      height: 90
+metadata:
+  native_filter_configuration:
+  - id: NATIVE_FILTER-f_severity
+    name: 심각도
+    filterType: filter_select
+    type: NATIVE_FILTER
+    targets:
+    - column:
+        name: severity
+      datasetUuid: 8eb7db6f-3a8a-5988-9179-62e63a96d3ce
+    controlValues:
+      multiSelect: true
+      enableEmptyFilter: false
+      defaultToFirstItem: false
+      inverseSelection: false
+      searchAllOptions: false
+    defaultDataMask:
+      extraFormData: {}
+      filterState: {}
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
+  - id: NATIVE_FILTER-f_issue_status
+    name: 상태
+    filterType: filter_select
+    type: NATIVE_FILTER
+    targets:
+    - column:
+        name: status
+      datasetUuid: 8eb7db6f-3a8a-5988-9179-62e63a96d3ce
+    controlValues:
+      multiSelect: true
+      enableEmptyFilter: false
+      defaultToFirstItem: false
+      inverseSelection: false
+      searchAllOptions: false
+    defaultDataMask:
+      extraFormData: {}
+      filterState: {}
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
+  - id: NATIVE_FILTER-f_assignee
+    name: 담당자
+    filterType: filter_select
+    type: NATIVE_FILTER
+    targets:
+    - column:
+        name: assignee_name
+      datasetUuid: 8eb7db6f-3a8a-5988-9179-62e63a96d3ce
+    controlValues:
+      multiSelect: true
+      enableEmptyFilter: false
+      defaultToFirstItem: false
+      inverseSelection: false
+      searchAllOptions: false
+    defaultDataMask:
+      extraFormData: {}
+      filterState: {}
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
+  color_scheme: ''
+  cross_filters_enabled: false
+  refresh_frequency: 0
+theme_uuid: null
+version: 1.0.0

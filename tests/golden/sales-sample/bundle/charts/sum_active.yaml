@@ -1,0 +1,14 @@
+slice_name: 진행 중인 딜
+description: null
+certified_by: null
+certification_details: null
+viz_type: big_number_total
+params:
+  viz_type: big_number_total
+  metric: active_count
+  subtitle: 건
+query_context: null
+cache_timeout: null
+uuid: 07db1096-7fbe-5482-9931-5c9c24186e3b
+version: 1.0.0
+dataset_uuid: 147338b5-501a-58e6-9457-7f541847dff2

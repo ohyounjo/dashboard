@@ -17,6 +17,7 @@ from dashkit.sync import sync
 from conftest import copy_project, live_project
 
 TEMP = "zz-synctest"
+pytestmark = pytest.mark.integration
 KINDS_DELETE_ORDER = ("dashboard", "chart", "dataset", "database")
 
 

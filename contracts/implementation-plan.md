@@ -84,7 +84,9 @@ pytest==9.2.0
 | `up` | `docker compose up -d --build` 후 superset healthy까지 대기(시간 제한 300초) |
 | `check` | `tools: python -m dashkit check` |
 | `apply` | `check` → `load` → `sync` → `docker compose restart backend` |
-| `test` | `tools: pytest -q tests/` |
+| `test-unit` | 스택 없이 `pytest -m "not integration" tests/`(tools 이미지를 `docker run`으로 직접 실행) |
+| `test` | 별도 compose 프로젝트 `dashkit-test`(웹앱 18080, Superset 18088, 별도 볼륨, 상태 `.test/`)를 띄워 `pytest tests/` → 프로젝트 전환 검사 → 스택 삭제(`KEEP=1`이면 남김). 개발 스택의 `.state/`가 바뀌면 실패 |
+| `golden` | 번들 스냅샷 `tests/golden/` 갱신 |
 | `reset` | `down -v` 후 `.state/`, `.build/` 삭제(확인 문구 출력) |
 | `down`, `logs` | 그대로 |
 

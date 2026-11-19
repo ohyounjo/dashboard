@@ -1,6 +1,7 @@
 # PR의 화면을 변경 전(base)·변경 후(head)로 캡처해 PR 댓글로 비교한다.
 #
-# 1. capture (base, head 동시에): 전체 서비스를 띄우고(make env → up → apply) e2e/capture.mjs로 캡처
+# 1. capture (base, head 동시에): 전체 서비스를 띄우고(make env → up → apply) e2e/capture.mjs로 캡처.
+#    head 쪽은 캡처 뒤에 통합 테스트(make test)도 돌린다
 # 2. comment: 이미지를 ui-screenshots 브랜치에 올리고, PR에 비교 댓글을 달거나 고친다
 #
 # 캡처 스크립트(e2e/)는 항상 PR(head) 쪽 것을 쓴다. base에 e2e/가 없어도 동작한다.
@@ -14,6 +15,8 @@ on:
       - "projects/**"
       - "superset/**"
       - "dashkit/**"
+      - "contracts/**"
+      - "tests/**"
       - "docker-compose.yml"
       - "Makefile"
       - "e2e/**"
@@ -63,7 +66,7 @@ jobs:
   capture:
     needs: meta
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -106,10 +109,21 @@ jobs:
         working-directory: tools/e2e
         run: node capture.mjs "$RUNNER_TEMP/shots/${{ matrix.side }}"
 
+      # 통합 테스트(보강설계서 3-3). 이미 빌드된 이미지를 쓰도록 같은 작업에 붙인다.
+      # 러너 메모리를 아끼려고 캡처가 끝난 개발 스택을 먼저 내린다(볼륨은 남는다). make test는 별도 스택을 띄웠다 내린다.
+      - name: 통합 테스트 (make test)
+        if: matrix.side == 'head'
+        working-directory: app
+        run: |
+          make down
+          make test
+
       - name: 실패 시 컨테이너 로그
         if: failure()
         working-directory: app
-        run: docker compose logs --tail=200
+        run: |
+          docker compose logs --tail=200
+          docker compose -p dashkit-test logs --tail=200 || true
 
       - uses: actions/upload-artifact@v7
         if: always()

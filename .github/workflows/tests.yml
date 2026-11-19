@@ -1,0 +1,24 @@
+# PR마다 단위 테스트(make test-unit)를 돌린다. 스택 없이 tools 이미지만 쓴다.
+# 통합 테스트(make test)는 전체 스택이 필요하므로 화면 캡처 워크플로(ui-screenshots.yml)의 head 작업에서 돈다.
+name: 테스트
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: 단위 테스트 (make test-unit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - run: make test-unit

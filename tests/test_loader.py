@@ -11,9 +11,10 @@ from dashkit import db
 from dashkit.config import load_project
 from dashkit.loader import LoadError, load
 
-from conftest import PROJECTS, copy_project, read_csv, write_csv
+from conftest import BROKEN_CSV_ERRORS, PROJECTS, broken_csv_copy, copy_project, read_csv, write_csv
 
 PROJECT = "devtracker"
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="module")
@@ -52,42 +53,13 @@ def test_row_counts_match_csv(loaded, test_db):
     assert table_counts(test_db, csv_counts) == csv_counts
 
 
-def _broken_copy(tmp_path):
-    root = copy_project(PROJECT, tmp_path)
-    data = root / PROJECT / "data"
-
-    h, rows = read_csv(data / "issues.csv")
-    rows[0]["milestone_id"] = "ms99"          # 없는 참조
-    rows[1]["severity"] = "blocker"           # 잘못된 enum
-    write_csv(data / "issues.csv", h, rows)
-
-    h, rows = read_csv(data / "milestones.csv")
-    rows[2]["progress"] = "120"               # 범위 밖 숫자
-    write_csv(data / "milestones.csv", h, rows)
-
-    h, rows = read_csv(data / "docs.csv")
-    rows[0]["version"] = "2.1"                # 패턴 불일치
-    write_csv(data / "docs.csv", h, rows)
-
-    h, rows = read_csv(data / "tasks.csv")
-    rows.append(dict(rows[0]))                # 중복 키
-    write_csv(data / "tasks.csv", h, rows)
-    return root
-
-
 def test_broken_csv_reports_all_errors_and_keeps_db(loaded, test_db, tmp_path):
     before = snapshot(test_db)
-    root = _broken_copy(tmp_path)
+    root = broken_csv_copy(tmp_path)
     with pytest.raises(LoadError) as exc:
         load(load_project(PROJECT, root), dbname=test_db)
     errs = exc.value.errors
-    expected = [
-        ("data/issues.csv:2:milestone_id:", "ms99"),
-        ("data/issues.csv:3:severity:", "blocker"),
-        ("data/milestones.csv:4:progress:", "120"),
-        ("data/docs.csv:2:version:", "2.1"),
-        ("data/tasks.csv:18:id:", "T1"),
-    ]
+    expected = BROKEN_CSV_ERRORS
     for prefix, value in expected:
         assert any(e.startswith(prefix) and value in e for e in errs), (prefix, errs)
     assert len(errs) == len(expected), errs

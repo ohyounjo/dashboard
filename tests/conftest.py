@@ -55,6 +55,40 @@ def write_csv(path: Path, header: list[str], rows: list[dict]) -> None:
         w.writerows(rows)
 
 
+BROKEN_CSV_PROJECT = "devtracker"
+BROKEN_CSV_ERRORS = [
+    ("data/issues.csv:2:milestone_id:", "ms99"),
+    ("data/issues.csv:3:severity:", "blocker"),
+    ("data/milestones.csv:4:progress:", "120"),
+    ("data/docs.csv:2:version:", "2.1"),
+    ("data/tasks.csv:18:id:", "T1"),
+]
+
+
+def broken_csv_copy(tmp_path: Path) -> Path:
+    """devtracker 사본에 오류 5종을 심는다. 기대 오류는 BROKEN_CSV_ERRORS."""
+    root = copy_project(BROKEN_CSV_PROJECT, tmp_path)
+    data = root / BROKEN_CSV_PROJECT / "data"
+
+    h, rows = read_csv(data / "issues.csv")
+    rows[0]["milestone_id"] = "ms99"          # 없는 참조
+    rows[1]["severity"] = "blocker"           # 잘못된 enum
+    write_csv(data / "issues.csv", h, rows)
+
+    h, rows = read_csv(data / "milestones.csv")
+    rows[2]["progress"] = "120"               # 범위 밖 숫자
+    write_csv(data / "milestones.csv", h, rows)
+
+    h, rows = read_csv(data / "docs.csv")
+    rows[0]["version"] = "2.1"                # 패턴 불일치
+    write_csv(data / "docs.csv", h, rows)
+
+    h, rows = read_csv(data / "tasks.csv")
+    rows.append(dict(rows[0]))                # 중복 키
+    write_csv(data / "tasks.csv", h, rows)
+    return root
+
+
 def http(method: str, url: str, body=None, headers=None) -> tuple[int, dict | str]:
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})})

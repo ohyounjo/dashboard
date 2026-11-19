@@ -1,0 +1,7 @@
+{
+ "docs": [["id", "text"], ["title", "text"], ["type", "text"], ["version", "text"], ["updated", "date"], ["author_name", "text"], ["milestone", "text"], ["milestone_short", "text"], ["is_new", "boolean"], ["new_mark", "text"]],
+ "issues": [["id", "text"], ["title", "text"], ["severity", "text"], ["status", "text"], ["created", "date"], ["updated", "date"], ["assignee", "text"], ["milestone_id", "text"], ["milestone", "text"], ["milestone_short", "text"], ["assignee_name", "text"], ["is_open", "boolean"], ["resolved_mark", "text"]],
+ "kpi_snapshots": [["week_start", "date"], ["progress", "bigint"], ["open_issues", "bigint"], ["critical_open", "bigint"]],
+ "milestones": [["id", "text"], ["title", "text"], ["start_date", "date"], ["end_date", "date"], ["status", "text"], ["progress", "bigint"], ["days", "integer"], ["days_left", "integer"], ["status_label", "text"]],
+ "tasks": [["id", "text"], ["title", "text"], ["stage", "text"], ["milestone", "text"], ["milestone_short", "text"], ["assignee_name", "text"]]
+}

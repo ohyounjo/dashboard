@@ -1,0 +1,22 @@
+slice_name: 열린 이슈
+description: null
+certified_by: null
+certification_details: null
+viz_type: big_number
+params:
+  viz_type: big_number
+  metric:
+    expressionType: SQL
+    sqlExpression: MAX(open_issues)
+    label: 열린 이슈
+  x_axis: week_start
+  time_grain_sqla: P1W
+  compare_lag: 1
+  compare_suffix: 지난주 대비
+  show_trend_line: true
+  aggregation: LAST_VALUE
+query_context: null
+cache_timeout: null
+uuid: 7a38b7d7-249d-5c1a-8e3a-83eed00167c4
+version: 1.0.0
+dataset_uuid: dfcadfa0-715d-5f72-a6b1-047df47406d3
