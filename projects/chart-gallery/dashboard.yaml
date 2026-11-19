@@ -203,6 +203,50 @@ dashboards:
       - [g_graph_chart, g_tree_chart]
       - [g_gantt_chart]
 
+  # ------------------------------------------------------------ 배치 요소와 필터(보강설계서 4-3)
+  # 배치: 제목(header), 글(markdown), 대시보드 안 탭(tabs). 필터: 유형 4종, 기본값(default), 연쇄(parent), 적용 범위(charts).
+  # 문법은 contracts/chart-shorthand.md "대시보드와 필터", 확인 기록은 contracts/superset-notes.md 12절.
+  shelf_blocks:
+    title: 배치와 필터
+    cross_filters: true                      # 차트(막대·원)를 누르면 다른 차트가 걸러진다
+    charts:
+      - { key: b_total_crates, title: "상자 수", viz: big_number_total, dataset: harvests, metric: crate_total, format: ",d" }
+      - { key: b_total_weight, title: "무게(kg)", viz: big_number_total, dataset: harvests, metric: weight_total, format: ",d" }
+      - { key: b_total_count, title: "출하 건수", viz: big_number_total, dataset: harvests, metric: harvest_count, format: ",d" }
+      - { key: b_trend, title: "수확 추이", viz: line, dataset: harvests, x: picked_on, time_grain: P1W, metrics: [crate_total] }
+      - { key: b_by_orchard, title: "농원별 상자 수", viz: bar, dataset: harvests, x: orchard, metrics: [crate_total], format: ",d" }
+      - { key: b_by_fruit, title: "과일별 상자 수", viz: pie, dataset: harvests, groupby: [fruit], metric: crate_total }
+      - { key: b_by_outlet, title: "판매 경로별 무게", viz: bar, dataset: harvests, x: outlet, metrics: [weight_total], horizontal: true, format: ",d" }
+    layout:
+      - [{ header: 한눈에 보기 }]                                   # 제목은 한 행에 혼자 둔다
+      - [b_total_crates, b_total_weight, b_total_count]
+      - - markdown: |                                               # 글. 마크다운 문법, 너비·높이를 줄 수 있다
+            **읽는 법**
+
+            - 왼쪽 필터 막대에서 기간·골짜기·농원을 고르면 모든 차트가 걸러집니다.
+            - *단위* 필터는 이 옆의 추이 차트에만 적용됩니다.
+            - 아래 탭의 막대나 원 조각을 누르면 다른 차트가 그 값으로 걸러집니다.
+          width: 4
+        - { chart: b_trend, width: 8 }
+      - tabs:                                                       # 대시보드 안 탭
+          - { label: 농원별, rows: [[b_by_orchard]] }
+          - label: 과일·판매 경로별
+            rows:
+              - [{ header: 무엇을 어디로 }]
+              - [{ chart: b_by_fruit, width: 5 }, { chart: b_by_outlet, width: 7 }]
+    filters:
+      # 기간. dataset·column 없이 쓴다(각 차트 데이터셋의 기본 시간 열에 적용). default는 Superset 시간 범위 문자열
+      - { key: f_period, label: 기간, type: time_range, default: "2026-01-01 : 2026-07-01" }
+      - { key: f_valley, label: 골짜기, type: select, dataset: harvests, column: valley }
+      # 연쇄: 골짜기를 고르면 농원 선택지가 그 골짜기의 농원으로 줄어든다
+      - { key: f_orchard, label: 농원, type: select, dataset: harvests, column: orchard, parent: f_valley }
+      # 기본값이 있는 단일 선택. type을 생략하면 select다
+      - { key: f_grade, label: 등급, dataset: harvests, column: grade, multi: false, default: 상 }
+      # 숫자 범위. default는 [최소, 최대]
+      - { key: f_crates, label: 상자 수, type: number_range, dataset: harvests, column: crates, default: [5, 40] }
+      # 시간 단위. charts로 적용 범위를 추이 차트 하나로 좁힌다
+      - { key: f_grain, label: 단위, type: time_grain, dataset: harvests, default: P1M, charts: [b_trend] }
+
 tabs:
   - { key: basic_six, label: 기존 6종, icon: grid, sections: [{ type: superset, dashboard: shelf_basic }] }
   - { key: trend_set, label: 추이 묶음, icon: chart, sections: [{ type: superset, dashboard: shelf_trend }] }
@@ -210,3 +254,4 @@ tabs:
   - { key: cross_set, label: 교차·분포 묶음, icon: table, sections: [{ type: superset, dashboard: shelf_cross }] }
   - { key: links_set, label: 관계·기타 묶음, icon: flag, sections: [{ type: superset, dashboard: shelf_links }] }
   - { key: native_set, label: 원본 유형 묶음, icon: box, sections: [{ type: superset, dashboard: shelf_native }] }
+  - { key: blocks_set, label: 배치·필터 묶음, icon: list, sections: [{ type: superset, dashboard: shelf_blocks }] }

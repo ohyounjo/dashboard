@@ -117,6 +117,32 @@ class SupersetClient:
             raise SyncError(f"{kind} 목록 응답에 uuid 열이 없어 객체를 확인할 수 없음")
         return int(matches[0]["id"]) if matches else None
 
+    def list_objects(self, kind: str, columns: Iterable[str], filters: str = "", page_size: int = 100) -> list[dict]:
+        """목록 API를 끝까지 넘겨 모든 행을 모은다. filters는 rison 필터 항목(예: "(col:id,opr:eq,value:1)").
+
+        요청한 열이 응답에 없을 수 있다(종류마다 목록에 나오는 열이 다르다). 호출하는 쪽이 확인한다.
+        """
+        cols = ",".join(columns)
+        rows: dict[Any, dict] = {}
+        page = 0
+        while True:
+            # 정렬은 종류별 기본 순서를 쓴다(id 정렬은 허용되지 않는다). 페이지 사이에 순서가 흔들려도 id로 한 번만 센다
+            q = f"(filters:!({filters}),columns:!({cols}),page:{page},page_size:{page_size})"
+            body = self.expect(self.get(f"/api/v1/{KIND_PATHS[kind]}/", params={"q": q}), f"{kind} 목록 조회", ok=(200,))
+            batch = (body or {}).get("result") or []
+            for row in batch:
+                rows.setdefault(row.get("id", len(rows)), row)
+            page += 1
+            if len(batch) < page_size or page * page_size >= int((body or {}).get("count") or 0):
+                return list(rows.values())
+
+    def get_object(self, kind: str, obj_id: int) -> dict | None:
+        """객체 하나. 없으면 None."""
+        resp = self.get(f"/api/v1/{KIND_PATHS[kind]}/{obj_id}")
+        if resp.status_code == 404:
+            return None
+        return (self.expect(resp, f"{kind} {obj_id} 조회", ok=(200,)) or {}).get("result") or {}
+
     def delete_object(self, kind: str, obj_id: int) -> bool:
         """객체를 지운다. 이미 없으면(404) False."""
         resp = self.delete(f"/api/v1/{KIND_PATHS[kind]}/{obj_id}")

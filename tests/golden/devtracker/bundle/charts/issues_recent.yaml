@@ -24,3 +24,5 @@ cache_timeout: null
 uuid: 704a5ce5-8be0-5914-81a2-2a6c43cebbbc
 version: 1.0.0
 dataset_uuid: 8eb7db6f-3a8a-5988-9179-62e63a96d3ce
+is_managed_externally: true
+external_url: dashkit://devtracker/chart/issues_recent

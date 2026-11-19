@@ -33,7 +33,7 @@
   1. CHART 노드 `meta`에 **`chartId`가 반드시 있어야 한다**(자리표시 0도 된다. import 때 실제 id로 바뀐다). 없으면 `KeyError: 'chartId'`.
   2. CHART 노드 `meta.uuid`(차트 UUID)가 차트를 연결하는 열쇠다. 없으면 export 때 Superset이 배치 밖 차트로 보고 행을 하나 더 붙인다.
   [소스] `dashboard/importers/v1/utils.py`의 `update_id_refs`, `find_chart_uuids`. [실측]
-- **네이티브 필터 형식:** `metadata.native_filter_configuration[]`. 대상 데이터셋은 `targets[].datasetUuid`로 쓰면 import 때 `datasetId`로 바뀐다. `chartsInScope`는 import 때 **변환되지 않으므로 넣지 않는다**(`scope.rootPath: [ROOT_ID]`, `excluded: []`만 쓰고 열 이름이 같은 차트에 적용되게 둔다). [소스] `update_id_refs`, 공식 예제 `superset/examples/sales_dashboard/dashboard.yaml`. [실측] 아래 형식으로 임베드 화면에서 필터 표시·적용을 확인했다.
+- **네이티브 필터 형식:** `metadata.native_filter_configuration[]`. 대상 데이터셋은 `targets[].datasetUuid`로 쓰면 import 때 `datasetId`로 바뀐다. `chartsInScope`는 import 때 **변환되지 않으므로 넣지 않는다**(`scope.rootPath: [ROOT_ID]`, `excluded: []`만 쓰고 열 이름이 같은 차트에 적용되게 둔다). [소스] `update_id_refs`, 공식 예제 `superset/examples/sales_dashboard/dashboard.yaml`. [실측] 아래 형식으로 임베드 화면에서 필터 표시·적용을 확인했다. 유형 4종·기본값·연쇄·적용 범위는 12절.
 
 ```yaml
 metadata:
@@ -169,3 +169,69 @@ metadata:
 - **`chord`, `world_map`, `country_map`이 guest 화면에서 안 그려지는 이유:** 이 세 유형은 예전 조회 경로 `POST /superset/explore_json/`를 쓴다. guest 역할(`EmbedGuest`, 5절의 권한 3개)에는 `can_explore_json on Superset`이 없어 403이 난다. [실측] Superset 로그의 `POST /superset/explore_json/?form_data={"slice_id":…}&dashboard_id=… 403`.
 - [실측] 테스트 스택에서만 `EmbedGuest`에 `can_explore_json on Superset`을 임시로 더하니 세 유형 모두 guest 화면에서 그려졌다(확인 뒤 `init_guest_role.py`를 다시 돌려 권한 3개로 되돌렸다). **결정: 이 권한을 주지 않는다.** 5절의 "최소 권한 3개"를 넓히는 일이고, 이 경로에서 guest가 어디까지 조회할 수 있는지(4절 표와 같은 경계)를 실측하지 않았다.
 - 이 세 유형은 그래서 축약으로 올리지 않고 갤러리에도 넣지 않았다(임시로 넣어 확인한 뒤 뺐다). 원본 방식 조각은 `reference/chart-catalog.md` 4절에 남겼다. Superset 관리자 화면에서는 그려지고, 데이터 조회(`POST /api/v1/chart/data`)는 200이었다.
+
+## 11. "외부에서 관리됨" 표식과 상태 파일 없는 prune (보강설계서 3-5, 7절 D3)
+
+- 확인일: 2026-11-20. 방법: 테스트 스택(`dashkit-test`, Superset 6.1.0)에 갤러리 사본(임시 프로젝트)의 번들을 넣었다. 번들의 데이터베이스·데이터셋·차트·대시보드 YAML 최상위에 `is_managed_externally: true`, `external_url: "dashkit://<프로젝트>/<종류>/<키>"`를 더했다. 화면은 헤드리스 Chromium으로 관리자 로그인해 봤다. 소스는 이미지 안 `/app/superset`(파이썬)과 `/app/superset/static/assets`(프론트엔드 번들)다.
+
+| 질문 | 결과 | 근거 |
+|---|---|---|
+| import가 값을 저장하는가 | **저장한다. 네 종류 모두.** `GET /api/v1/<종류>/<id>`의 `is_managed_externally`가 true, 메타데이터 DB의 `external_url` 열에 문자열이 들어갔다 | [실측]. [소스] 모델의 `extra_import_fields = ["is_managed_externally", "external_url", …]`(`models/slice.py`, `models/dashboard.py`, `connectors/sqla/models.py`, `models/core.py`)를 `import_from_dict`가 `export_fields`와 합쳐 받는다(`models/helpers.py`). import 스키마 `ImportV1*Schema`에도 두 필드가 있다 |
+| 키를 빼고 다시 import하면 | **이전 값이 그대로 남는다.** `false`를 명시해야 풀린다 | [실측] true로 넣은 뒤 키 없는 번들을 다시 넣어도 true. `is_managed_externally: false`를 넣으면 false |
+| export에 나오는가 | **나오지 않는다**(네 종류 모두). import 전용 필드다 | [실측] `GET /api/v1/dashboard/export/` 결과의 키 목록. 그래서 `tests/test_superset_keys.py`의 대조 기준에 `superset-6.1.0-export/managed/import-only-keys.yaml`을 더했고, 저장 여부는 `tests/test_sync.py`의 통합 테스트가 본다 |
+| 목록 API 필터로 찾을 수 있는가 | **없다.** `filters:!((col:is_managed_externally,…))`, `(col:external_url,…)` 모두 400 `Filter column: … not allowed to filter` | [실측]. [소스] 각 `api.py`의 `search_columns`에 두 열이 없다 |
+| 목록 API 열로 읽을 수 있는가 | `is_managed_externally`: **차트·대시보드 목록에는 나온다.** 데이터셋·데이터베이스는 목록에는 없고 한 건 조회(`GET /api/v1/<종류>/<id>`)에만 나온다. `external_url`: **REST로는 어디서도 읽을 수 없다**(쓰기 전용) | [실측] `columns:!(id,uuid,is_managed_externally,external_url)`. [소스] `charts/api.py`의 `list_columns`, `dashboards/api.py`의 `BASE_LIST_COLUMNS`, `datasets/api.py`·`databases/api.py`의 `show_columns` |
+| 화면이 편집을 막는가 | **막는다**(아래 표). REST(`PUT`, import)는 막지 않으므로 sync는 그대로 덮어쓴다 | [실측] 표식 있는 객체와 없는 객체를 같은 화면에서 비교 |
+
+| 화면 | 표식이 있을 때 | 근거 |
+|---|---|---|
+| 대시보드 | **Edit dashboard 버튼이 없다.** 속성 창의 저장도 막힌다 | [실측] 버튼 유무. [소스] 프론트엔드 `dash_edit_perm && !is_managed_externally` |
+| 차트(Explore) | 저장 창에서 **Save (Overwrite)가 비활성**, Save as…만 된다. 차트 속성 창의 저장도 막힌다("This chart is managed externally, and can't be edited in Superset") | [실측] 라디오 버튼 상태. [소스] `canOverwriteSlice()`가 `!slice.is_managed_externally`를 본다 |
+| 데이터셋 편집 창 | **Save 비활성**, 안내 문구 "This dataset is managed externally, and can't be edited in Superset" | [실측] |
+| 데이터베이스 편집 창 | **Finish 비활성**, 같은 문구 | [실측] |
+| 목록의 삭제 | 막지 않는다(휴지통 아이콘이 그대로 있다) | [실측] |
+
+- **결론(설계서와 달라진 점):** 표식은 저장되고 화면 편집도 막힌다(D3 통과). 다만 "목록 API 필터로 표식 있는 객체를 찾는다"는 되지 않고, `external_url`은 읽을 수 없어 **표식만으로는 어느 프로젝트의 객체인지 알 수 없다.** 그래서 설계서의 두 방법을 합쳤다. 프로젝트는 대안이던 **데이터베이스 이름**(`dashkit-<프로젝트>`)에서 따라가고(DB → 데이터셋 → 차트 → 대시보드), 그 안에서 **표식이 있는 것만** 지움 대상으로 삼는다. 규칙은 `state-and-uuid.md`의 "표식"에 있다.
+- 따라가는 데 쓰는 조회([실측] 모두 200): 데이터베이스 `filters:!((col:database_name,opr:eq,value:'dashkit-<프로젝트>'))`, 데이터셋 `filters:!((col:database,opr:rel_o_m,value:<DB id>))`(열 `database.id`), 차트 목록의 `datasource_id`·`datasource_type`·`dashboards.id`·`is_managed_externally`, 대시보드 목록의 `is_managed_externally`. 목록은 `page_size:100`으로 읽고(20으로도 페이지 넘김 확인) `order_column:id`는 400(`Invalid order by column`)이라 기본 순서로 페이지를 넘기며 id로 한 번씩만 센다.
+- **`SYNC_LOCK_UI=0`:** `is_managed_externally: false`를 **명시해** 쓴다(키를 빼면 풀리지 않는다). 이때는 표식이 없으므로 "sync가 만든 객체"의 증거로 **UUID 버전**을 쓴다. sync의 UUID는 uuid5(버전 5)이고 Superset 화면·REST로 만든 객체는 uuid4다([소스] `models/helpers.py`의 `UUIDMixin`(`default=uuid.uuid4`). [실측] REST로 만든 차트의 UUID 버전 4, 통합 테스트).
+- 확인하지 않은 것: Superset의 다른 화면(SQL Lab에서 데이터셋 덮어쓰기, 태그·소유자 일괄 편집)이 표식을 보는지.
+
+## 12. 배치 노드와 필터 확장 (보강설계서 4-3)
+
+- 확인일: 2026-11-20. 방법: `projects/chart-gallery`의 `shelf_blocks` 대시보드를 테스트 스택에 적용하고 (1) 관리자 화면의 필터 설정 창에서 유형별 기본값을 **화면으로 넣어 저장**한 뒤 `GET /api/v1/dashboard/export/`로 형태를 확인하고, (2) 웹앱(guest 임베드) 화면에서 그려지는지와 필터가 적용되는지를 헤드리스 Chromium으로 봤다.
+
+### 12-1. 배치 노드
+
+| 노드 | 번들에 쓰는 형태 | 근거 |
+|---|---|---|
+| `HEADER` | `GRID`(또는 `TAB`)의 자식. `meta: {text, headerSize: MEDIUM_HEADER, background: BACKGROUND_TRANSPARENT}`. `ROW` 안에는 넣지 않는다 | [소스] 프론트엔드의 새 노드 기본값(`New header`, `headerSize`, `background`). [실측] import → export에 그대로 남고 guest 화면에 그려짐 |
+| `MARKDOWN` | `ROW`의 자식. `meta: {code, width, height}` | [소스] 예제 `examples/fcc_new_coder_survey/dashboard.yaml`, 프론트엔드 기본값(`width`, `height: 50`). [실측] |
+| `TABS` | `GRID`의 자식. `meta: {}`, `children`은 `TAB` | [소스] 같은 예제(`parents: [ROOT_ID, GRID_ID]`). [실측] |
+| `TAB` | `meta: {text}`. 자식은 `ROW`·`HEADER` | [소스] 같은 예제. 화면이 만드는 `defaultText`·`placeholder`는 없어도 된다. [실측] 탭 전환, 탭 안 차트 조회 |
+| `parents` | 뿌리부터 부모까지의 id 목록. 탭 안 차트는 `[ROOT_ID, GRID_ID, TABS-…, TAB-…, ROW-…]` | [소스] 같은 예제 |
+
+- 노드 id는 우리가 정한다(화면은 임의 문자열을 쓴다). 배치 안 위치에서 만든다: `ROW-<i>`, `HEADER-<i>`, `TABS-<i>`, `TAB-<i>-<t>`, 탭 안은 `ROW-<i>-<t>-<k>`, 글은 `MARKDOWN-<행 번호>-<칸>`.
+
+### 12-2. 필터 유형과 기본값
+
+화면에서 기본값을 넣고 저장한 뒤 export한 `native_filter_configuration` 항목이다(관계없는 키 생략).
+
+| 설정 `type` | `filterType` | `targets` | `controlValues`(화면 저장) | 화면이 저장한 `defaultDataMask` |
+|---|---|---|---|---|
+| `select` | `filter_select` | `[{column: {name}, datasetUuid}]` | `multiSelect`, `enableEmptyFilter`, `defaultToFirstItem`, `inverseSelection`, `searchAllOptions`, `creatable: true` | `{extraFormData: {filters: [{col, op: "IN", val: ["상"]}]}, filterState: {value: ["상"], label: "상", validateMessage: false, validateStatus: false, excludeFilterValues: true}}` |
+| `time_range` | `filter_time` | 없음(예제는 `[{}]`) | `enableEmptyFilter` | `{extraFormData: {time_range: "Last quarter"}, filterState: {value: "Last quarter"}}` |
+| `number_range` | `filter_range` | `[{column: {name}, datasetUuid}]` | `enableEmptyFilter`, `rangeDisplayMode: "slider-and-input"` | `{extraFormData: {filters: [{col, op: ">=", val: 5}, {col, op: "<=", val: 30}]}, filterState: {value: [5, 30], label: "5 ≤ x ≤ 30", validateMessage: ""}}` |
+| `time_grain` | `filter_timegrain` | `[{datasetUuid}]` | `enableEmptyFilter` | `{extraFormData: {time_grain_sqla: "P1M"}, filterState: {value: ["P1M"], label: "Month"}}` |
+
+- **번들에 쓰는 것:** `extraFormData`는 위와 같게, `filterState`는 `value`와 `label`만(`time_range`는 `value`만), `ownState: {}`. 화면 상태값(`validateMessage`, `validateStatus`, `excludeFilterValues`)과 `creatable`, `rangeDisplayMode`는 쓰지 않는다. [실측] 이 형태로 guest 화면의 필터 막대에 기본값이 보이고(기간 문자열, "상", 5–40, Month) 차트에 적용됐다(등급 기본값으로 출하 건수 240 → 123).
+- **기본값이 없는 필터**는 지금까지와 같이 `{extraFormData: {}, filterState: {}, ownState: {}}`다.
+- **`time_grain`은 데이터셋이 있어야 한다.** [실측] `targets: [{}]`로 바꾸면 선택지를 못 읽어 값이 `P1M` 그대로 보인다. 데이터셋이 있으면 "Month"와 선택지 14개가 나온다. 설계서 예시(`{ key, label, type: time_grain }`)와 달리 `dataset`을 필수로 했다.
+- **`time_range` 필터는 차트에 시간 조건이 있어야 적용된다.** [실측] 최소 params 차트에는 기본값 "Last quarter"(데이터가 없는 기간)를 줘도 숫자가 그대로였다. 필터 설정 창의 안내문도 같다("Dashboard time range filters apply to temporal columns defined in the filter section of each chart"). 화면에서 만든 차트에는 `adhoc_filters: [{clause: WHERE, subject: <시간 열>, operator: TEMPORAL_RANGE, comparator: "No filter", expressionType: SIMPLE}]`가 기본으로 붙는다(`superset-6.1.0-export/charts/`). 그래서 번들이 **`time_range` 필터가 있는 대시보드의 축약 차트**에 이 조건을 붙인다. [실측] 붙인 뒤 기본값 `2026-03-01 : 2026-04-01`로 상자 수 2,876 → 366.
+- **연쇄:** 자식 필터의 `cascadeParentIds: ["NATIVE_FILTER-<부모 키>"]`. [실측] guest 화면에서 부모(골짜기)를 하나 고르고 적용하면 자식(농원) 선택지가 6개 → 2개.
+- **적용 범위:** `scope: {rootPath: ["ROOT_ID"], excluded: [<차트 id>, …]}`. import가 `excluded`의 값을 "position의 `meta.chartId` → 실제 차트 id"로 바꾼다. [소스] `commands/dashboard/importers/v1/utils.py`의 `update_id_refs`(`id_map`). 자리표시 `chartId`가 모두 0이면 구분할 수 없으므로, `charts`를 쓴 필터가 있는 대시보드에서는 차트마다 다른 번호(1부터)를 쓴다. [실측] `excluded: [1, 2, 3, 5, 6, 7]`이 import 뒤 실제 id 6개로 바뀌었고, guest 화면에서 범위 안 차트만 필터 수가 하나 더 많았다(4 대 3). `chartsInScope`·`tabsInScope`는 여전히 쓰지 않는다(없어도 프론트엔드가 `scope`에서 계산한다).
+- **교차 필터:** `metadata.cross_filters_enabled: true`만 쓴다(`chart_configuration` 없이). [실측] guest 화면에서 막대를 누르면 다른 차트의 숫자가 바뀌었다.
+
+### 12-3. guest 임베드 화면의 한계
+
+- **기간(`time_range`) 필터는 값을 바꿀 수 없다.** 선택 창이 `GET /api/v1/time_range/`를 부르는데 guest 역할(5절의 권한 3개)에는 `can_read on TimeRange`가 없어 403이고, 창에 "Access is Denied"가 뜨며 APPLY가 비활성이다. [실측] `default`는 적용된다. 이 권한을 guest에게 줄지는 정하지 않았다(주지 않은 상태가 기본이다. 권한을 준 상태는 실측하지 않았다).
+- 필터 막대의 문구("Filters and controls", "Apply filters")는 영어다(언어 설정은 보강설계서 4-4, 6단계).

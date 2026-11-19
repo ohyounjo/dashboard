@@ -1,0 +1,16 @@
+# import만 받는 키(Superset 6.1.0). export에는 나오지 않지만 asset import가 읽어 저장하는 최상위 키 가운데
+# 번들(dashkit/sync/bundle.py)이 쓰는 것만 적는다. tests/test_superset_keys.py가 export 키와 합쳐 대조 기준으로 쓴다.
+#
+# 근거(contracts/superset-notes.md 11절):
+#   [소스] 모델의 extra_import_fields — superset/models/core.py(Database), connectors/sqla/models.py(SqlaTable),
+#          models/slice.py(Slice), models/dashboard.py(Dashboard). import_from_dict가 export_fields와 합쳐 받는다
+#          (superset/models/helpers.py). import 스키마(ImportV1*Schema)에도 두 필드가 있다.
+#   [실측] 2026-11-20 테스트 스택: 번들에 넣어 import하면 저장되고(GET /api/v1/<종류>/<id>의 is_managed_externally,
+#          메타데이터 DB의 external_url), GET /api/v1/dashboard/export/ 결과에는 두 키가 없다.
+#
+# Superset을 올릴 때: 새 버전 이미지에서 위 모델의 extra_import_fields를 다시 읽어 이 파일을 맞추고,
+# tests/test_sync.py의 표식 저장 테스트(통합)가 통과하는지 본다(contracts/superset-upgrade.md 3~4번과 함께).
+database: [is_managed_externally, external_url]
+dataset: [is_managed_externally, external_url]
+chart: [is_managed_externally, external_url]
+dashboard: [is_managed_externally, external_url]

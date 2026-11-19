@@ -156,3 +156,5 @@ columns:
   extra: null
 version: 1.0.0
 database_uuid: 5d69280a-42e4-58d7-b3cf-fa80e305fa8a
+is_managed_externally: true
+external_url: dashkit://devtracker/dataset/milestones

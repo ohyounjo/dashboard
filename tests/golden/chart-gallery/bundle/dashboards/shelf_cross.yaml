@@ -121,3 +121,5 @@ metadata:
   refresh_frequency: 0
 theme_uuid: null
 version: 1.0.0
+is_managed_externally: true
+external_url: dashkit://chart-gallery/dashboard/shelf_cross

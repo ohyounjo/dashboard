@@ -15,3 +15,5 @@ cache_timeout: null
 uuid: 2b40a759-1c81-55c6-bc78-9c61cc887192
 version: 1.0.0
 dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_bubble

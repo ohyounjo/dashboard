@@ -16,3 +16,5 @@ cache_timeout: null
 uuid: e5dc48b7-d439-5077-8cd5-41ba2b0a3209
 version: 1.0.0
 dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_scatter

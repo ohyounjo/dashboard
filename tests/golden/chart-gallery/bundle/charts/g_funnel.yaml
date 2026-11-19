@@ -14,3 +14,5 @@ cache_timeout: null
 uuid: 3f4ffece-aca8-5d93-8d02-94ccbcc7a359
 version: 1.0.0
 dataset_uuid: 80c1eb44-6a3f-5edf-a704-ee437a61a5a7
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_funnel

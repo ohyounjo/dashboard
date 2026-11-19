@@ -2,19 +2,22 @@
 
 1. 뷰 열 읽기(information_schema, dash_reader)  2. 번들 생성(.build/<프로젝트>/)
 3. 관리자 로그인  4. asset import  5. 대시보드마다 임베드 upsert
-6. prune(이전 managed.json − 이번 목록, 대시보드 → 차트 → 데이터셋 → DB)  7. embed.json, managed.json 원자적 쓰기
+6. prune((이전 managed.json ∪ Superset에서 찾은 이 프로젝트의 표식 객체) − 이번 목록, 대시보드 → 차트 → 데이터셋 → DB)
+7. embed.json, managed.json 원자적 쓰기
 """
 from __future__ import annotations
 
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping
 
 from ..config import Project, check_view_columns, object_uuid
-from .bundle import DATABASE_FILE, KINDS, _column_pairs, build_bundle, managed_objects, write_build, zip_bundle
-from .client import SupersetClient
+from .bundle import (DATABASE_FILE, KINDS, _column_pairs, build_bundle, database_name, lock_ui, managed_objects,
+                     write_build, zip_bundle)
+from .client import SupersetClient, _rison_str
 from .errors import SyncError
 
 __all__ = ["sync", "SyncError", "SupersetClient", "read_view_columns"]
@@ -98,6 +101,59 @@ def _union(a: Mapping[str, list[str]], b: Mapping[str, list[str]]) -> dict[str, 
     return out
 
 
+# ---------------------------------------------------------------- 표식으로 찾기
+
+def _made_by_sync(row: Mapping[str, object]) -> bool:
+    """sync가 만든 객체인지. 표식(is_managed_externally)이 있거나 UUID가 버전 5다.
+
+    Superset 화면에서 만든 객체는 표식이 없고 UUID가 버전 4다. 버전 5는 SYNC_LOCK_UI=0으로 만든 객체(표식의
+    is_managed_externally가 false)를 알아보기 위한 것이다(contracts/state-and-uuid.md "표식").
+    """
+    if row.get("is_managed_externally") is True:
+        return True
+    try:
+        return uuid.UUID(str(row.get("uuid"))).version == 5
+    except ValueError:
+        return False
+
+
+def find_marked(client: SupersetClient, project: Project) -> dict[str, list[str]]:
+    """Superset에서 이 프로젝트의 sync가 만든 객체를 찾는다(종류 → UUID 목록). 상태 파일 없이 prune 대상을 구하는 데 쓴다.
+
+    프로젝트는 데이터베이스 이름(`dashkit-<프로젝트>`)에서 따라간다: DB → 그 DB의 데이터셋 → 그 데이터셋의 차트 →
+    그 차트가 놓인 대시보드. 그 안에서 `_made_by_sync`인 것만 고른다. 다른 DB의 객체와 사람이 만든 객체는 들어가지 않는다.
+    """
+    found: dict[str, list[str]] = {k: [] for k in KINDS}
+    name = database_name(project)
+    db_uuid = object_uuid(project.name, "database", "main")
+    dbs = [r for r in client.list_objects("database", ["id", "uuid", "database_name"],
+                                          f"(col:database_name,opr:eq,value:{_rison_str(name)})")
+           if r.get("database_name") == name and str(r.get("uuid")) == db_uuid]
+    if not dbs:
+        return found
+    db_id = dbs[0]["id"]
+
+    datasets = [r for r in client.list_objects("dataset", ["id", "uuid", "database.id"],
+                                               f"(col:database,opr:rel_o_m,value:{int(db_id)})")
+                if (r.get("database") or {}).get("id") == db_id]
+    dataset_ids = {r["id"] for r in datasets}
+    for r in datasets:
+        # 데이터셋 목록에는 is_managed_externally 열이 없어 UUID 버전으로 먼저 보고, 아니면 한 건 조회로 확인한다
+        if _made_by_sync(r) or _made_by_sync(client.get_object("dataset", r["id"]) or {}):
+            found["dataset"].append(str(r["uuid"]))
+
+    charts = [r for r in client.list_objects(
+                  "chart", ["id", "uuid", "is_managed_externally", "datasource_id", "datasource_type", "dashboards.id"])
+              if r.get("datasource_type") == "table" and r.get("datasource_id") in dataset_ids]
+    found["chart"] = [str(r["uuid"]) for r in charts if _made_by_sync(r)]
+
+    dashboard_ids = {d.get("id") for r in charts for d in r.get("dashboards") or []}
+    if dashboard_ids:
+        found["dashboard"] = [str(r["uuid"]) for r in client.list_objects("dashboard", ["id", "uuid", "is_managed_externally"])
+                              if r.get("id") in dashboard_ids and _made_by_sync(r)]
+    return found
+
+
 # ---------------------------------------------------------------- sync
 
 def sync(
@@ -134,7 +190,7 @@ def sync(
     zip_path = write_build(files, zip_bytes, build_dir / project.name)
     current = managed_objects(project)
     log(f"· 번들: {zip_path} (데이터셋 {len(current['dataset'])}, 차트 {len(current['chart'])}, "
-        f"대시보드 {len(current['dashboard'])})")
+        f"대시보드 {len(current['dashboard'])}, Superset 화면 편집 {'차단' if lock_ui(os.environ) else '허용(SYNC_LOCK_UI=0)'})")
 
     password = os.environ.get("DATA_DB_READER_PASSWORD")
     if not password:
@@ -173,12 +229,14 @@ def sync(
         "dashboards": embeds,
     })
 
-    # 6. prune (이전 project가 달라도 지운다)
+    # 6. prune. 대상 = (managed.json의 이전 목록 ∪ Superset에서 찾은 이 프로젝트의 표식 객체) − 이번 목록.
+    # managed.json의 이전 목록은 project가 달라도 지운다(프로젝트 전환). 표식으로 찾는 쪽은 managed.json이 없어도 동작한다
+    candidates = _union(previous, find_marked(client, project))
     deleted, absent, failed = 0, 0, []
     leftovers: dict[str, list[str]] = {k: [] for k in KINDS}
     for kind in reversed(KINDS):
         keep = set(current[kind])
-        for u in previous.get(kind, []):
+        for u in candidates.get(kind, []):
             if u in keep:
                 continue
             try:

@@ -1,0 +1,26 @@
+slice_name: 판매 경로별 무게
+description: null
+certified_by: null
+certification_details: null
+viz_type: echarts_timeseries_bar
+params:
+  viz_type: echarts_timeseries_bar
+  x_axis: outlet
+  metrics:
+  - weight_total
+  groupby: []
+  orientation: horizontal
+  y_axis_format: ',d'
+  adhoc_filters:
+  - expressionType: SIMPLE
+    clause: WHERE
+    subject: picked_on
+    operator: TEMPORAL_RANGE
+    comparator: No filter
+query_context: null
+cache_timeout: null
+uuid: daba0e83-37fd-5636-a363-79fb5d0781ae
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/b_by_outlet

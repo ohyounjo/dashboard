@@ -15,3 +15,5 @@ cache_timeout: null
 uuid: bf545337-c339-57ee-b856-10f87e81e224
 version: 1.0.0
 dataset_uuid: f9f209f9-f660-5072-b4ff-d8acdd13bdf7
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_gantt_chart

@@ -13,3 +13,5 @@ cache_timeout: null
 uuid: ddf53c0a-4a1d-581c-b85b-64cfa29c4592
 version: 1.0.0
 dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_heatmap

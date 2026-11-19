@@ -25,3 +25,5 @@ cache_timeout: null
 uuid: 7e68cfe5-fdc2-5b9b-8ffa-40b4ac1ae50c
 version: 1.0.0
 dataset_uuid: 5ce7aeff-a8ee-5cb6-9ea8-a7d35e9ad2ee
+is_managed_externally: true
+external_url: dashkit://sales-sample/chart/client_list

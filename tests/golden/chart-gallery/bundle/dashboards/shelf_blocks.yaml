@@ -1,0 +1,424 @@
+dashboard_title: 배치와 필터
+description: null
+css: null
+slug: chart-gallery-shelf-blocks
+certified_by: null
+certification_details: null
+published: true
+uuid: d0cce367-c718-5205-b08c-9800ad388c0c
+position:
+  DASHBOARD_VERSION_KEY: v2
+  ROOT_ID:
+    type: ROOT
+    id: ROOT_ID
+    children:
+    - GRID_ID
+  GRID_ID:
+    type: GRID
+    id: GRID_ID
+    children:
+    - HEADER-1
+    - ROW-2
+    - ROW-3
+    - TABS-4
+    parents:
+    - ROOT_ID
+  HEADER-1:
+    type: HEADER
+    id: HEADER-1
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      text: 한눈에 보기
+      headerSize: MEDIUM_HEADER
+      background: BACKGROUND_TRANSPARENT
+  ROW-2:
+    type: ROW
+    id: ROW-2
+    children:
+    - CHART-b_total_crates
+    - CHART-b_total_weight
+    - CHART-b_total_count
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-b_total_crates:
+    type: CHART
+    id: CHART-b_total_crates
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 1
+      uuid: 67905a8e-831e-5662-a399-a0507f5006f5
+      sliceName: 상자 수
+      width: 4
+      height: 50
+  CHART-b_total_weight:
+    type: CHART
+    id: CHART-b_total_weight
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 2
+      uuid: 7a0de59e-f894-5bc3-9b52-d0c7956eea4b
+      sliceName: 무게(kg)
+      width: 4
+      height: 50
+  CHART-b_total_count:
+    type: CHART
+    id: CHART-b_total_count
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-2
+    meta:
+      chartId: 3
+      uuid: 2381ddce-0c3a-5f3d-a0b8-1080e3b7a027
+      sliceName: 출하 건수
+      width: 4
+      height: 50
+  ROW-3:
+    type: ROW
+    id: ROW-3
+    children:
+    - MARKDOWN-3-1
+    - CHART-b_trend
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  MARKDOWN-3-1:
+    type: MARKDOWN
+    id: MARKDOWN-3-1
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-3
+    meta:
+      code: '**읽는 법**
+
+
+        - 왼쪽 필터 막대에서 기간·골짜기·농원을 고르면 모든 차트가 걸러집니다.
+
+        - *단위* 필터는 이 옆의 추이 차트에만 적용됩니다.
+
+        - 아래 탭의 막대나 원 조각을 누르면 다른 차트가 그 값으로 걸러집니다.
+
+        '
+      width: 4
+      height: 50
+  CHART-b_trend:
+    type: CHART
+    id: CHART-b_trend
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - ROW-3
+    meta:
+      chartId: 4
+      uuid: bc7fd3b5-983c-58a0-aad4-6e876d7b412b
+      sliceName: 수확 추이
+      width: 8
+      height: 50
+  TABS-4:
+    type: TABS
+    id: TABS-4
+    children:
+    - TAB-4-1
+    - TAB-4-2
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    meta: {}
+  TAB-4-1:
+    type: TAB
+    id: TAB-4-1
+    children:
+    - ROW-4-1-1
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - TABS-4
+    meta:
+      text: 농원별
+  ROW-4-1-1:
+    type: ROW
+    id: ROW-4-1-1
+    children:
+    - CHART-b_by_orchard
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - TABS-4
+    - TAB-4-1
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-b_by_orchard:
+    type: CHART
+    id: CHART-b_by_orchard
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - TABS-4
+    - TAB-4-1
+    - ROW-4-1-1
+    meta:
+      chartId: 5
+      uuid: a2c21c43-e9fd-56e2-b439-56e7add0d8d7
+      sliceName: 농원별 상자 수
+      width: 12
+      height: 50
+  TAB-4-2:
+    type: TAB
+    id: TAB-4-2
+    children:
+    - HEADER-4-2-1
+    - ROW-4-2-2
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - TABS-4
+    meta:
+      text: 과일·판매 경로별
+  HEADER-4-2-1:
+    type: HEADER
+    id: HEADER-4-2-1
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - TABS-4
+    - TAB-4-2
+    meta:
+      text: 무엇을 어디로
+      headerSize: MEDIUM_HEADER
+      background: BACKGROUND_TRANSPARENT
+  ROW-4-2-2:
+    type: ROW
+    id: ROW-4-2-2
+    children:
+    - CHART-b_by_fruit
+    - CHART-b_by_outlet
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - TABS-4
+    - TAB-4-2
+    meta:
+      background: BACKGROUND_TRANSPARENT
+  CHART-b_by_fruit:
+    type: CHART
+    id: CHART-b_by_fruit
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - TABS-4
+    - TAB-4-2
+    - ROW-4-2-2
+    meta:
+      chartId: 6
+      uuid: 8fc60802-6776-56b9-b108-37ac68225054
+      sliceName: 과일별 상자 수
+      width: 5
+      height: 50
+  CHART-b_by_outlet:
+    type: CHART
+    id: CHART-b_by_outlet
+    children: []
+    parents:
+    - ROOT_ID
+    - GRID_ID
+    - TABS-4
+    - TAB-4-2
+    - ROW-4-2-2
+    meta:
+      chartId: 7
+      uuid: daba0e83-37fd-5636-a363-79fb5d0781ae
+      sliceName: 판매 경로별 무게
+      width: 7
+      height: 50
+metadata:
+  native_filter_configuration:
+  - id: NATIVE_FILTER-f_period
+    name: 기간
+    filterType: filter_time
+    type: NATIVE_FILTER
+    targets:
+    - {}
+    controlValues:
+      enableEmptyFilter: false
+    defaultDataMask:
+      extraFormData:
+        time_range: '2026-01-01 : 2026-07-01'
+      filterState:
+        value: '2026-01-01 : 2026-07-01'
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
+  - id: NATIVE_FILTER-f_valley
+    name: 골짜기
+    filterType: filter_select
+    type: NATIVE_FILTER
+    targets:
+    - column:
+        name: valley
+      datasetUuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+    controlValues:
+      multiSelect: true
+      enableEmptyFilter: false
+      defaultToFirstItem: false
+      inverseSelection: false
+      searchAllOptions: false
+    defaultDataMask:
+      extraFormData: {}
+      filterState: {}
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
+  - id: NATIVE_FILTER-f_orchard
+    name: 농원
+    filterType: filter_select
+    type: NATIVE_FILTER
+    targets:
+    - column:
+        name: orchard
+      datasetUuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+    controlValues:
+      multiSelect: true
+      enableEmptyFilter: false
+      defaultToFirstItem: false
+      inverseSelection: false
+      searchAllOptions: false
+    defaultDataMask:
+      extraFormData: {}
+      filterState: {}
+      ownState: {}
+    cascadeParentIds:
+    - NATIVE_FILTER-f_valley
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
+  - id: NATIVE_FILTER-f_grade
+    name: 등급
+    filterType: filter_select
+    type: NATIVE_FILTER
+    targets:
+    - column:
+        name: grade
+      datasetUuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+    controlValues:
+      multiSelect: false
+      enableEmptyFilter: false
+      defaultToFirstItem: false
+      inverseSelection: false
+      searchAllOptions: false
+    defaultDataMask:
+      extraFormData:
+        filters:
+        - col: grade
+          op: IN
+          val:
+          - 상
+      filterState:
+        label: 상
+        value:
+        - 상
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
+  - id: NATIVE_FILTER-f_crates
+    name: 상자 수
+    filterType: filter_range
+    type: NATIVE_FILTER
+    targets:
+    - column:
+        name: crates
+      datasetUuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+    controlValues:
+      enableEmptyFilter: false
+    defaultDataMask:
+      extraFormData:
+        filters:
+        - col: crates
+          op: '>='
+          val: 5
+        - col: crates
+          op: <=
+          val: 40
+      filterState:
+        label: 5 ≤ x ≤ 40
+        value:
+        - 5
+        - 40
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
+  - id: NATIVE_FILTER-f_grain
+    name: 단위
+    filterType: filter_timegrain
+    type: NATIVE_FILTER
+    targets:
+    - datasetUuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+    controlValues:
+      enableEmptyFilter: false
+    defaultDataMask:
+      extraFormData:
+        time_grain_sqla: P1M
+      filterState:
+        label: Month
+        value:
+        - P1M
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded:
+      - 1
+      - 2
+      - 3
+      - 5
+      - 6
+      - 7
+    description: ''
+  color_scheme: ''
+  cross_filters_enabled: true
+  refresh_frequency: 0
+theme_uuid: null
+version: 1.0.0
+is_managed_externally: true
+external_url: dashkit://chart-gallery/dashboard/shelf_blocks

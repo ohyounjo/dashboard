@@ -33,21 +33,25 @@
 | 차트 `key` | 프로젝트 전체에서 유일 |
 | 차트 `dataset` | `datasets`에 있음 (**없는 데이터셋 참조**) |
 | 차트 지표 문자열 | 그 데이터셋의 `metrics`에 있음(레지스트리의 `kind`가 `metric`·`metrics`인 필드) |
-| `layout` 항목 | 같은 대시보드 `charts`에 있음 (**배치에 없는 차트 키**). 모든 차트가 정확히 한 번 배치됨. 행의 지정 너비 합 ≤ 12, 너비 없는 항목 수 ≤ 남은 칸 |
+| `layout` 항목 | 차트 항목은 같은 대시보드 `charts`에 있음 (**배치에 없는 차트 키**). 모든 차트가 대시보드 안 탭(`tabs[].rows`)을 포함해 정확히 한 번 배치됨. 행(탭 안 행 포함)의 지정 너비 합 ≤ 12, 너비 없는 항목(차트·글) 수 ≤ 남은 칸. 제목(`header`)은 한 행에 혼자. 제목·글 항목의 형식(빈 글 금지, 허용 필드)은 스키마가 본다 |
 | `filters[].key` | 대시보드 안에서 유일 |
+| `filters[].type` | 생략하면 `select`. 유형별 필수 필드(스키마): `select`·`number_range`는 `dataset`·`column`, `time_grain`은 `dataset`. 유형에 없는 필드 금지: `time_range`에는 `dataset`·`column`·`multi`·`parent`, `number_range`에는 `multi`·`parent`, `time_grain`에는 `column`·`multi`·`parent` |
 | `filters[].dataset` | `datasets`에 있음 |
+| `filters[].default` | 유형에 맞는 형식. `select`: 값 또는 비어 있지 않은 값 목록(`multi: false`면 하나), `number_range`: `[최소, 최대]`(한쪽 `null` 가능, 최소 ≤ 최대), `time_range`: 비어 있지 않은 문자열, `time_grain`: `P1D`·`P1W`·`P1M`·`P3M`·`P1Y` |
+| `filters[].parent` | 같은 대시보드의 필터 키. 자기 자신이 아니고 순환하지 않음 |
+| `filters[].charts` | 같은 대시보드 `charts`의 키(비어 있지 않고 중복 없음) |
 | 탭 `key` | 유일 |
 | superset 섹션 `dashboard` | `dashboards`에 있음 |
-| gantt·kanban `dataset` | `datasets`에 있음 |
-| kanban `columns[].value` | 칸 안에서 유일 |
-| gantt `range` | start ≤ end |
+| 위젯 섹션 `dataset` | `datasets`에 있음 |
+| 위젯 매니페스트의 `x-unique` 표시(kanban `columns[].value`) | 배열 안에서 유일 |
+| 위젯 매니페스트의 `x-date-range` 표시(gantt `range`) | start ≤ end |
 | `table:` 데이터셋의 열 참조 | schema 열로 즉시 확인(아래 "열 참조" 목록과 같은 대상) |
 
 ### 열 참조 검사 (DB 필요: `dashkit load`가 뷰를 만든 직후, 같은 트랜잭션 안)
 
 `config.referenced_columns(project)`가 `{데이터셋: {열: [출처, …]}}`를 돌려준다. 로더는 `information_schema.columns`의 실제 뷰 열과 비교하고, 없으면 롤백하며 `dashboard.yaml:<출처>: 데이터셋 '<d>' 뷰에 열 '<c>'가 없음`을 출력한다. **뷰에 없는 필터 열**도 이 단계에서 잡는다.
 
-출처: 데이터셋 `labels`의 열(지표 이름 제외), 필터 `column`, 축약 차트에서 레지스트리의 `kind`가 `column`·`columns`·`order_by`인 필드(예: `x`·`time_column`·`groupby`·`columns`·`order_by`, `heatmap`의 `y`, `sankey`의 `source`·`target`. 유형별 필드는 `chart-shorthand.md`의 표. `order_by`의 지표 라벨은 제외), gantt `fields.*`·`sort`, kanban `group_by`·`card.title`·`card.chips`·`filter.column`. `viz_type` 원본 차트의 `params`는 검사하지 않는다.
+출처: 데이터셋 `labels`의 열(지표 이름 제외), 필터 `column`(`select`·`number_range`. `time_range`·`time_grain` 필터는 열을 참조하지 않는다), 축약 차트에서 레지스트리의 `kind`가 `column`·`columns`·`order_by`인 필드(예: `x`·`time_column`·`groupby`·`columns`·`order_by`, `heatmap`의 `y`, `sankey`의 `source`·`target`. 유형별 필드는 `chart-shorthand.md`의 표. `order_by`의 지표 라벨은 제외), 위젯 섹션에서 매니페스트(`web/widgets/<유형>/widget.json`, [widgets.md](widgets.md))에 `x-column` 표시가 있는 옵션(gantt `fields.*`·`sort`, kanban `group_by`·`card.title`·`card.chips`·`filter.column`). `viz_type` 원본 차트의 `params`는 검사하지 않는다.
 
 ## `dashkit/config.py` 공개 인터페이스
 
@@ -66,11 +70,12 @@ def load_project(name: str, projects_dir: Path = Path("projects")) -> Project   
 def object_uuid(project: str, kind: str, key: str) -> str
 def resolve_as_of(project: Project, today: date | None = None) -> date
 def table_order(project: Project) -> list[str]                  # ref 위상 정렬(적재 순서)
-def widget_datasets(project: Project) -> set[str]               # gantt·kanban이 참조한 데이터셋 = /api/data 허용 목록
+def widget_datasets(project: Project) -> set[str]               # 위젯 섹션이 참조한 데이터셋 = /api/data 허용 목록
 def referenced_columns(project: Project) -> dict[str, dict[str, list[str]]]
 def check_view_columns(project: Project, view_columns: dict[str, set[str]]) -> list[str]   # 오류 목록(없으면 [])
 def charts(project: Project) -> Iterator[tuple[str, dict]]       # (대시보드 키, 차트)
-def load_schema(name: str) -> dict                               # 계약의 JSON Schema(dashboard.schema.json은 차트 유형 정의를 합성한 결과)
+def layout_blocks(dashboard: dict) -> list[dict]                 # layout → 블록(row/header/tabs). 너비·높이 기본값을 채운다
+def load_schema(name: str) -> dict                               # 계약의 JSON Schema(dashboard.schema.json은 차트 유형 정의와 위젯 섹션 정의를 합성한 결과)
 ```
 
 CLI: `python -m dashkit {check|load|sync|api|gen}`. `gen`은 계약 문서의 생성 구간을 레지스트리에서 다시 쓴다(`--check`는 확인만). 모든 하위 명령은 `PROJECT`, `PROJECTS_DIR`(기본 `/app/projects`) 환경변수를 쓴다.

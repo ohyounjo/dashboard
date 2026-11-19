@@ -20,3 +20,5 @@ cache_timeout: null
 uuid: 70d4c5de-1cfe-57f0-a152-3cac8b497008
 version: 1.0.0
 dataset_uuid: dfcadfa0-715d-5f72-a6b1-047df47406d3
+is_managed_externally: true
+external_url: dashkit://devtracker/chart/kpi_critical

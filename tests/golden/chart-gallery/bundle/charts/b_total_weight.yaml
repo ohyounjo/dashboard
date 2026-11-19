@@ -1,0 +1,22 @@
+slice_name: 무게(kg)
+description: null
+certified_by: null
+certification_details: null
+viz_type: big_number_total
+params:
+  viz_type: big_number_total
+  metric: weight_total
+  y_axis_format: ',d'
+  adhoc_filters:
+  - expressionType: SIMPLE
+    clause: WHERE
+    subject: picked_on
+    operator: TEMPORAL_RANGE
+    comparator: No filter
+query_context: null
+cache_timeout: null
+uuid: 7a0de59e-f894-5bc3-9b52-d0c7956eea4b
+version: 1.0.0
+dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/b_total_weight

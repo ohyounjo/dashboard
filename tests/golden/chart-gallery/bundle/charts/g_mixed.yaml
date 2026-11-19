@@ -23,3 +23,5 @@ cache_timeout: null
 uuid: 546e6c2a-ee54-5c88-bc89-f4f624e4e30d
 version: 1.0.0
 dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_mixed

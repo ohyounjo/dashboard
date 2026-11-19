@@ -370,18 +370,64 @@
               "maximum": 200
             }
           }
+        },
+        {
+          "description": "제목(Superset HEADER). 한 행에 혼자 둔다",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "header"
+          ],
+          "properties": {
+            "header": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "description": "글(Superset MARKDOWN). 마크다운 문법을 쓴다",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "markdown"
+          ],
+          "properties": {
+            "markdown": {
+              "type": "string",
+              "minLength": 1
+            },
+            "width": {
+              "description": "12칸 격자 중 칸 수",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            },
+            "height": {
+              "description": "Superset 격자 높이 단위(기본: 같은 행 차트의 가장 큰 높이, 차트가 없으면 20)",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 200
+            }
+          }
         }
       ]
+    },
+    "layout_row": {
+      "description": "행. 차트·글 항목의 목록이거나 제목 하나",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": {
+        "$ref": "#/$defs/layout_item"
+      }
     },
     "filter": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "key",
-        "label",
-        "type",
-        "dataset",
-        "column"
+        "label"
       ],
       "properties": {
         "key": {
@@ -392,22 +438,82 @@
           "minLength": 1
         },
         "type": {
+          "description": "select(값 고르기, 기본) / time_range(기간) / number_range(숫자 범위) / time_grain(시간 단위). 유형별로 쓸 수 있는 필드는 contracts/chart-shorthand.md의 '필터' 표",
           "enum": [
-            "select"
-          ]
+            "select",
+            "time_range",
+            "number_range",
+            "time_grain"
+          ],
+          "default": "select"
         },
         "multi": {
+          "description": "select 전용",
           "type": "boolean",
           "default": true
         },
         "dataset": {
-          "description": "선택지를 읽을 데이터셋. 같은 열 이름을 가진 이 대시보드의 차트에 적용된다",
+          "description": "select·number_range: 선택지(범위)를 읽을 데이터셋. 같은 열 이름을 가진 이 대시보드의 차트에 적용된다. time_grain: 고를 수 있는 단위를 읽을 데이터셋",
           "$ref": "#/$defs/key"
         },
         "column": {
+          "description": "select·number_range 전용",
           "$ref": "#/$defs/column"
+        },
+        "default": {
+          "description": "기본값. select: 값 또는 값 목록, number_range: [최소, 최대], time_range: Superset 시간 범위 문자열, time_grain: P1D 등"
+        },
+        "parent": {
+          "description": "select 전용. 이 필터의 선택지를 좁히는 상위 필터의 key(연쇄)",
+          "$ref": "#/$defs/key"
+        },
+        "charts": {
+          "description": "이 필터를 적용할 차트 key 목록. 생략하면 대시보드의 모든 차트",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/key"
+          }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "select",
+                  "number_range"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "dataset",
+              "column"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "const": "time_grain"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "dataset"
+            ]
+          }
+        }
+      ]
     },
     "dashboard": {
       "type": "object",
@@ -429,17 +535,56 @@
             "$ref": "#/$defs/chart"
           }
         },
+        "cross_filters": {
+          "description": "차트를 누르면 같은 대시보드의 다른 차트가 걸러진다(Superset cross filter)",
+          "type": "boolean",
+          "default": false
+        },
         "layout": {
-          "description": "행 목록. 각 행은 차트 참조 목록. 모든 차트는 정확히 한 번 배치한다",
+          "description": "행 목록. 각 항목은 행(차트·글 목록 또는 제목 하나)이거나 대시보드 안 탭 묶음({ tabs })이다. 모든 차트는 탭 안을 포함해 정확히 한 번 배치한다",
           "type": "array",
           "minItems": 1,
           "items": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 12,
-            "items": {
-              "$ref": "#/$defs/layout_item"
-            }
+            "oneOf": [
+              {
+                "$ref": "#/$defs/layout_row"
+              },
+              {
+                "description": "대시보드 안 탭(Superset TABS)",
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "tabs"
+                ],
+                "properties": {
+                  "tabs": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "label",
+                        "rows"
+                      ],
+                      "properties": {
+                        "label": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "rows": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "$ref": "#/$defs/layout_row"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
           }
         },
         "filters": {
@@ -488,9 +633,7 @@
       "properties": {
         "type": {
           "enum": [
-            "superset",
-            "gantt",
-            "kanban"
+            "superset"
           ]
         }
       },
@@ -506,32 +649,9 @@
           "then": {
             "$ref": "#/$defs/s_superset"
           }
-        },
-        {
-          "if": {
-            "properties": {
-              "type": {
-                "const": "gantt"
-              }
-            }
-          },
-          "then": {
-            "$ref": "#/$defs/s_gantt"
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "type": {
-                "const": "kanban"
-              }
-            }
-          },
-          "then": {
-            "$ref": "#/$defs/s_kanban"
-          }
         }
-      ]
+      ],
+      "description": "섹션. superset은 여기 정의하고, 위젯 유형의 enum·분기·s_<유형> 정의는 web/widgets/<유형>/widget.json에서 로딩 때 합성한다(dashkit/widgets.py)"
     },
     "s_superset": {
       "type": "object",
@@ -578,167 +698,6 @@
           },
           "tone": {
             "$ref": "#/$defs/tone"
-          }
-        }
-      }
-    },
-    "s_gantt": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "type",
-        "dataset",
-        "fields"
-      ],
-      "properties": {
-        "type": true,
-        "title": {
-          "type": "string"
-        },
-        "dataset": {
-          "$ref": "#/$defs/key"
-        },
-        "fields": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "label",
-            "start",
-            "end"
-          ],
-          "properties": {
-            "label": {
-              "$ref": "#/$defs/column"
-            },
-            "start": {
-              "description": "date 열",
-              "$ref": "#/$defs/column"
-            },
-            "end": {
-              "description": "date 열",
-              "$ref": "#/$defs/column"
-            },
-            "progress": {
-              "description": "0~100 숫자 열",
-              "$ref": "#/$defs/column"
-            },
-            "status": {
-              "$ref": "#/$defs/column"
-            }
-          }
-        },
-        "statuses": {
-          "$ref": "#/$defs/status_map"
-        },
-        "range": {
-          "description": "축 범위. 생략하면 행의 최소 start ~ 최대 end",
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "start",
-            "end"
-          ],
-          "properties": {
-            "start": {
-              "$ref": "#/$defs/date"
-            },
-            "end": {
-              "$ref": "#/$defs/date"
-            }
-          }
-        },
-        "sort": {
-          "description": "정렬 열(오름차순). 생략하면 start",
-          "$ref": "#/$defs/column"
-        }
-      }
-    },
-    "s_kanban": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "type",
-        "dataset",
-        "group_by",
-        "columns",
-        "card"
-      ],
-      "properties": {
-        "type": true,
-        "title": {
-          "type": "string"
-        },
-        "dataset": {
-          "$ref": "#/$defs/key"
-        },
-        "group_by": {
-          "$ref": "#/$defs/column"
-        },
-        "columns": {
-          "description": "칸 순서. group_by 값이 어느 칸에도 없으면 그 카드는 표시하지 않고 콘솔 경고",
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "value",
-              "label"
-            ],
-            "properties": {
-              "value": {
-                "type": "string"
-              },
-              "label": {
-                "type": "string",
-                "minLength": 1
-              },
-              "icon": {
-                "description": "이 칸 카드 제목 앞에 붙는 이모지",
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 8
-              },
-              "tone": {
-                "$ref": "#/$defs/tone"
-              }
-            }
-          }
-        },
-        "card": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "title"
-          ],
-          "properties": {
-            "title": {
-              "$ref": "#/$defs/column"
-            },
-            "chips": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/column"
-              }
-            }
-          }
-        },
-        "filter": {
-          "description": "칸반 위 선택 상자. 선택지는 행의 고유값(정렬)",
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "column",
-            "label"
-          ],
-          "properties": {
-            "column": {
-              "$ref": "#/$defs/column"
-            },
-            "label": {
-              "type": "string",
-              "minLength": 1
-            }
           }
         }
       }

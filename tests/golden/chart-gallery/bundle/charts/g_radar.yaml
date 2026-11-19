@@ -28,3 +28,5 @@ cache_timeout: null
 uuid: e11bec6e-338f-5b19-aa2c-67322e4347e0
 version: 1.0.0
 dataset_uuid: b24d5f1a-2ec1-5add-b7cd-272ae8daceb9
+is_managed_externally: true
+external_url: dashkit://chart-gallery/chart/g_radar

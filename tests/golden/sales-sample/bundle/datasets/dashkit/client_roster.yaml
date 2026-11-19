@@ -125,3 +125,5 @@ columns:
   extra: null
 version: 1.0.0
 database_uuid: 5414c52b-d139-5886-870c-5d996ca67a15
+is_managed_externally: true
+external_url: dashkit://sales-sample/dataset/client_roster
