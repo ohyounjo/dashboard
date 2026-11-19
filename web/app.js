@@ -1,0 +1,421 @@
+// 웹앱 셸: /api/app으로 탭·섹션을 받아 그린다. 탭·섹션·데이터셋·열 이름은 코드에 없다.
+import S from "./strings.js";
+import { icon } from "./icons.js";
+
+const WIDGET_TYPES = ["gantt", "kanban"];        // 셸이 import()할 수 있는 위젯 유형
+const THEME_KEY = "dashboard-theme";             // localStorage 키(수동 테마 선택)
+const CONNECT_TIMEOUT_MS = 30000;                // Superset iframe 응답 대기 상한
+const SIZE_POLL_MS = 2000;                       // 높이 자동 맞춤 주기(보이는 탭만)
+const HEX = /^#[0-9A-Fa-f]{6}$/;
+
+const root = document.documentElement;
+const $ = (id) => document.getElementById(id);
+const media = (q) => (window.matchMedia ? window.matchMedia(q) : null);
+const darkQuery = media("(prefers-color-scheme: dark)");
+const reducedMotion = !!media("(prefers-reduced-motion: reduce)")?.matches;
+
+/** 요소 생성. 문자열 자식은 텍스트 노드로 넣는다(innerHTML 없음). */
+function h(tag, attrs = {}, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k === "text") el.textContent = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : String(v));
+  }
+  for (const c of children.flat()) {
+    if (c == null || c === false) continue;
+    el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  }
+  return el;
+}
+
+/* ---------------- 테마 ---------------- */
+
+const embeds = new Set(); // 임베드된 대시보드(SDK 반환 객체)
+
+function currentTheme() {
+  const t = root.getAttribute("data-theme");
+  if (t === "dark" || t === "light") return t;
+  return darkQuery && darkQuery.matches ? "dark" : "light";
+}
+const supersetMode = () => (currentTheme() === "dark" ? "dark" : "default");
+
+function setEmbedTheme(d) {
+  try { d.setThemeMode(supersetMode()); } catch (e) { /* iframe이 사라진 경우 */ }
+}
+
+function paintTheme() {
+  const cur = currentTheme();
+  const next = cur === "dark" ? "light" : "dark";
+  $("themeLabel").textContent = next === "dark" ? S.themeToDark : S.themeToLight;
+  $("themeBtn").setAttribute("aria-label", S.themeButtonLabel(next));
+  $("themeBtn").title = S.theme;
+  $("themeIco").replaceChildren(icon(next === "dark" ? "moon" : "sun"));
+  embeds.forEach(setEmbedTheme);
+}
+
+function initTheme() {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === "dark" || saved === "light") root.setAttribute("data-theme", saved);
+  } catch (e) { /* 저장소 사용 불가 */ }
+  $("themeBtn").addEventListener("click", () => {
+    const next = currentTheme() === "dark" ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* 저장소 사용 불가 */ }
+    paintTheme();
+  });
+  if (darkQuery) {
+    const onChange = () => { if (!root.hasAttribute("data-theme")) paintTheme(); };
+    darkQuery.addEventListener ? darkQuery.addEventListener("change", onChange) : darkQuery.addListener(onChange);
+  }
+  paintTheme();
+}
+
+/* 메인 컬러 덮어쓰기: --brand-*를 채우면 styles.css의 3단 토큰이 그대로 이 값을 쓴다. */
+const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+const toHex = (c) => "#" + c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+const mix = (a, b, t) => toHex(rgb(a).map((v, i) => v * t + rgb(b)[i] * (1 - t)));
+function luminance(hex) {
+  const [r, g, b] = rgb(hex).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+const contrast = (a, b) => { const [x, y] = [luminance(a), luminance(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+const onColor = (bg, light, dark) => (contrast(bg, light) >= contrast(bg, dark) ? light : dark);
+
+function applyBrand(theme) {
+  const p = theme && theme.primary;
+  if (!p || !HEX.test(p.light || "") || !HEX.test(p.dark || "")) return;
+  const s = root.style;
+  s.setProperty("--brand-light", p.light);
+  s.setProperty("--brand-soft-light", mix(p.light, "#FFFFFF", 0.11));
+  s.setProperty("--brand-on-light", onColor(p.light, "#FFFFFF", "#141833"));
+  s.setProperty("--brand-dark", p.dark);
+  s.setProperty("--brand-soft-dark", mix(p.dark, "#171B2E", 0.16));
+  s.setProperty("--brand-on-dark", onColor(p.dark, "#FFFFFF", "#0E1120"));
+}
+
+/* ---------------- 상태 화면 ---------------- */
+
+function stateBox({ tone, iconName, title, body, onRetry, role = "alert" }) {
+  return h("div", { class: "state", role, "data-tone": tone },
+    h("div", { class: "badge" }, icon(iconName)),
+    h("h3", { text: title }),
+    body ? h("p", { text: body }) : null,
+    onRetry ? h("div", { class: "actions" },
+      h("button", { type: "button", class: "btn primary", onclick: onRetry }, icon("refresh"), S.retry)) : null);
+}
+
+function dashboardSkeleton() {
+  return h("div", { class: "sk", role: "status", "aria-busy": "true" },
+    h("div", { class: "sk-note" }, S.dashboardLoading),
+    h("div", { class: "sk-row" }, h("div", { class: "sk-block tile" }), h("div", { class: "sk-block tile" }), h("div", { class: "sk-block tile" })),
+    h("div", { class: "sk-row" }, h("div", { class: "sk-block chart" }), h("div", { class: "sk-block chart" })));
+}
+
+function widgetSkeleton() {
+  return h("div", { class: "sk", role: "status", "aria-busy": "true" },
+    h("div", { class: "sk-note" }, S.sectionLoading),
+    h("div", { class: "sk-block line" }),
+    h("div", { class: "sk-block bar" }), h("div", { class: "sk-block bar" }), h("div", { class: "sk-block bar" }));
+}
+
+/* ---------------- 네트워크 ---------------- */
+
+class SectionError extends Error {
+  constructor(kind, body) { super(kind); this.kind = kind; this.body = body; }
+}
+
+async function readDetail(res) {
+  try { const j = await res.json(); return j && typeof j.detail === "string" ? j.detail : null; } catch (e) { return null; }
+}
+
+function withTimeout(promise, ms) {
+  let t;
+  return Promise.race([
+    promise.finally(() => clearTimeout(t)),
+    new Promise((_, reject) => { t = setTimeout(() => reject(new SectionError("connect")), ms); }),
+  ]);
+}
+
+/* ---------------- Superset 섹션 ---------------- */
+
+function supersetSection(container, sec, ctx) {
+  const wrap = h("div", { class: "embed" });
+  const mount = h("div", { class: "embed-mount" });
+  const overlay = h("div");
+  wrap.append(mount, overlay);
+  container.append(wrap);
+
+  let dash = null, gen = 0, poll = null;
+
+  function teardown() {
+    clearInterval(poll); poll = null;
+    if (dash) { embeds.delete(dash); try { dash.unmount(); } catch (e) { /* 무시 */ } dash = null; }
+    mount.replaceChildren();
+  }
+
+  function showError(err) {
+    teardown();
+    wrap.className = "embed is-error";
+    const k = err instanceof SectionError ? err.kind : "connect";
+    const box =
+      k === "notApplied" ? { tone: "primary", iconName: "upload", title: S.notAppliedTitle, body: S.notAppliedBody }
+      : k === "token" ? { tone: "warn", iconName: "key", title: S.tokenErrorTitle, body: err.body }
+      : { tone: "bad", iconName: "plug", title: S.connectErrorTitle, body: S.connectErrorBody(ctx.supersetUrl) };
+    overlay.replaceChildren(stateBox({ ...box, onRetry: load }));
+  }
+
+  async function fetchGuestToken() {
+    let res;
+    try {
+      res = await fetch("/api/guest-token", {
+        method: "POST", cache: "no-store",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ dashboard: sec.dashboard }),
+      });
+    } catch (e) { throw new SectionError("token", S.tokenErrorBody.network); }
+    if (res.ok) {
+      const j = await res.json().catch(() => ({}));
+      if (j && typeof j.token === "string") return j.token;
+      throw new SectionError("token", S.tokenErrorBody.server(res.status));
+    }
+    const detail = await readDetail(res);
+    if (res.status === 409 && detail === "not_applied") throw new SectionError("notApplied");
+    if (res.status === 404 && detail === "unknown_dashboard") throw new SectionError("token", S.tokenErrorBody.unknown_dashboard);
+    throw new SectionError("token", S.tokenErrorBody.server(res.status));
+  }
+
+  function iframe() { return mount.querySelector("iframe"); }
+
+  function measure() {
+    const d = dash, f = iframe();
+    if (!d || !f || sec.height) return;
+    d.getScrollSize().then((size) => {
+      if (d !== dash || !size || !(size.height > 0)) return;
+      const px = Math.ceil(size.height) + "px";
+      if (f.style.height !== px) f.style.height = px;
+    }).catch(() => { /* 다음 주기에 다시 */ });
+  }
+
+  async function load() {
+    const my = ++gen;
+    teardown();
+    if (!sec.embed_id) { showError(new SectionError("notApplied")); return; }
+    wrap.className = "embed is-loading";
+    overlay.replaceChildren(dashboardSkeleton());
+    const started = Date.now();
+    try {
+      const sdk = window.supersetEmbeddedSdk;
+      if (!sdk || typeof sdk.embedDashboard !== "function") throw new SectionError("connect");
+      const pending = sdk.embedDashboard({
+        id: sec.embed_id,
+        supersetDomain: ctx.supersetUrl,
+        mountPoint: mount,
+        fetchGuestToken,
+        iframeTitle: sec.title || ctx.tabLabel,
+        // 좁은 화면(하단 탭 바 구간)에서는 필터 패널이 차트를 가리므로 접은 채로 시작한다.
+        dashboardUiConfig: { hideTitle: true, filters: { expanded: !window.matchMedia("(max-width: 600px)").matches } },
+      });
+      // 시간 초과 뒤에 늦게 완료되면 바로 해제한다.
+      pending.then((d) => { if (my !== gen) { try { d.unmount(); } catch (e) { /* 무시 */ } } }, () => {});
+      const d = await withTimeout(pending, CONNECT_TIMEOUT_MS);
+      if (my !== gen) return;
+      dash = d;
+      embeds.add(d);
+      setEmbedTheme(d);
+      // iframe 안의 Superset이 응답해야 연결된 것이다(접속 불가 주소여도 iframe load 이벤트는 온다).
+      // 성공·오류 응답 모두 연결 증거다. 응답이 없으면 시간 초과.
+      const left = Math.max(1000, CONNECT_TIMEOUT_MS - (Date.now() - started));
+      const size = await withTimeout(d.getScrollSize().catch(() => null), left);
+      if (my !== gen) return;
+      const f = iframe();
+      if (f && sec.height) f.style.height = sec.height + "px";
+      else if (f && size && size.height > 0) f.style.height = Math.ceil(size.height) + "px";
+      wrap.className = "embed";
+      overlay.replaceChildren();
+      if (!sec.height) poll = setInterval(() => { if (ctx.isActive()) measure(); }, SIZE_POLL_MS);
+    } catch (err) {
+      if (my !== gen) return;
+      if (!(err instanceof SectionError)) console.warn(err);
+      showError(err);
+    }
+  }
+
+  ctx.onResize(() => measure());
+  ctx.onShow(() => measure());
+  load();
+}
+
+/* ---------------- 데이터 위젯 섹션(gantt, kanban) ---------------- */
+
+function widgetSection(container, sec, ctx) {
+  const body = h("div");
+  container.append(body);
+  let inst = null, gen = 0;
+
+  function fail(title, text, retry = true) {
+    body.replaceChildren(stateBox({ tone: "bad", iconName: "database", title, body: text, onRetry: retry ? load : null }));
+  }
+
+  async function load() {
+    const my = ++gen;
+    if (inst && typeof inst.destroy === "function") { try { inst.destroy(); } catch (e) { /* 무시 */ } }
+    inst = null;
+    if (!WIDGET_TYPES.includes(sec.type)) { fail(S.widgetErrorTitle, S.unsupportedSection(String(sec.type)), false); return; }
+    body.replaceChildren(widgetSkeleton());
+
+    let data;
+    try {
+      let res;
+      try {
+        res = await fetch(`/api/data/${encodeURIComponent(sec.dataset)}`, { cache: "no-store", headers: { Accept: "application/json" } });
+      } catch (e) { throw new SectionError("data", S.dataErrorBody.network); }
+      if (!res.ok) {
+        const detail = await readDetail(res);
+        const known = (res.status === 404 && detail === "unknown_dataset") || (res.status === 503 && (detail === "not_loaded" || detail === "db_unavailable"));
+        throw new SectionError("data", known ? S.dataErrorBody[detail] : S.dataErrorBody.server(res.status));
+      }
+      data = await res.json();
+    } catch (err) {
+      if (my !== gen) return;
+      fail(S.dataErrorTitle, err instanceof SectionError ? err.body : S.dataErrorBody.server("?"));
+      return;
+    }
+
+    try {
+      const mod = await import(`./widgets/${sec.type}.js`);
+      if (my !== gen) return;
+      const el = h("div", { class: `widget widget-${sec.type}` });
+      body.replaceChildren(el);
+      const rows = Array.isArray(data && data.rows) ? data.rows : [];
+      inst = mod.default(el, rows, sec, {
+        asOf: ctx.asOf, strings: S, reducedMotion, truncated: !!(data && data.truncated),
+      }) || null;
+    } catch (err) {
+      if (my !== gen) return;
+      console.warn(err);
+      fail(S.widgetErrorTitle, err && err.message ? err.message : "");
+    }
+  }
+
+  load();
+}
+
+/* ---------------- 셸 ---------------- */
+
+function renderSection(view, sec, tabCtx) {
+  const isEmbed = sec.type === "superset";
+  const panel = h("section", { class: isEmbed ? "panel embed-panel" : "panel" });
+  if (sec.title) {
+    const id = `sec-${tabCtx.index}-${tabCtx.sectionIndex++}`;
+    panel.append(h("h2", { id, text: sec.title }));
+    panel.setAttribute("aria-labelledby", id);
+  }
+  view.append(panel);
+  if (isEmbed) supersetSection(panel, sec, tabCtx);
+  else widgetSection(panel, sec, tabCtx);
+}
+
+function showAppState(box) {
+  $("views").replaceChildren(h("div", { class: "app-state" }, box));
+}
+
+async function boot() {
+  showAppState(h("div", { class: "sk-note", role: "status" }, S.appLoading));
+  let cfg;
+  try {
+    const res = await fetch("/api/app", { cache: "no-store", headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error(String(res.status));
+    cfg = await res.json();
+    if (!cfg || !cfg.app || !Array.isArray(cfg.tabs)) throw new Error("shape");
+  } catch (e) {
+    showAppState(stateBox({ tone: "bad", iconName: "warning", title: S.appErrorTitle, body: S.appErrorBody, onRetry: boot }));
+    return;
+  }
+  renderApp(cfg);
+}
+
+function renderApp(cfg) {
+  const app = cfg.app;
+  const supersetUrl = String((cfg.superset && cfg.superset.url) || "").replace(/\/+$/, "");
+  applyBrand(app.theme);
+
+  document.title = app.title || "";
+  $("title").textContent = app.title || "";
+  $("logo").textContent = app.logo_text || Array.from(app.title || " ")[0];
+  $("asOfLabel").textContent = S.asOf;
+  $("asOf").textContent = app.as_of ? S.formatAsOf(app.as_of) : "";
+  $("asOfWrap").hidden = !app.as_of;
+  $("readOnly").replaceChildren(icon("lock"), S.readOnly);
+  $("readOnly").title = S.readOnlyTitle;
+  $("meta").hidden = false;
+
+  const tabs = cfg.tabs;
+  const nav = $("tabs");
+  const views = $("views");
+  nav.replaceChildren();
+  views.replaceChildren();
+  if (!tabs.length) { showAppState(stateBox({ tone: "neutral", iconName: "warning", title: S.noTabs, role: "status" })); return; }
+
+  const resizeHandlers = new Set();
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => resizeHandlers.forEach((fn) => fn()), 150);
+  });
+
+  let active = -1;
+  const entries = tabs.map((tab, index) => {
+    const link = h("a", { href: "#" + encodeURIComponent(tab.key), "data-key": tab.key },
+      h("span", { class: "ico" }, icon(tab.icon)), h("span", { class: "lbl", text: tab.label }));
+    link.title = tab.label;
+    nav.append(link);
+    const view = h("section", { class: "view", "aria-label": tab.label });
+    views.append(view);
+    const showHandlers = new Set();
+    const ctx = {
+      index, sectionIndex: 0, tabLabel: tab.label, supersetUrl, asOf: app.as_of,
+      isActive: () => active === index,
+      onShow: (fn) => showHandlers.add(fn),
+      onResize: (fn) => resizeHandlers.add(() => { if (active === index) fn(); }),
+    };
+    return { tab, link, view, ctx, showHandlers, rendered: false };
+  });
+
+  function route() {
+    let key = "";
+    try { key = decodeURIComponent(location.hash.slice(1)); } catch (e) { key = ""; }
+    let idx = entries.findIndex((e) => e.tab.key === key);
+    if (idx < 0) idx = 0;
+    if (idx === active) return;
+    active = idx;
+    entries.forEach((e, i) => {
+      const on = i === idx;
+      e.view.classList.toggle("active", on);
+      if (on) e.link.setAttribute("aria-current", "page"); else e.link.removeAttribute("aria-current");
+    });
+    const cur = entries[idx];
+    try { cur.link.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch (e) { /* 무시 */ }
+    document.title = `${cur.tab.label} · ${app.title || ""}`;
+    if (!cur.rendered) {
+      cur.rendered = true;
+      (cur.tab.sections || []).forEach((sec) => renderSection(cur.view, sec, cur.ctx));
+    } else {
+      cur.showHandlers.forEach((fn) => fn());
+    }
+  }
+  window.addEventListener("hashchange", route);
+  route();
+}
+
+/* ---------------- 시작 ---------------- */
+
+$("skip").textContent = S.skipToContent;
+$("skip").addEventListener("click", (e) => { e.preventDefault(); $("main").focus(); });
+$("tabs").setAttribute("aria-label", S.navLabel);
+root.lang = S.lang;
+initTheme();
+boot();

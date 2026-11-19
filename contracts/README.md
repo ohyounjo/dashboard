@@ -46,7 +46,7 @@
 
 `config.referenced_columns(project)`가 `{데이터셋: {열: [출처, …]}}`를 돌려준다. 로더는 `information_schema.columns`의 실제 뷰 열과 비교하고, 없으면 롤백하며 `dashboard.yaml:<출처>: 데이터셋 '<d>' 뷰에 열 '<c>'가 없음`을 출력한다. **뷰에 없는 필터 열**도 이 단계에서 잡는다.
 
-출처: 필터 `column`, 차트 `x`·`time_column`·`groupby`·`columns`·`order_by`의 열(지표 라벨 제외), gantt `fields.*`·`sort`, kanban `group_by`·`card.title`·`card.chips`·`filter.column`. `viz_type` 원본 차트의 `params`는 검사하지 않는다.
+출처: 데이터셋 `labels`의 열(지표 이름 제외), 필터 `column`, 차트 `x`·`time_column`·`groupby`·`columns`·`order_by`의 열(지표 라벨 제외), gantt `fields.*`·`sort`, kanban `group_by`·`card.title`·`card.chips`·`filter.column`. `viz_type` 원본 차트의 `params`는 검사하지 않는다.
 
 ## `dashkit/config.py` 공개 인터페이스
 

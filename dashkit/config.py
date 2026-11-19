@@ -466,6 +466,10 @@ def referenced_columns(project: Project) -> dict[str, dict[str, list[str]]]:
             refs.setdefault(ds, {}).setdefault(col, []).append(fmt_path(path))
 
     dash = project.dashboard
+    for dskey, ds in dash["datasets"].items():
+        for col in (ds.get("labels") or {}):
+            if col not in ds["metrics"]:
+                add(dskey, col, ["datasets", dskey, "labels", col])
     for dkey, d in dash["dashboards"].items():
         for i, chart in enumerate(d["charts"]):
             if "viz" not in chart:

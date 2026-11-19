@@ -1,0 +1,180 @@
+/* 레이아웃: 왼쪽 Navigation Rail + 오른쪽 콘텐츠, 600px 이하에서는 하단 탭 바.
+   토큰은 :root(라이트) → prefers-color-scheme(다크, 수동 라이트가 아닐 때) → [data-theme="dark"] 3단 구조.
+   메인 컬러는 app.js가 /api/app의 app.theme.primary로 --brand-* 변수를 채워 덮어쓴다. */
+:root {
+  --primary: var(--brand-light, #1428A0); --primary-soft: var(--brand-soft-light, #E6E9F8); --on-primary: var(--brand-on-light, #FFFFFF);
+  --bg: #F5F6FB; --surface: #FFFFFF; --surface-2: #EEF0F8; --line: #DDE0EE;
+  --fg: #141833; --muted: #5B6080;
+  --good: #1B8A4B; --warn: #C76A00; --bad: #C62828; --info: #2563C9; --neutral: #6B7088;
+  --good-bg: #E3F4EA; --warn-bg: #FCEFDD; --bad-bg: #FBE4E4; --info-bg: #E3ECFA; --neutral-bg: #ECEDF2;
+  --skeleton: #E7E9F3;
+  --font-body: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", "Noto Sans CJK KR", sans-serif;
+  --font-num: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "D2Coding", monospace;
+  --radius: 12px; --rail: 76px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --primary: var(--brand-dark, #7B8CFF); --primary-soft: var(--brand-soft-dark, #232A52); --on-primary: var(--brand-on-dark, #0E1120);
+  --bg: #0E1120; --surface: #171B2E; --surface-2: #1F2439; --line: #2C3250;
+  --fg: #E7E9F5; --muted: #9AA0BE;
+  --good: #5BD08A; --warn: #F2A64A; --bad: #FF7A7A; --info: #7FAAF5; --neutral: #A3A8C0;
+  --good-bg: #173326; --warn-bg: #3A2A14; --bad-bg: #3D1C20; --info-bg: #1B2A45; --neutral-bg: #262A3D;
+  --skeleton: #232840;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --primary: var(--brand-dark, #7B8CFF); --primary-soft: var(--brand-soft-dark, #232A52); --on-primary: var(--brand-on-dark, #0E1120);
+  --bg: #0E1120; --surface: #171B2E; --surface-2: #1F2439; --line: #2C3250;
+  --fg: #E7E9F5; --muted: #9AA0BE;
+  --good: #5BD08A; --warn: #F2A64A; --bad: #FF7A7A; --info: #7FAAF5; --neutral: #A3A8C0;
+  --good-bg: #173326; --warn-bg: #3A2A14; --bad-bg: #3D1C20; --info-bg: #1B2A45; --neutral-bg: #262A3D;
+  --skeleton: #232840;
+  color-scheme: dark }
+
+/* 색조: data-tone 속성 → --tone / --tone-bg */
+[data-tone="primary"] { --tone: var(--primary); --tone-bg: var(--primary-soft) }
+[data-tone="good"] { --tone: var(--good); --tone-bg: var(--good-bg) }
+[data-tone="warn"] { --tone: var(--warn); --tone-bg: var(--warn-bg) }
+[data-tone="bad"] { --tone: var(--bad); --tone-bg: var(--bad-bg) }
+[data-tone="neutral"] { --tone: var(--neutral); --tone-bg: var(--neutral-bg) }
+
+* { box-sizing: border-box }
+html { -webkit-text-size-adjust: 100% }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.55; min-height: 100vh }
+button, input, select { font: inherit; color: inherit }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px }
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums }
+[hidden] { display: none !important }
+.icon { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0 }
+
+.skip { position: absolute; left: 8px; top: -48px; z-index: 50; background: var(--primary); color: var(--on-primary); padding: 8px 14px; border-radius: 8px; text-decoration: none; font-weight: 700 }
+.skip:focus { top: 8px }
+
+/* Rail */
+.rail { position: fixed; top: 0; bottom: 0; left: 0; width: calc(var(--rail) + env(safe-area-inset-left, 0px));
+  padding: calc(16px + env(safe-area-inset-top, 0px)) 0 calc(16px + env(safe-area-inset-bottom, 0px)) env(safe-area-inset-left, 0px);
+  background: var(--surface); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 20 }
+.rail .logo { width: 40px; height: 40px; border-radius: 10px; background: var(--primary); color: var(--on-primary);
+  display: grid; place-items: center; font-family: var(--font-num); font-weight: 700; font-size: 15px; letter-spacing: -.02em; margin-bottom: 14px; flex-shrink: 0 }
+.rail nav { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow-y: auto; scrollbar-width: none }
+.rail nav::-webkit-scrollbar { display: none }
+.rail a, .rail button.theme { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 64px; padding: 6px 0;
+  text-decoration: none; color: var(--muted); font-size: 11.5px; font-weight: 500; border: 0; background: none; cursor: pointer; border-radius: 10px; flex-shrink: 0 }
+.rail .lbl { max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3 }
+.rail .ico { width: 52px; height: 30px; border-radius: 15px; display: grid; place-items: center; transition: background-color .2s }
+.rail a:hover .ico, .rail button.theme:hover .ico { background: var(--surface-2) }
+.rail a[aria-current="page"] { color: var(--fg); font-weight: 700 }
+.rail a[aria-current="page"] .ico { background: var(--primary); color: var(--on-primary) }
+.rail .spacer { flex: 1 }
+
+main { margin-left: calc(var(--rail) + env(safe-area-inset-left, 0px));
+  padding-left: 28px; padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 22px 40px; max-width: 1320px }
+main:focus { outline: none }
+header.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 20px }
+header.top h1 { margin: 0; font-size: 22px; text-wrap: balance; min-width: 0 }
+header.top .meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--muted); font-size: 13px }
+header.top .meta b { color: var(--fg); font-weight: 700 }
+.badge-ro { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px 2px 8px; font-size: 12px; color: var(--muted) }
+.badge-ro .icon { width: 13px; height: 13px; stroke-width: 2 }
+
+.view { display: none; flex-direction: column; gap: 18px }
+.view.active { display: flex; animation: enter .2s ease-out }
+@keyframes enter { from { transform: translateY(4px); opacity: .6 } to { transform: none; opacity: 1 } }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-width: 0 }
+.panel > h2 { margin: 0 0 14px; font-size: 15px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap }
+.panel.embed-panel { padding: 0; overflow: hidden }
+.panel.embed-panel > h2 { margin: 0; padding: 16px 18px 12px }
+
+/* 섹션 상태: 로딩(스켈레톤), 오류 */
+.sk { display: grid; gap: 14px; padding: 18px }
+.sk-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 14px }
+.sk-block { background: var(--skeleton); border-radius: 10px; min-height: 18px }
+.sk-block.tile { height: 92px }
+.sk-block.chart { height: 230px }
+.sk-block.line { height: 14px; width: 40%; border-radius: 7px }
+.sk-block.bar { height: 34px }
+.sk-note { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px }
+
+.state { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 40px 20px; min-height: 280px; justify-content: center }
+.state .badge { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; color: var(--tone); background: var(--tone-bg) }
+.state .badge .icon { width: 24px; height: 24px }
+.state h3 { margin: 4px 0 0; font-size: 16px }
+.state p { margin: 0; color: var(--muted); max-width: 52ch; font-size: 13.5px; word-break: keep-all; overflow-wrap: anywhere }
+.state .actions { margin-top: 6px }
+.panel:not(.embed-panel) .state { min-height: 200px; padding: 24px 12px }
+
+.btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; font-weight: 500 }
+.btn:hover { background: var(--surface-2) }
+.btn .icon { width: 16px; height: 16px }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary) }
+.btn.primary:hover { filter: brightness(1.08) }
+
+/* Superset 임베드 */
+.embed { position: relative; min-height: 120px }
+.embed-mount iframe { display: block; width: 100%; height: 640px; border: 0; background: transparent }
+.embed.is-loading .embed-mount { position: absolute; inset: 0; opacity: 0; pointer-events: none; overflow: hidden }
+.embed.is-error .embed-mount { display: none }
+
+/* 전체 화면 상태(앱 로딩·오류) */
+.app-state { min-height: 60vh; display: grid; place-items: center }
+
+/* 위젯 공통 */
+.w-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin: -6px 0 12px; color: var(--muted); font-size: 12.5px }
+.w-note { color: var(--muted); font-size: 12px; margin: 10px 0 0 }
+.w-empty { text-align: center; color: var(--muted); padding: 28px }
+.pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis }
+.pill.soft { color: var(--primary); background: var(--primary-soft) }
+
+/* 간트 */
+.gantt { overflow-x: auto; padding-top: 4px }
+.gantt-inner { min-width: 680px; display: grid; grid-template-columns: 200px 1fr; row-gap: 10px; position: relative }
+.g-head { grid-column: 2; position: relative; height: 20px; font-size: 11.5px; color: var(--muted) }
+.g-head span { position: absolute; transform: translateX(-1px); padding-left: 4px; border-left: 1px solid var(--line); font-family: var(--font-num); white-space: nowrap; line-height: 20px }
+.g-label { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding-right: 10px }
+.g-label b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.g-label span { font-size: 11.5px; color: var(--muted); font-family: var(--font-num); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.g-track { position: relative; height: 34px; background: var(--surface-2); border-radius: 8px }
+.g-bar { position: absolute; top: 6px; bottom: 6px; min-width: 4px; border-radius: 6px; background: var(--tone-bg); border: 1px solid var(--tone); overflow: hidden }
+.g-fill { height: 100%; width: 100%; background: var(--tone); transform-origin: left center }
+.g-today { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed var(--bad); pointer-events: none }
+.g-today span { position: absolute; top: -2px; left: 4px; font-size: 11px; color: var(--bad); font-weight: 700; white-space: nowrap; line-height: 1 }
+.g-today.flip span { left: auto; right: 6px }
+.g-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--muted); margin-top: 12px }
+.g-legend .today { color: var(--bad) }
+
+/* 칸반 */
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 12px }
+.toolbar label { display: inline-flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px }
+select.sel { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 10px; max-width: 260px; color: var(--fg) }
+.count { color: var(--muted); font-size: 13px }
+.kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(200px, 1fr); gap: 12px; overflow-x: auto; padding-bottom: 4px }
+.col { background: var(--surface-2); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0 }
+.col h3 { margin: 0 2px 4px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; gap: 8px }
+.col h3 .name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.col[data-tone] h3 .name::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--tone); flex-shrink: 0 }
+.col h3 .num { color: var(--muted); font-weight: 500 }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 11px; display: flex; flex-direction: column; gap: 6px; user-select: text; min-width: 0 }
+.card .t { font-size: 13px; font-weight: 500; overflow-wrap: anywhere }
+.card .m { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); min-width: 0 }
+.col-empty { color: var(--muted); font-size: 12.5px; text-align: center; padding: 10px }
+
+@media (max-width: 600px) {
+  .rail { top: auto; right: 0; width: auto; height: auto; flex-direction: row; justify-content: space-around; align-items: stretch; gap: 2px; border-right: 0; border-top: 1px solid var(--line);
+    padding: 6px max(8px, env(safe-area-inset-right, 0px)) calc(6px + env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px)) }
+  .rail .logo, .rail .spacer { display: none }
+  .rail nav { flex-direction: row; gap: 2px; overflow-x: auto; overflow-y: hidden; flex: 1 1 auto; justify-content: space-around }
+  .rail a { width: auto; flex: 1 0 52px; max-width: 76px }
+  .rail button.theme { width: 56px }
+  .rail .ico { width: 48px }
+  .rail .lbl { max-width: 100% }
+  main { margin-left: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 16px 96px }
+  header.top h1 { font-size: 19px }
+  .panel { padding: 14px }
+  .panel.embed-panel > h2 { padding: 14px 14px 10px }
+  .gantt-inner { grid-template-columns: 150px 1fr; min-width: 600px }
+  .toolbar label { flex-wrap: wrap }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important }
+}

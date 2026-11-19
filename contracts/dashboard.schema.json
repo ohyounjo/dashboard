@@ -5,50 +5,118 @@
   "description": "앱, 데이터셋(dash.<키> 뷰), Superset 대시보드, 웹앱 탭. 키 사이의 참조는 dashkit/config.py가 검사한다(contracts/README.md의 '참조 검사' 표).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["app", "datasets", "dashboards", "tabs"],
+  "required": [
+    "app",
+    "datasets",
+    "dashboards",
+    "tabs"
+  ],
   "properties": {
-    "app": { "$ref": "#/$defs/app" },
+    "app": {
+      "$ref": "#/$defs/app"
+    },
     "datasets": {
       "type": "object",
       "minProperties": 1,
-      "propertyNames": { "$ref": "#/$defs/key" },
-      "additionalProperties": { "$ref": "#/$defs/dataset" }
+      "propertyNames": {
+        "$ref": "#/$defs/key"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/dataset"
+      }
     },
     "dashboards": {
       "type": "object",
-      "propertyNames": { "$ref": "#/$defs/key" },
-      "additionalProperties": { "$ref": "#/$defs/dashboard" }
+      "propertyNames": {
+        "$ref": "#/$defs/key"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/dashboard"
+      }
     },
     "tabs": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/tab" }
+      "items": {
+        "$ref": "#/$defs/tab"
+      }
     }
   },
   "$defs": {
-    "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$" },
-    "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
-    "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
-    "column": { "description": "데이터셋 뷰의 열 이름", "type": "string", "pattern": "^[a-z_][a-z0-9_]*$" },
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+    },
+    "color": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "column": {
+      "description": "데이터셋 뷰의 열 이름",
+      "type": "string",
+      "pattern": "^[a-z_][a-z0-9_]*$"
+    },
     "icon": {
       "description": "웹앱 내장 아이콘(contracts/icons.md)",
-      "enum": ["grid", "calendar", "alert", "doc", "chart", "table", "users", "box", "list", "flag", "target", "cart", "megaphone", "home"]
+      "enum": [
+        "grid",
+        "calendar",
+        "alert",
+        "doc",
+        "chart",
+        "table",
+        "users",
+        "box",
+        "list",
+        "flag",
+        "target",
+        "cart",
+        "megaphone",
+        "home"
+      ]
     },
     "tone": {
       "description": "웹앱 색조 토큰. primary=메인 컬러, good/warn/bad=상태색, neutral=회색",
-      "enum": ["primary", "good", "warn", "bad", "neutral"]
+      "enum": [
+        "primary",
+        "good",
+        "warn",
+        "bad",
+        "neutral"
+      ]
     },
-
     "app": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["title", "as_of"],
+      "required": [
+        "title",
+        "as_of"
+      ],
       "properties": {
-        "title": { "type": "string", "minLength": 1 },
-        "logo_text": { "description": "Rail 상단 로고 자리의 1~3글자", "type": "string", "minLength": 1, "maxLength": 3 },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "logo_text": {
+          "description": "Rail 상단 로고 자리의 1~3글자",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 3
+        },
         "as_of": {
           "description": "기준일. \"today\"면 적재·요청 시점의 날짜(TZ 환경변수 기준), 날짜면 고정. SQL에서는 dash.as_of()",
-          "oneOf": [{ "const": "today" }, { "$ref": "#/$defs/date" }]
+          "oneOf": [
+            {
+              "const": "today"
+            },
+            {
+              "$ref": "#/$defs/date"
+            }
+          ]
         },
         "theme": {
           "type": "object",
@@ -57,149 +125,491 @@
             "primary": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["light", "dark"],
-              "properties": { "light": { "$ref": "#/$defs/color" }, "dark": { "$ref": "#/$defs/color" } }
+              "required": [
+                "light",
+                "dark"
+              ],
+              "properties": {
+                "light": {
+                  "$ref": "#/$defs/color"
+                },
+                "dark": {
+                  "$ref": "#/$defs/color"
+                }
+              }
             }
           }
         }
       }
     },
-
     "dataset": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "sql": { "description": "뷰 본문 SELECT. raw.*, dash.as_of(), 앞서 정의한 dash.<다른 데이터셋>을 쓸 수 있다", "type": "string", "minLength": 1 },
-        "table": { "description": "schema.yaml의 테이블 키. SELECT * FROM raw.<table> 축약", "$ref": "#/$defs/key" },
+        "sql": {
+          "description": "뷰 본문 SELECT. raw.*, dash.as_of(), 앞서 정의한 dash.<다른 데이터셋>을 쓸 수 있다",
+          "type": "string",
+          "minLength": 1
+        },
+        "table": {
+          "description": "schema.yaml의 테이블 키. SELECT * FROM raw.<table> 축약",
+          "$ref": "#/$defs/key"
+        },
         "metrics": {
           "description": "이름 → SQL 집계식. Superset 데이터셋 지표가 된다",
           "type": "object",
-          "propertyNames": { "$ref": "#/$defs/key" },
-          "additionalProperties": { "type": "string", "minLength": 1 }
+          "propertyNames": {
+            "$ref": "#/$defs/key"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "description": { "type": "string" }
-      },
-      "oneOf": [ { "required": ["sql"] }, { "required": ["table"] } ]
-    },
-
-    "metric_ref": {
-      "description": "문자열 = 데이터셋 지표 이름, 객체 = 이 차트만의 식",
-      "oneOf": [
-        { "$ref": "#/$defs/key" },
-        {
+        "description": {
+          "type": "string"
+        },
+        "labels": {
+          "description": "열 또는 지표 이름 → 화면 표시 이름. Superset 데이터셋의 verbose_name(표 머리글, 필터·범례 라벨)이 된다",
           "type": "object",
-          "additionalProperties": false,
-          "required": ["sql", "label"],
-          "properties": { "sql": { "type": "string", "minLength": 1 }, "label": { "type": "string", "minLength": 1 } }
+          "propertyNames": {
+            "$ref": "#/$defs/column"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "sql"
+          ]
+        },
+        {
+          "required": [
+            "table"
+          ]
         }
       ]
     },
-    "time_grain": { "enum": ["P1D", "P1W", "P1M", "P3M", "P1Y"] },
+    "metric_ref": {
+      "description": "문자열 = 데이터셋 지표 이름, 객체 = 이 차트만의 식",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/key"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sql",
+            "label"
+          ],
+          "properties": {
+            "sql": {
+              "type": "string",
+              "minLength": 1
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "time_grain": {
+      "enum": [
+        "P1D",
+        "P1W",
+        "P1M",
+        "P3M",
+        "P1Y"
+      ]
+    },
     "order_by": {
       "type": "array",
       "items": {
-        "type": "array", "prefixItems": [ { "$ref": "#/$defs/column" }, { "enum": ["asc", "desc"] } ],
-        "minItems": 2, "maxItems": 2
+        "type": "array",
+        "prefixItems": [
+          {
+            "$ref": "#/$defs/column"
+          },
+          {
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          }
+        ],
+        "minItems": 2,
+        "maxItems": 2
       }
     },
-
     "chart": {
       "type": "object",
-      "required": ["key", "title", "dataset"],
+      "required": [
+        "key",
+        "title",
+        "dataset"
+      ],
       "properties": {
-        "key": { "description": "프로젝트 안에서 유일(모든 대시보드 통틀어)", "$ref": "#/$defs/key" },
-        "title": { "type": "string", "minLength": 1 },
-        "dataset": { "$ref": "#/$defs/key" },
-        "viz": { "enum": ["big_number_total", "big_number", "line", "bar", "pie", "table"] },
-        "viz_type": { "description": "축약 문법 밖의 Superset viz_type. 이때 params에 원본 파라미터를 모두 쓴다", "type": "string", "pattern": "^[a-z0-9_]+$" },
-        "params": { "description": "Superset 원본 파라미터. 생성한 파라미터 위에 마지막으로 얕게 덮어쓴다", "type": "object" },
-        "description": { "type": "string" }
+        "key": {
+          "description": "프로젝트 안에서 유일(모든 대시보드 통틀어)",
+          "$ref": "#/$defs/key"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataset": {
+          "$ref": "#/$defs/key"
+        },
+        "viz": {
+          "enum": [
+            "big_number_total",
+            "big_number",
+            "line",
+            "bar",
+            "pie",
+            "table"
+          ]
+        },
+        "viz_type": {
+          "description": "축약 문법 밖의 Superset viz_type. 이때 params에 원본 파라미터를 모두 쓴다",
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "params": {
+          "description": "Superset 원본 파라미터. 생성한 파라미터 위에 마지막으로 얕게 덮어쓴다",
+          "type": "object"
+        },
+        "description": {
+          "type": "string"
+        }
       },
       "oneOf": [
-        { "required": ["viz"], "not": { "required": ["viz_type"] } },
-        { "required": ["viz_type", "params"], "not": { "required": ["viz"] } }
+        {
+          "required": [
+            "viz"
+          ],
+          "not": {
+            "required": [
+              "viz_type"
+            ]
+          }
+        },
+        {
+          "required": [
+            "viz_type",
+            "params"
+          ],
+          "not": {
+            "required": [
+              "viz"
+            ]
+          }
+        }
       ],
       "allOf": [
-        { "if": { "required": ["viz"], "properties": { "viz": { "const": "big_number_total" } } },
-          "then": { "$ref": "#/$defs/v_big_number_total" } },
-        { "if": { "required": ["viz"], "properties": { "viz": { "const": "big_number" } } },
-          "then": { "$ref": "#/$defs/v_big_number" } },
-        { "if": { "required": ["viz"], "properties": { "viz": { "const": "line" } } },
-          "then": { "$ref": "#/$defs/v_line" } },
-        { "if": { "required": ["viz"], "properties": { "viz": { "const": "bar" } } },
-          "then": { "$ref": "#/$defs/v_bar" } },
-        { "if": { "required": ["viz"], "properties": { "viz": { "const": "pie" } } },
-          "then": { "$ref": "#/$defs/v_pie" } },
-        { "if": { "required": ["viz"], "properties": { "viz": { "const": "table" } } },
-          "then": { "$ref": "#/$defs/v_table" } },
-        { "if": { "required": ["viz_type"] },
-          "then": { "$ref": "#/$defs/v_raw" } }
+        {
+          "if": {
+            "required": [
+              "viz"
+            ],
+            "properties": {
+              "viz": {
+                "const": "big_number_total"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/v_big_number_total"
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "viz"
+            ],
+            "properties": {
+              "viz": {
+                "const": "big_number"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/v_big_number"
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "viz"
+            ],
+            "properties": {
+              "viz": {
+                "const": "line"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/v_line"
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "viz"
+            ],
+            "properties": {
+              "viz": {
+                "const": "bar"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/v_bar"
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "viz"
+            ],
+            "properties": {
+              "viz": {
+                "const": "pie"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/v_pie"
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "viz"
+            ],
+            "properties": {
+              "viz": {
+                "const": "table"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/v_table"
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "viz_type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/v_raw"
+          }
+        }
       ]
     },
-    "where": { "description": "이 차트에만 거는 SQL WHERE 조건(adhoc filter)", "type": "string", "minLength": 1 },
-    "format": { "description": "d3 숫자 형식(예: \".0f\", \",d\", \".1%\")", "type": "string", "minLength": 1 },
+    "where": {
+      "description": "이 차트에만 거는 SQL WHERE 조건(adhoc filter)",
+      "type": "string",
+      "minLength": 1
+    },
+    "format": {
+      "description": "d3 숫자 형식(예: \".0f\", \",d\", \".1%\")",
+      "type": "string",
+      "minLength": 1
+    },
     "v_big_number_total": {
       "type": "object",
-      "required": ["metric"],
+      "required": [
+        "metric"
+      ],
       "additionalProperties": false,
       "properties": {
-        "key": true, "title": true, "dataset": true, "viz": true, "params": true, "description": true,
-        "where": { "$ref": "#/$defs/where" }, "format": { "$ref": "#/$defs/format" },
-        "metric": { "$ref": "#/$defs/metric_ref" },
-        "subtitle": { "type": "string" }
+        "key": true,
+        "title": true,
+        "dataset": true,
+        "viz": true,
+        "params": true,
+        "description": true,
+        "where": {
+          "$ref": "#/$defs/where"
+        },
+        "format": {
+          "$ref": "#/$defs/format"
+        },
+        "metric": {
+          "$ref": "#/$defs/metric_ref"
+        },
+        "subtitle": {
+          "type": "string"
+        }
       }
     },
     "v_big_number": {
       "type": "object",
-      "required": ["metric", "time_column"],
+      "required": [
+        "metric",
+        "time_column"
+      ],
       "additionalProperties": false,
       "properties": {
-        "key": true, "title": true, "dataset": true, "viz": true, "params": true, "description": true,
-        "where": { "$ref": "#/$defs/where" }, "format": { "$ref": "#/$defs/format" },
-        "metric": { "$ref": "#/$defs/metric_ref" },
-        "time_column": { "$ref": "#/$defs/column" },
-        "time_grain": { "$ref": "#/$defs/time_grain" },
-        "compare_lag": { "description": "몇 구간 전과 비교할지. 생략하면 1", "type": "integer", "minimum": 1 },
-        "compare_suffix": { "type": "string" }
+        "key": true,
+        "title": true,
+        "dataset": true,
+        "viz": true,
+        "params": true,
+        "description": true,
+        "where": {
+          "$ref": "#/$defs/where"
+        },
+        "format": {
+          "$ref": "#/$defs/format"
+        },
+        "metric": {
+          "$ref": "#/$defs/metric_ref"
+        },
+        "time_column": {
+          "$ref": "#/$defs/column"
+        },
+        "time_grain": {
+          "$ref": "#/$defs/time_grain"
+        },
+        "compare_lag": {
+          "description": "몇 구간 전과 비교할지. 생략하면 1",
+          "type": "integer",
+          "minimum": 1
+        },
+        "compare_suffix": {
+          "type": "string"
+        }
       }
     },
     "v_line": {
       "type": "object",
-      "required": ["x", "metrics"],
+      "required": [
+        "x",
+        "metrics"
+      ],
       "additionalProperties": false,
       "properties": {
-        "key": true, "title": true, "dataset": true, "viz": true, "params": true, "description": true,
-        "where": { "$ref": "#/$defs/where" }, "format": { "$ref": "#/$defs/format" },
-        "x": { "$ref": "#/$defs/column" },
-        "time_grain": { "$ref": "#/$defs/time_grain" },
-        "metrics": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/metric_ref" } },
-        "groupby": { "type": "array", "items": { "$ref": "#/$defs/column" } }
+        "key": true,
+        "title": true,
+        "dataset": true,
+        "viz": true,
+        "params": true,
+        "description": true,
+        "where": {
+          "$ref": "#/$defs/where"
+        },
+        "format": {
+          "$ref": "#/$defs/format"
+        },
+        "x": {
+          "$ref": "#/$defs/column"
+        },
+        "time_grain": {
+          "$ref": "#/$defs/time_grain"
+        },
+        "metrics": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/metric_ref"
+          }
+        },
+        "groupby": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/column"
+          }
+        }
       }
     },
     "v_bar": {
       "type": "object",
-      "required": ["x", "metrics"],
+      "required": [
+        "x",
+        "metrics"
+      ],
       "additionalProperties": false,
       "properties": {
-        "key": true, "title": true, "dataset": true, "viz": true, "params": true, "description": true,
-        "where": { "$ref": "#/$defs/where" }, "format": { "$ref": "#/$defs/format" },
-        "x": { "$ref": "#/$defs/column" },
-        "time_grain": { "$ref": "#/$defs/time_grain" },
-        "metrics": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/metric_ref" } },
-        "groupby": { "type": "array", "items": { "$ref": "#/$defs/column" } },
-        "horizontal": { "type": "boolean" }
+        "key": true,
+        "title": true,
+        "dataset": true,
+        "viz": true,
+        "params": true,
+        "description": true,
+        "where": {
+          "$ref": "#/$defs/where"
+        },
+        "format": {
+          "$ref": "#/$defs/format"
+        },
+        "x": {
+          "$ref": "#/$defs/column"
+        },
+        "time_grain": {
+          "$ref": "#/$defs/time_grain"
+        },
+        "metrics": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/metric_ref"
+          }
+        },
+        "groupby": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/column"
+          }
+        },
+        "horizontal": {
+          "type": "boolean"
+        }
       }
     },
     "v_pie": {
       "type": "object",
-      "required": ["groupby", "metric"],
+      "required": [
+        "groupby",
+        "metric"
+      ],
       "additionalProperties": false,
       "properties": {
-        "key": true, "title": true, "dataset": true, "viz": true, "params": true, "description": true,
-        "where": { "$ref": "#/$defs/where" }, "format": { "$ref": "#/$defs/format" },
-        "groupby": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/column" } },
-        "metric": { "$ref": "#/$defs/metric_ref" },
-        "donut": { "type": "boolean" }
+        "key": true,
+        "title": true,
+        "dataset": true,
+        "viz": true,
+        "params": true,
+        "description": true,
+        "where": {
+          "$ref": "#/$defs/where"
+        },
+        "format": {
+          "$ref": "#/$defs/format"
+        },
+        "groupby": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/column"
+          }
+        },
+        "metric": {
+          "$ref": "#/$defs/metric_ref"
+        },
+        "donut": {
+          "type": "boolean"
+        }
       }
     },
     "v_table": {
@@ -207,39 +617,123 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "key": true, "title": true, "dataset": true, "viz": true, "params": true, "description": true,
-        "where": { "$ref": "#/$defs/where" }, "format": { "$ref": "#/$defs/format" },
-        "columns": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/column" } },
-        "groupby": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/column" } },
-        "metrics": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/metric_ref" } },
-        "order_by": { "$ref": "#/$defs/order_by" },
-        "row_limit": { "type": "integer", "minimum": 1, "maximum": 50000 },
-        "search": { "description": "표 위 검색 상자", "type": "boolean" }
+        "key": true,
+        "title": true,
+        "dataset": true,
+        "viz": true,
+        "params": true,
+        "description": true,
+        "where": {
+          "$ref": "#/$defs/where"
+        },
+        "format": {
+          "$ref": "#/$defs/format"
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/column"
+          }
+        },
+        "groupby": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/column"
+          }
+        },
+        "metrics": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/metric_ref"
+          }
+        },
+        "order_by": {
+          "$ref": "#/$defs/order_by"
+        },
+        "row_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50000
+        },
+        "search": {
+          "description": "표 위 검색 상자",
+          "type": "boolean"
+        }
       },
       "oneOf": [
-        { "required": ["columns"], "not": { "anyOf": [{ "required": ["groupby"] }, { "required": ["metrics"] }] } },
-        { "required": ["metrics"], "not": { "required": ["columns"] } }
+        {
+          "required": [
+            "columns"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "groupby"
+                ]
+              },
+              {
+                "required": [
+                  "metrics"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "metrics"
+          ],
+          "not": {
+            "required": [
+              "columns"
+            ]
+          }
+        }
       ]
     },
     "v_raw": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "key": true, "title": true, "dataset": true, "viz_type": true, "params": true, "description": true
+        "key": true,
+        "title": true,
+        "dataset": true,
+        "viz_type": true,
+        "params": true,
+        "description": true
       }
     },
-
     "layout_item": {
       "oneOf": [
-        { "$ref": "#/$defs/key" },
+        {
+          "$ref": "#/$defs/key"
+        },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["chart"],
+          "required": [
+            "chart"
+          ],
           "properties": {
-            "chart": { "$ref": "#/$defs/key" },
-            "width": { "description": "12칸 격자 중 칸 수", "type": "integer", "minimum": 1, "maximum": 12 },
-            "height": { "description": "Superset 격자 높이 단위(기본 50, 1단위≈8px)", "type": "integer", "minimum": 10, "maximum": 200 }
+            "chart": {
+              "$ref": "#/$defs/key"
+            },
+            "width": {
+              "description": "12칸 격자 중 칸 수",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            },
+            "height": {
+              "description": "Superset 격자 높이 단위(기본 50, 1단위≈8px)",
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 200
+            }
           }
         }
       ]
@@ -247,62 +741,184 @@
     "filter": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "label", "type", "dataset", "column"],
+      "required": [
+        "key",
+        "label",
+        "type",
+        "dataset",
+        "column"
+      ],
       "properties": {
-        "key": { "$ref": "#/$defs/key" },
-        "label": { "type": "string", "minLength": 1 },
-        "type": { "enum": ["select"] },
-        "multi": { "type": "boolean", "default": true },
-        "dataset": { "description": "선택지를 읽을 데이터셋. 같은 열 이름을 가진 이 대시보드의 차트에 적용된다", "$ref": "#/$defs/key" },
-        "column": { "$ref": "#/$defs/column" }
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "enum": [
+            "select"
+          ]
+        },
+        "multi": {
+          "type": "boolean",
+          "default": true
+        },
+        "dataset": {
+          "description": "선택지를 읽을 데이터셋. 같은 열 이름을 가진 이 대시보드의 차트에 적용된다",
+          "$ref": "#/$defs/key"
+        },
+        "column": {
+          "$ref": "#/$defs/column"
+        }
       }
     },
     "dashboard": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["title", "charts", "layout"],
+      "required": [
+        "title",
+        "charts",
+        "layout"
+      ],
       "properties": {
-        "title": { "type": "string", "minLength": 1 },
-        "charts": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/chart" } },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "charts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/chart"
+          }
+        },
         "layout": {
           "description": "행 목록. 각 행은 차트 참조 목록. 모든 차트는 정확히 한 번 배치한다",
-          "type": "array", "minItems": 1,
-          "items": { "type": "array", "minItems": 1, "maxItems": 12, "items": { "$ref": "#/$defs/layout_item" } }
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": {
+              "$ref": "#/$defs/layout_item"
+            }
+          }
         },
-        "filters": { "type": "array", "items": { "$ref": "#/$defs/filter" } }
+        "filters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/filter"
+          }
+        }
       }
     },
-
     "tab": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "label", "icon", "sections"],
+      "required": [
+        "key",
+        "label",
+        "icon",
+        "sections"
+      ],
       "properties": {
-        "key": { "description": "해시 주소 #<key>", "$ref": "#/$defs/key" },
-        "label": { "type": "string", "minLength": 1 },
-        "icon": { "$ref": "#/$defs/icon" },
-        "sections": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/section" } }
+        "key": {
+          "description": "해시 주소 #<key>",
+          "$ref": "#/$defs/key"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
+        },
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/section"
+          }
+        }
       }
     },
     "section": {
       "type": "object",
-      "required": ["type"],
-      "properties": { "type": { "enum": ["superset", "gantt", "kanban"] } },
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "superset",
+            "gantt",
+            "kanban"
+          ]
+        }
+      },
       "allOf": [
-        { "if": { "properties": { "type": { "const": "superset" } } }, "then": { "$ref": "#/$defs/s_superset" } },
-        { "if": { "properties": { "type": { "const": "gantt" } } }, "then": { "$ref": "#/$defs/s_gantt" } },
-        { "if": { "properties": { "type": { "const": "kanban" } } }, "then": { "$ref": "#/$defs/s_kanban" } }
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "superset"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/s_superset"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "gantt"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/s_gantt"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "kanban"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/s_kanban"
+          }
+        }
       ]
     },
     "s_superset": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "dashboard"],
+      "required": [
+        "type",
+        "dashboard"
+      ],
       "properties": {
         "type": true,
-        "title": { "type": "string" },
-        "dashboard": { "$ref": "#/$defs/key" },
-        "height": { "description": "iframe 높이(px). 생략하면 SDK getScrollSize로 맞춘다", "type": "integer", "minimum": 200, "maximum": 5000 }
+        "title": {
+          "type": "string"
+        },
+        "dashboard": {
+          "$ref": "#/$defs/key"
+        },
+        "height": {
+          "description": "iframe 높이(px). 생략하면 SDK getScrollSize로 맞춘다",
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 5000
+        }
       }
     },
     "status_map": {
@@ -311,76 +927,184 @@
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["label"],
+        "required": [
+          "label"
+        ],
         "properties": {
-          "label": { "type": "string", "minLength": 1 },
-          "icon": { "description": "이모지 1개", "type": "string", "minLength": 1, "maxLength": 8 },
-          "tone": { "$ref": "#/$defs/tone" }
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "icon": {
+            "description": "이모지 1개",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8
+          },
+          "tone": {
+            "$ref": "#/$defs/tone"
+          }
         }
       }
     },
     "s_gantt": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "dataset", "fields"],
+      "required": [
+        "type",
+        "dataset",
+        "fields"
+      ],
       "properties": {
         "type": true,
-        "title": { "type": "string" },
-        "dataset": { "$ref": "#/$defs/key" },
+        "title": {
+          "type": "string"
+        },
+        "dataset": {
+          "$ref": "#/$defs/key"
+        },
         "fields": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["label", "start", "end"],
+          "required": [
+            "label",
+            "start",
+            "end"
+          ],
           "properties": {
-            "label": { "$ref": "#/$defs/column" },
-            "start": { "description": "date 열", "$ref": "#/$defs/column" },
-            "end": { "description": "date 열", "$ref": "#/$defs/column" },
-            "progress": { "description": "0~100 숫자 열", "$ref": "#/$defs/column" },
-            "status": { "$ref": "#/$defs/column" }
+            "label": {
+              "$ref": "#/$defs/column"
+            },
+            "start": {
+              "description": "date 열",
+              "$ref": "#/$defs/column"
+            },
+            "end": {
+              "description": "date 열",
+              "$ref": "#/$defs/column"
+            },
+            "progress": {
+              "description": "0~100 숫자 열",
+              "$ref": "#/$defs/column"
+            },
+            "status": {
+              "$ref": "#/$defs/column"
+            }
           }
         },
-        "statuses": { "$ref": "#/$defs/status_map" },
+        "statuses": {
+          "$ref": "#/$defs/status_map"
+        },
         "range": {
           "description": "축 범위. 생략하면 행의 최소 start ~ 최대 end",
-          "type": "object", "additionalProperties": false, "required": ["start", "end"],
-          "properties": { "start": { "$ref": "#/$defs/date" }, "end": { "$ref": "#/$defs/date" } }
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "start",
+            "end"
+          ],
+          "properties": {
+            "start": {
+              "$ref": "#/$defs/date"
+            },
+            "end": {
+              "$ref": "#/$defs/date"
+            }
+          }
         },
-        "sort": { "description": "정렬 열(오름차순). 생략하면 start", "$ref": "#/$defs/column" }
+        "sort": {
+          "description": "정렬 열(오름차순). 생략하면 start",
+          "$ref": "#/$defs/column"
+        }
       }
     },
     "s_kanban": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "dataset", "group_by", "columns", "card"],
+      "required": [
+        "type",
+        "dataset",
+        "group_by",
+        "columns",
+        "card"
+      ],
       "properties": {
         "type": true,
-        "title": { "type": "string" },
-        "dataset": { "$ref": "#/$defs/key" },
-        "group_by": { "$ref": "#/$defs/column" },
+        "title": {
+          "type": "string"
+        },
+        "dataset": {
+          "$ref": "#/$defs/key"
+        },
+        "group_by": {
+          "$ref": "#/$defs/column"
+        },
         "columns": {
           "description": "칸 순서. group_by 값이 어느 칸에도 없으면 그 카드는 표시하지 않고 콘솔 경고",
-          "type": "array", "minItems": 1,
+          "type": "array",
+          "minItems": 1,
           "items": {
-            "type": "object", "additionalProperties": false, "required": ["value", "label"],
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "label"
+            ],
             "properties": {
-              "value": { "type": "string" },
-              "label": { "type": "string", "minLength": 1 },
-              "icon": { "description": "이 칸 카드 제목 앞에 붙는 이모지", "type": "string", "minLength": 1, "maxLength": 8 },
-              "tone": { "$ref": "#/$defs/tone" }
+              "value": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "icon": {
+                "description": "이 칸 카드 제목 앞에 붙는 이모지",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8
+              },
+              "tone": {
+                "$ref": "#/$defs/tone"
+              }
             }
           }
         },
         "card": {
-          "type": "object", "additionalProperties": false, "required": ["title"],
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title"
+          ],
           "properties": {
-            "title": { "$ref": "#/$defs/column" },
-            "chips": { "type": "array", "items": { "$ref": "#/$defs/column" } }
+            "title": {
+              "$ref": "#/$defs/column"
+            },
+            "chips": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/column"
+              }
+            }
           }
         },
         "filter": {
           "description": "칸반 위 선택 상자. 선택지는 행의 고유값(정렬)",
-          "type": "object", "additionalProperties": false, "required": ["column", "label"],
-          "properties": { "column": { "$ref": "#/$defs/column" }, "label": { "type": "string", "minLength": 1 } }
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "column",
+            "label"
+          ],
+          "properties": {
+            "column": {
+              "$ref": "#/$defs/column"
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
         }
       }
     }

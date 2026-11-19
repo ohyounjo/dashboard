@@ -66,4 +66,9 @@ sync만 읽고 쓴다. 지난 sync가 만든 Superset 객체 목록이다. 다�
 6. prune: `managed.json`의 (이전 목록 − 이번 목록)을 대시보드 → 차트 → 데이터셋 → DB 순으로 UUID로 찾아 지운다. 이미 없으면 넘어간다.
 7. `embed.json`과 `managed.json`을 원자적으로 쓴다.
 
+보강(구현 반영):
+- 4단계 직전에 `managed.json`을 (이전 목록 ∪ 이번 목록)으로 한 번 먼저 쓴다. import가 중간에 실패해 일부 객체만 생겨도 다음 실행이 prune 대상으로 알 수 있다.
+- `embed.json`은 5단계가 끝나면 prune 전에 쓴다.
+- prune에서 삭제에 실패한 UUID는 `managed.json`에 남기고 SyncError로 끝낸다(다음 실행이 다시 시도).
+
 멱등성: 같은 설정으로 두 번 실행하면 Superset 객체 집합, UUID, 임베드 UUID가 같다. 첫 실행이고 `managed.json`이 없으면 prune을 하지 않는다(`make reset`으로 Superset 메타데이터를 처음부터 다시 만들 수 있다).

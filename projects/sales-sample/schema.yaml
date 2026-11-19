@@ -1,0 +1,67 @@
+# B2B 영업 현황(예시 2). devtracker와 테이블명·열 이름이 하나도 겹치지 않는다.
+# 테이블 키 = data/<키>.csv = raw.<키>.
+tables:
+  reps:
+    description: 영업 담당자
+    primary_key: rep_code
+    columns:
+      rep_code:  { type: text, pattern: "^R\\d{2}$" }
+      rep_name:  { type: text, required: true }
+      team:      { type: enum, required: true, values: [수도권1팀, 수도권2팀, 지역팀] }
+      hired_on:  { type: date, required: true, min: "2000-01-01" }
+      quota_krw: { type: integer, required: true, min: 0 }
+
+  accounts:
+    description: 고객사
+    primary_key: account_code
+    columns:
+      account_code: { type: text, pattern: "^A\\d{3}$" }
+      company:      { type: text, required: true }
+      industry:     { type: enum, required: true, values: [제조, 유통, 금융, 의료, 교육] }
+      region:       { type: enum, required: true, values: [서울, 경기, 부산, 대구, 광주] }
+      tier:         { type: enum, required: true, values: [gold, silver, bronze] }
+      owner_rep:    { type: text, required: true, ref: reps.rep_code }
+
+  campaigns:
+    description: 마케팅 캠페인
+    primary_key: campaign_code
+    columns:
+      campaign_code:  { type: text, pattern: "^C\\d{2}$" }
+      campaign_name:  { type: text, required: true }
+      channel:        { type: enum, required: true, values: [email, webinar, exhibition, ads] }
+      lead_rep:       { type: text, required: true, ref: reps.rep_code }
+      launch_on:      { type: date, required: true, min: "2026-01-01", max: "2026-12-31" }
+      close_on:       { type: date, required: true, min: "2026-01-01", max: "2026-12-31" }
+      budget_krw:     { type: integer, required: true, min: 0 }
+      phase:          { type: enum, required: true, values: [draft, live, wrapped, paused] }
+      completion_pct: { type: integer, required: true, min: 0, max: 100 }
+    checks:
+      - name: 캠페인 개시일이 종료일보다 늦음
+        sql: SELECT campaign_code FROM raw.campaigns WHERE launch_on > close_on
+      - name: 끝난 캠페인인데 완료율이 100이 아님
+        sql: SELECT campaign_code FROM raw.campaigns WHERE phase = 'wrapped' AND completion_pct <> 100
+      - name: 준비 중 캠페인인데 완료율이 0이 아님
+        sql: SELECT campaign_code FROM raw.campaigns WHERE phase = 'draft' AND completion_pct <> 0
+
+  deals:
+    description: 영업 기회(딜)
+    primary_key: deal_code
+    columns:
+      deal_code:     { type: text, pattern: "^DL-\\d{4}$" }
+      deal_label:    { type: text, required: true }
+      account_code:  { type: text, required: true, ref: accounts.account_code }
+      rep_code:      { type: text, required: true, ref: reps.rep_code }
+      campaign_code: { type: text, ref: campaigns.campaign_code }    # 비어 있으면 캠페인과 무관한 딜
+      pipeline_step: { type: enum, required: true, values: [lead, qualified, proposal, negotiation, won, lost] }
+      amount_krw:    { type: integer, required: true, min: 0, max: 10000000000 }
+      opened_on:     { type: date, required: true }
+      closed_on:     { type: date }
+    checks:
+      - name: 딜 종료일이 생성일보다 앞섬
+        sql: SELECT deal_code FROM raw.deals WHERE closed_on < opened_on
+      - name: 수주·실주인데 종료일이 없음
+        sql: SELECT deal_code FROM raw.deals WHERE pipeline_step IN ('won', 'lost') AND closed_on IS NULL
+      - name: 진행 중인 딜에 종료일이 있음
+        sql: SELECT deal_code FROM raw.deals WHERE pipeline_step NOT IN ('won', 'lost') AND closed_on IS NOT NULL
+      - name: 딜 날짜가 기준일보다 늦음
+        sql: SELECT deal_code FROM raw.deals WHERE opened_on > dash.as_of() OR closed_on > dash.as_of()

@@ -69,7 +69,7 @@ metadata:
 |---|---|
 | `GET /api/v1/dashboard/<A id>`, `/charts`, `/datasets` | 200 |
 | `POST /api/v1/chart/data` (저장된 차트 그대로) | 200 |
-| `POST /api/v1/chart/data` (지표를 바꿔서) | **403** "Guest user cannot modify chart payload" |
+| `POST /api/v1/chart/data` (지표를 바꿔서) | ~~403~~ **정정(Verify): 200.** Explore 때의 403은 다른 데이터셋 id를 함께 보내서 생긴 데이터셋 불일치 거부였다. guest는 차트 목록 권한이 없어 `ChartDAO.find_by_id`가 None → `query_context_modified` 검사가 건너뛰어진다(`common/query_context_factory.py:64`, `security/manager.py:201`). 실제 경계: 자기 대시보드 차트가 쓰는 데이터셋 안에서는 임의 열·집계 가능, 다른 데이터셋·대시보드에 없는 차트는 403, 서브쿼리는 400 |
 | `GET /api/v1/dashboard/<B id>`, `/charts` | **404** |
 | `GET /api/v1/database/` | **403** |
 | `GET /api/v1/chart/` | 200, `count: 0` |
@@ -87,7 +87,7 @@ metadata:
 
 - 6.1.0 기본 `TALISMAN_ENABLED=True`이고 `TALISMAN_CONFIG`에 `frame-ancestors`가 없다. flask-talisman 1.1.0은 기본으로 `X-Frame-Options: SAMEORIGIN`을 붙인다. [소스] `config.py:2113-2158`, `initialization/__init__.py:892-902`
 - 설정: 기본 `TALISMAN_CONFIG`를 deepcopy하고 `content_security_policy["frame-ancestors"] = [웹앱 출처...]`, `frame_options = None`으로 둔다(`TALISMAN_DEV_CONFIG`는 쓰지 않는다). [실측] 응답 헤더에 `frame-ancestors http://localhost:8080`이 있고 `X-Frame-Options`는 없다. 다른 출처에서는 Referer 검사로 403.
-- CORS는 켜지 않았다. SDK는 iframe과 `postMessage`만 쓴다. [실측] CORS 없이 동작.
+- CORS: SDK는 iframe과 `postMessage`만 쓴다. **정정(Implement):** 6.1.0 기본값은 `ENABLE_CORS = True`(지도 타일 출처 허용)라서 `superset_config.py`에 `ENABLE_CORS = False`를 명시했다. [실측] 끈 뒤에도 임베드 동작, 응답에 `Access-Control-*` 헤더 없음.
 - 캐시: 6.1.0 기본이 이미 `DATA_CACHE_CONFIG = {"CACHE_TYPE": "NullCache"}`, `CACHE_CONFIG`도 NullCache다. 명시적으로 다시 써 둔다. `FILTER_STATE_CACHE_CONFIG`와 `EXPLORE_FORM_DATA_CACHE_CONFIG`는 메타데이터 DB(`SupersetMetastoreCache`)를 쓰므로 Redis가 필요 없다. [소스] `config.py:1106-1140`
 
 ## 7. 축약 문법 6개 유형의 차트 파라미터

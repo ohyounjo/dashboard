@@ -1,0 +1,167 @@
+# dashkit: Superset 임베드형 범용 대시보드 템플릿
+# 값은 .env에서 읽는다(`make env`로 생성). 포트는 127.0.0.1에만 연다.
+
+x-superset-env: &superset-env
+  SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?make env 필요}
+  SUPERSET_DB_PASSWORD: ${SUPERSET_DB_PASSWORD:?make env 필요}
+  GUEST_TOKEN_JWT_SECRET: ${GUEST_TOKEN_JWT_SECRET:?make env 필요}
+  GUEST_TOKEN_JWT_AUDIENCE: ${GUEST_TOKEN_JWT_AUDIENCE}
+  WEB_ORIGINS: ${WEB_ORIGINS}
+  SUPERSET_LOAD_EXAMPLES: "no"
+
+x-data-db-env: &data-db-env
+  DATA_DB_HOST: ${DATA_DB_HOST}
+  DATA_DB_PORT: ${DATA_DB_PORT}
+  DATA_DB_NAME: ${DATA_DB_NAME}
+  DATA_DB_READER_USER: ${DATA_DB_READER_USER}
+  DATA_DB_READER_PASSWORD: ${DATA_DB_READER_PASSWORD:?make env 필요}
+
+services:
+  data-db:
+    image: postgres:16.10
+    restart: unless-stopped
+    environment:
+      # superuser는 postgres로 따로 두고, 로더 계정(dash_owner)은 01-reader.sh가 일반 역할로 만든다
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DATA_DB_ADMIN_PASSWORD:?make env 필요}
+      POSTGRES_DB: ${DATA_DB_NAME}
+      DATA_DB_OWNER_USER: ${DATA_DB_OWNER_USER}
+      DATA_DB_OWNER_PASSWORD: ${DATA_DB_OWNER_PASSWORD:?make env 필요}
+      DATA_DB_READER_USER: ${DATA_DB_READER_USER}
+      DATA_DB_READER_PASSWORD: ${DATA_DB_READER_PASSWORD:?make env 필요}
+      TZ: ${TZ}
+    volumes:
+      - data-db:/var/lib/postgresql/data
+      - ./data-db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  superset-db:
+    image: postgres:16.10
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: ${SUPERSET_DB_PASSWORD:?make env 필요}
+      POSTGRES_DB: superset
+    volumes:
+      - superset-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset -d superset"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # 일회성: db upgrade → 관리자 → superset init → EmbedGuest 역할. 재실행해도 성공한다.
+  superset-init:
+    build: ./superset
+    image: dashkit-superset:6.1.0
+    command: ["/app/superset_init/init.sh"]
+    restart: "no"
+    environment:
+      <<: *superset-env
+      SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?make env 필요}
+    depends_on:
+      superset-db:
+        condition: service_healthy
+
+  superset:
+    build: ./superset
+    image: dashkit-superset:6.1.0
+    restart: unless-stopped
+    environment:
+      <<: *superset-env
+    ports:
+      - "127.0.0.1:${SUPERSET_PORT:-8088}:8088"
+    depends_on:
+      superset-db:
+        condition: service_healthy
+      superset-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8088/health', timeout=5).status == 200 else 1)"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+
+  backend:
+    build:
+      context: .
+      dockerfile: dashkit/Dockerfile
+    image: dashkit-app:local
+    restart: unless-stopped
+    # SUPERSET_ADMIN_PASSWORD, DATA_DB_OWNER_PASSWORD는 주지 않는다
+    environment:
+      <<: *data-db-env
+      PROJECT: ${PROJECT}
+      TZ: ${TZ}
+      SUPERSET_PUBLIC_URL: ${SUPERSET_PUBLIC_URL}
+      GUEST_TOKEN_JWT_SECRET: ${GUEST_TOKEN_JWT_SECRET:?make env 필요}
+      GUEST_TOKEN_JWT_AUDIENCE: ${GUEST_TOKEN_JWT_AUDIENCE}
+      STATE_DIR: ${STATE_DIR}
+      DATA_MAX_ROWS: ${DATA_MAX_ROWS}
+    volumes:
+      - ./projects:/app/projects:ro
+      - ./.state:/app/.state:ro
+    depends_on:
+      data-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).status == 200 else 1)"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+
+  web:
+    image: nginx:1.29.3-alpine
+    restart: unless-stopped
+    environment:
+      SUPERSET_PUBLIC_URL: ${SUPERSET_PUBLIC_URL}
+      # envsubst 대상을 이 변수 하나로 제한한다($uri 등 nginx 변수 보호)
+      NGINX_ENVSUBST_FILTER: "^SUPERSET_PUBLIC_URL$$"
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+      - ./web/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # 일회성: make check/load/sync/test. 저장소 전체를 마운트해 소스를 그대로 쓴다.
+  tools:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: dashkit/Dockerfile
+    image: dashkit-app:local
+    restart: "no"
+    environment:
+      <<: *data-db-env
+      PROJECT: ${PROJECT}
+      TZ: ${TZ}
+      WEB_ORIGINS: ${WEB_ORIGINS}
+      SUPERSET_URL: ${SUPERSET_URL}
+      SUPERSET_PUBLIC_URL: ${SUPERSET_PUBLIC_URL}
+      SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?make env 필요}
+      GUEST_TOKEN_JWT_SECRET: ${GUEST_TOKEN_JWT_SECRET:?make env 필요}
+      GUEST_TOKEN_JWT_AUDIENCE: ${GUEST_TOKEN_JWT_AUDIENCE}
+      DATA_DB_OWNER_USER: ${DATA_DB_OWNER_USER}
+      DATA_DB_OWNER_PASSWORD: ${DATA_DB_OWNER_PASSWORD:?make env 필요}
+      STATE_DIR: ${STATE_DIR}
+      BUILD_DIR: ${BUILD_DIR}
+      DATA_MAX_ROWS: ${DATA_MAX_ROWS}
+    volumes:
+      - .:/app
+
+volumes:
+  data-db:
+  superset-db:

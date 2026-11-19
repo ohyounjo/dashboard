@@ -1,0 +1,161 @@
+# B2B 영업 현황 대시보드(예시 2). 범용성 테스트 픽스처 겸용.
+app:
+  title: B2B 영업 현황
+  logo_text: SL
+  as_of: "2026-06-30"
+  theme: { primary: { light: "#0F766E", dark: "#5EEAD4" } }
+
+datasets:
+  deal_pipeline:
+    labels: { deal_code: "딜 코드", deal_label: "딜", step_badge: "단계", amount_krw: "금액(원)", company: "고객사", industry: "업종", region: "지역", team: "팀", rep_name: "담당", age_days: "경과 일수", closed_on: "종료일", won_amount: "수주액", active_amount: "진행 중 금액" }
+    sql: |
+      SELECT d.deal_code, d.deal_label, d.pipeline_step, d.amount_krw, d.opened_on, d.closed_on,
+             a.company, a.industry, a.region, a.tier,
+             r.rep_name, r.team,
+             c.campaign_name,
+             d.pipeline_step = 'won' AS is_won,
+             d.pipeline_step NOT IN ('won', 'lost') AS is_active,
+             (COALESCE(d.closed_on, dash.as_of()) - d.opened_on) AS age_days,
+             CASE d.pipeline_step
+               WHEN 'lead' THEN '🌱 리드'
+               WHEN 'qualified' THEN '🔍 검증'
+               WHEN 'proposal' THEN '📄 제안'
+               WHEN 'negotiation' THEN '🤝 협상'
+               WHEN 'won' THEN '🏆 수주'
+               WHEN 'lost' THEN '❌ 실주'
+               ELSE d.pipeline_step
+             END AS step_badge
+      FROM raw.deals d
+      LEFT JOIN raw.accounts a ON a.account_code = d.account_code
+      LEFT JOIN raw.reps r ON r.rep_code = d.rep_code
+      LEFT JOIN raw.campaigns c ON c.campaign_code = d.campaign_code
+    metrics:
+      won_amount: "SUM(amount_krw) FILTER (WHERE is_won)"
+      active_amount: "SUM(amount_krw) FILTER (WHERE is_active)"
+      active_count: "COUNT(*) FILTER (WHERE is_active)"
+      win_rate: "ROUND(100.0 * COUNT(*) FILTER (WHERE is_won) / NULLIF(COUNT(*) FILTER (WHERE NOT is_active), 0), 1)"
+  campaign_plan:
+    sql: |
+      SELECT c.campaign_code, c.campaign_name, c.channel, c.launch_on, c.close_on,
+             c.budget_krw, c.phase, c.completion_pct,
+             r.rep_name AS lead_rep_name
+      FROM raw.campaigns c
+      LEFT JOIN raw.reps r ON r.rep_code = c.lead_rep
+  client_roster:
+    labels: { account_code: "고객 코드", company: "고객사", industry: "업종", region: "지역", tier: "등급", rep_name: "담당", deal_count: "딜 수", won_total: "수주액(원)" }
+    sql: |
+      SELECT a.account_code, a.company, a.industry, a.region, a.tier,
+             r.rep_name,
+             COUNT(d.deal_code) AS deal_count,
+             COALESCE(SUM(d.amount_krw) FILTER (WHERE d.pipeline_step = 'won'), 0) AS won_total
+      FROM raw.accounts a
+      LEFT JOIN raw.reps r ON r.rep_code = a.owner_rep
+      LEFT JOIN raw.deals d ON d.account_code = a.account_code
+      GROUP BY a.account_code, a.company, a.industry, a.region, a.tier, r.rep_name
+
+dashboards:
+  sales_home:
+    title: 영업 요약
+    charts:
+      - { key: sum_won, title: 누적 수주액(원), viz: big_number_total, dataset: deal_pipeline, metric: won_amount, format: ",.0f" }
+      - { key: sum_active, title: 진행 중인 딜, viz: big_number_total, dataset: deal_pipeline, metric: active_count, subtitle: 건 }
+      - { key: sum_win_rate, title: 수주율(%), viz: big_number_total, dataset: deal_pipeline, metric: win_rate, format: ".1f" }
+      - key: won_monthly
+        title: 월별 수주액
+        viz: line
+        dataset: deal_pipeline
+        x: closed_on
+        time_grain: P1M
+        metrics: [won_amount]
+        format: ",.0f"
+      - key: amount_per_rep
+        title: 담당자별 금액
+        viz: bar
+        dataset: deal_pipeline
+        x: rep_name
+        metrics: [active_amount, won_amount]
+        format: ",.0f"
+      - key: won_industry_mix
+        title: 업종별 수주액
+        viz: pie
+        dataset: deal_pipeline
+        groupby: [industry]
+        metric: won_amount
+        donut: true
+      - key: active_deal_list
+        title: 금액 상위 진행 딜
+        viz: table
+        dataset: deal_pipeline
+        where: "is_active"
+        columns: [step_badge, deal_code, deal_label, company, rep_name, amount_krw, age_days]
+        order_by: [[amount_krw, desc]]
+        row_limit: 10
+    layout:
+      - [sum_won, sum_active, sum_win_rate]
+      - [{ chart: won_monthly, width: 8 }, won_industry_mix]
+      - [amount_per_rep, active_deal_list]
+    filters:
+      - { key: f_region, label: 지역, type: select, multi: true, dataset: deal_pipeline, column: region }
+      - { key: f_team, label: 팀, type: select, multi: true, dataset: deal_pipeline, column: team }
+
+  client_book:
+    title: 고객사
+    charts:
+      - key: tier_mix
+        title: 등급별 고객 수
+        viz: pie
+        dataset: client_roster
+        groupby: [tier]
+        metric: { sql: "COUNT(*)", label: 고객 수 }
+      - key: client_list
+        title: 고객사 목록
+        viz: table
+        dataset: client_roster
+        columns: [account_code, company, industry, region, tier, rep_name, deal_count, won_total]
+        order_by: [[won_total, desc], [account_code, asc]]
+        search: true
+    layout:
+      - [{ chart: tier_mix, width: 4 }, { chart: client_list, width: 8, height: 80 }]
+    filters:
+      - { key: f_industry, label: 업종, type: select, multi: true, dataset: client_roster, column: industry }
+
+tabs:
+  - key: summary
+    label: 요약
+    icon: chart
+    sections: [{ type: superset, dashboard: sales_home }]
+  - key: pipeline_board
+    label: 파이프라인
+    icon: target
+    sections:
+      - type: kanban
+        title: 딜 파이프라인
+        dataset: deal_pipeline
+        group_by: pipeline_step
+        columns:
+          - { value: lead, label: 리드 }
+          - { value: qualified, label: 검증 }
+          - { value: proposal, label: 제안 }
+          - { value: negotiation, label: 협상 }
+          - { value: won, label: 수주, icon: "🏆", tone: good }
+          - { value: lost, label: 실주, icon: "❌", tone: bad }
+        card: { title: deal_label, chips: [company, rep_name] }
+        filter: { column: region, label: 지역 }
+  - key: promotions
+    label: 캠페인
+    icon: megaphone
+    sections:
+      - type: gantt
+        title: 캠페인 일정
+        dataset: campaign_plan
+        fields: { label: campaign_name, start: launch_on, end: close_on, progress: completion_pct, status: phase }
+        range: { start: "2026-01-01", end: "2026-12-31" }
+        statuses:
+          draft:   { label: 준비, icon: "📝", tone: neutral }
+          live:    { label: 진행, icon: "📣", tone: primary }
+          wrapped: { label: 종료, icon: "🏁", tone: good }
+          paused:  { label: 보류, icon: "⏸️", tone: warn }
+  - key: clients
+    label: 고객사
+    icon: users
+    sections: [{ type: superset, dashboard: client_book }]

@@ -1,0 +1,50 @@
+# 도메인 단어 grep 테스트(tests/test_domain_words.py)의 고정 목록.
+# 설정에서 자동 수집하는 단어(테이블·열·enum·데이터셋·대시보드·탭)에 더해 [deny]를 금지하고,
+# [allow]는 어느 도메인에도 쓰이는 일반 단어라서 금지 목록에서 뺀다.
+
+[deny]
+milestone
+milestones
+issue
+issues
+severity
+마일스톤
+이슈
+심각도
+task
+tasks
+kpi
+customer
+deal
+deals
+campaign
+campaigns
+
+[allow]
+# 범용 식별·속성 이름
+id
+name
+title
+type
+status
+role
+version
+created
+updated
+progress
+date
+value
+label
+email
+phone
+amount
+# 탭 아이콘 이름(contracts/icons.md)과 겹치는 단어
+doc
+# 일반 상태 단어
+done
+open
+closed
+planned
+# 일반 탭 이름
+overview
+개요

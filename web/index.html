@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title></title>
+<link rel="stylesheet" href="styles.css">
+<script src="vendor/superset-embedded-sdk-0.4.0.js" defer></script>
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<a class="skip" id="skip" href="#"></a>
+
+<aside class="rail" id="rail">
+  <div class="logo" id="logo" aria-hidden="true"></div>
+  <nav id="tabs"></nav>
+  <div class="spacer"></div>
+  <button class="theme" id="themeBtn" type="button"><span class="ico" id="themeIco"></span><span class="lbl" id="themeLabel"></span></button>
+</aside>
+
+<main id="main" tabindex="-1">
+  <header class="top">
+    <h1 id="title"></h1>
+    <div class="meta" id="meta" hidden>
+      <span id="asOfWrap"><span id="asOfLabel"></span> <b class="num" id="asOf"></b></span>
+      <span class="badge-ro" id="readOnly"></span>
+    </div>
+  </header>
+  <div id="views"></div>
+</main>
+</body>
+</html>

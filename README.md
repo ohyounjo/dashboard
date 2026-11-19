@@ -1,0 +1,265 @@
+# Superset 임베드형 범용 대시보드 템플릿
+
+`projects/<이름>/` 폴더 하나(CSV, `schema.yaml`, `dashboard.yaml`)만 바꾸면 도메인이 다른 대시보드가 됩니다.
+
+- 차트(KPI, 추이, 표, 필터)는 Apache Superset이 그리고, 웹앱이 Embedded SDK로 iframe에 띄웁니다.
+- 화면 틀(Rail, 다크모드)과 간트·칸반 위젯은 웹앱이 직접 그립니다.
+- Superset 객체(데이터셋, 차트, 대시보드, 필터)는 설정 파일에서 생성합니다. 화면에서 클릭해 만들지 않습니다.
+
+> ⚠️ **인증이 없습니다.** 모든 포트는 `127.0.0.1`에만 열려 있고, 이 컴퓨터에서만 볼 수 있다는 전제로 만들었습니다.
+> 외부에 공개하려면 웹앱(8080) 앞에 **인증 프록시**(예: oauth2-proxy, 사내 SSO 게이트웨이)를 두세요. Superset(8088)은 직접 공개하지 마세요.
+> 브라우저로 나가는 것은 수명 5분짜리 guest token뿐입니다. 하지만 그 토큰으로 임베드한 대시보드가 쓰는 데이터셋의 다른 열과 집계도 조회할 수 있습니다(`done.md`의 "남은 한계"). 그러니 `dash` 뷰에는 보여도 되는 열만 두세요.
+
+## 실행 순서
+
+호스트에는 Docker(Compose v2 포함)와 make만 있으면 됩니다. 파이썬 작업은 모두 `tools` 컨테이너에서 실행합니다.
+
+```bash
+make env
+```
+`.env.example`을 복사해 `.env`를 만들고 비밀값(관리자 비밀번호, SECRET_KEY, guest token 서명 키, DB 비밀번호)을 임의 값으로 채웁니다. `.env`가 이미 있으면 건드리지 않습니다.
+
+```bash
+make up
+```
+컨테이너를 빌드·기동하고 superset, backend, web이 healthy가 될 때까지 기다립니다(처음에는 이미지 내려받기 때문에 몇 분 걸립니다).
+
+```bash
+make apply
+```
+check(설정 검사) → load(CSV 검증·적재) → sync(Superset 반영) → backend 재시작 순서로 실행합니다.
+
+브라우저에서 http://localhost:8080 을 엽니다. Superset 관리 화면은 http://localhost:8088 이고, 계정은 `.env`의 `SUPERSET_ADMIN_USER`/`SUPERSET_ADMIN_PASSWORD`입니다.
+
+| 명령 | 하는 일 |
+|---|---|
+| `make env` | `.env` 생성 |
+| `make up` | 기동 후 healthy 대기 |
+| `make check` | 설정만 검사(DB 불필요) |
+| `make apply` | 검사 → 적재 → Superset 반영 → backend 재시작. **무엇을 바꿨든 이것 하나** |
+| `make test` | 전체 테스트(아래 "테스트") |
+| `make logs` | 로그 보기 |
+| `make down` | 중지(데이터 유지) |
+| `make reset CONFIRM=1` | 컨테이너·볼륨·`.state/`·`.build/` 삭제(처음부터 다시) |
+
+## 저장소 구조
+
+```
+projects/<이름>/        ★ 사용자가 바꾸는 곳: data/*.csv, schema.yaml, dashboard.yaml
+contracts/              설정 형식(JSON Schema), API·위젯·상태 파일 계약, Superset 6.1.0 확인 기록
+dashkit/                파이썬 패키지: config.py(설정 검증), loader/, sync/, api/
+superset/               Superset 이미지·설정·초기화(guest 역할)
+web/                    웹앱(바닐라 JS): 셸, strings.js(고정 문구), widgets/gantt.js·kanban.js
+data-db/init/           데이터 DB 계정 초기화
+tests/                  pytest
+.build/  .state/        생성된 asset 번들, 임베드 UUID·관리 객체 목록(커밋 제외)
+```
+
+예시 프로젝트는 두 개입니다. `.env`의 `PROJECT`로 고릅니다.
+- `devtracker`: 스마트홈 앱 개발 현황(기본)
+- `sales-sample`: B2B 영업 현황
+
+---
+
+## 1. 데이터 바꾸기
+
+값(행 추가, 수치 변경)만 바꿀 때는 CSV를 고칩니다.
+
+- 파일: `projects/<이름>/data/<테이블>.csv`
+- CSV 형식:
+  - UTF-8, 첫 줄은 머리글이고 `schema.yaml`의 열과 같은 집합이어야 합니다.
+  - 빈 칸은 NULL입니다.
+  - 날짜는 `YYYY-MM-DD`, boolean은 `true`/`false`입니다.
+
+```bash
+make apply
+```
+
+CSV에 오류가 있으면 `파일:행:열: 이유` 형식으로 **모두** 출력하고, DB는 이전 상태 그대로 둡니다.
+
+```
+data/issues.csv:3:severity: 허용되지 않은 값 'blocker' (허용: critical, major, minor, trivial)
+data/tasks.csv:18:id: 기본 키 중복 (T1, 처음 나온 줄 2)
+```
+
+열을 더하거나 검증 규칙을 바꾸려면 `projects/<이름>/schema.yaml`을 고칩니다.
+- 열 규칙: `type`(text, integer, number, boolean, date, timestamp, enum), `required`, `values`, `ref`, `min`, `max`, `pattern`
+- 테이블 규칙: `checks`. 위반 행을 돌려주는 SQL을 씁니다. 한 행이라도 나오면 적재 전체가 롤백됩니다.
+- 열 이름은 snake_case로 쓰고 SQL 예약어(`end`, `start`, `order` 등)는 쓸 수 없습니다.
+- 형식의 기준은 [contracts/schema.schema.json](contracts/schema.schema.json)입니다.
+
+## 2. 차트 바꾸기
+
+`projects/<이름>/dashboard.yaml`에서 두 곳을 고칩니다.
+- **계산 규칙과 파생 열:** `datasets`. 데이터셋마다 `dash.<키>` 뷰가 되고, Superset과 웹앱 위젯이 같은 뷰를 읽습니다.
+- **차트, 배치, 필터:** `dashboards`
+
+```yaml
+datasets:
+  orders:
+    sql: |
+      SELECT o.*, (dash.as_of() - o.ordered_on) AS age_days   # dash.as_of() = app.as_of 기준일
+      FROM raw.orders o
+    metrics:
+      revenue: "SUM(amount)"
+    labels: { ordered_on: 주문일, age_days: 경과 일수, revenue: 매출 }   # 표 머리글·범례 이름
+
+dashboards:
+  main:
+    title: 메인
+    charts:
+      - { key: kpi_rev, title: 매출, viz: big_number_total, dataset: orders, metric: revenue, format: ",d" }
+      - { key: trend, title: 주별 매출, viz: line, dataset: orders, x: ordered_on, time_grain: P1W, metrics: [revenue] }
+      - key: recent
+        title: 최근 주문
+        viz: table
+        dataset: orders
+        columns: [id, ordered_on, amount]
+        order_by: [[ordered_on, desc]]
+        row_limit: 10
+    layout:                      # 행 목록. 12칸 격자를 균등 분할, { chart, width } 로 너비 지정
+      - [kpi_rev, { chart: trend, width: 8 }]
+      - [recent]
+    filters:
+      - { key: f_region, label: 지역, type: select, dataset: orders, column: region }
+```
+
+```bash
+make apply
+```
+
+- 축약 문법은 6개 유형을 지원합니다: `big_number_total`, `big_number`, `line`, `bar`, `pie`, `table`. 필드 대응은 [contracts/chart-shorthand.md](contracts/chart-shorthand.md)에 있습니다.
+- 축약 문법에 없는 옵션은 `params:`에 Superset 원본 파라미터로 씁니다. 생성된 값 위에 마지막으로 덮어씁니다.
+- 지표 참조: 문자열이면 데이터셋 `metrics`의 이름, `{ sql, label }`이면 그 차트에서만 쓰는 식입니다.
+- 설정에서 지운 차트는 Superset에서도 지워집니다(prune).
+- 생성된 asset 번들은 `.build/<이름>/bundle/`에 남아 diff로 볼 수 있습니다.
+
+## 3. 탭과 위젯 바꾸기
+
+`dashboard.yaml`의 `tabs`가 웹앱의 탭(Rail)과 섹션을 정의합니다. 웹앱 코드에는 탭이 없습니다. 탭마다 주소 `#<key>`가 붙습니다.
+
+```yaml
+tabs:
+  - key: home
+    label: 홈
+    icon: grid                   # grid calendar alert doc chart table users box list flag target cart megaphone home
+    sections: [{ type: superset, dashboard: main }]
+  - key: plan
+    label: 일정
+    icon: calendar
+    sections:
+      - type: gantt
+        title: 프로젝트 일정
+        dataset: phases
+        fields: { label: phase_name, start: begins_on, end: ends_on, progress: pct, status: state }
+        statuses:                # 열 값 → 라벨·이모지·색조(primary good warn bad neutral)
+          done:   { label: 완료, icon: "✅", tone: good }
+          late:   { label: 지연, icon: "⚠️", tone: warn }
+        range: { start: "2026-01-01", end: "2026-12-31" }   # 생략하면 데이터 범위
+      - type: kanban
+        title: 보드
+        dataset: cards
+        group_by: lane
+        columns:
+          - { value: todo, label: 할 일 }
+          - { value: done, label: 완료, icon: "✅" }
+        card: { title: card_title, chips: [owner_name] }
+        filter: { column: owner_name, label: 담당 }
+```
+
+```bash
+make apply
+```
+
+- 간트의 오늘 선은 `app.as_of`(기준일)에 그립니다. 칸반은 보기 전용이라 카드를 끌어 옮길 수 없습니다.
+- 위젯 데이터는 `GET /api/data/<데이터셋>`으로 받습니다. 간트·칸반 섹션이 참조한 데이터셋만 열리고, 나머지는 404입니다.
+- 제목, 로고 글자, 기준일, 메인 컬러는 `app`에서 바꿉니다(`title`, `logo_text`, `as_of: today | YYYY-MM-DD`, `theme.primary.light/dark`).
+- 셸의 고정 문구("보기 전용", "테마" 등)는 `web/strings.js` 한 파일에 있습니다.
+- 새 위젯 유형을 만드는 방법은 [contracts/widgets.md](contracts/widgets.md)의 "새 위젯 유형 추가"를 보세요.
+
+## 4. 새 프로젝트 만들기
+
+```bash
+cp -r projects/sales-sample projects/myproject
+```
+
+1. `projects/myproject/data/`에 CSV를 둡니다(파일 이름 = 테이블 이름).
+2. `projects/myproject/schema.yaml`에 테이블·열·검증 규칙을 씁니다.
+3. `projects/myproject/dashboard.yaml`에 `app`, `datasets`, `dashboards`, `tabs`를 씁니다.
+4. `.env`에서 `PROJECT=myproject`로 바꿉니다.
+
+```bash
+make check
+```
+설정만 먼저 검사합니다. 오류는 `dashboard.yaml:dashboards.main.layout[1][0]: 차트 'x'가 이 대시보드의 charts에 없음`처럼 위치와 함께 모두 출력됩니다.
+
+```bash
+make apply
+```
+
+이전 프로젝트의 Superset 객체는 이번 sync에서 지워집니다. 한 번에 한 프로젝트만 적용되며, 데이터 DB의 `raw`·`dash` 스키마도 매번 다시 만듭니다. 잠깐 다른 예시를 보려면 `.env`를 고치지 않고 이렇게 해도 됩니다.
+
+```bash
+PROJECT=sales-sample make apply
+```
+
+## 5. Superset 화면에서 만든 차트를 params로 옮기기
+
+축약 문법에 없는 차트 유형이나 세부 옵션은 Superset 화면에서 만든 뒤, 그 파라미터를 설정으로 옮깁니다.
+
+1. http://localhost:8088 에 관리자로 로그인합니다.
+2. **Charts → + Chart**에서 `make apply`가 만든 데이터셋(`dash.<키>`)을 고르고, 원하는 대로 만든 다음 **Save**합니다(대시보드에는 추가하지 않습니다).
+3. 차트 목록에서 그 차트를 체크하고 **Bulk select → Export**를 누릅니다. zip이 내려받아집니다.
+4. zip 안의 `charts/<이름>.yaml`을 엽니다. `viz_type`과 `params`를 `dashboard.yaml`의 차트로 옮깁니다. `params`에서 `datasource`, `slice_id`, `dashboards`, `extra_form_data` 키는 지웁니다.
+
+   ```yaml
+   - key: heat
+     title: 요일·시간대 분포
+     viz_type: heatmap_v2          # yaml의 viz_type 그대로
+     dataset: orders               # 화면에서 고른 데이터셋의 키
+     params:                       # yaml의 params에서 datasource·slice_id·dashboards·extra_form_data를 뺀 나머지
+       x_axis: weekday
+       groupby: hour
+       metric: revenue
+       linear_color_scheme: blue_white_yellow
+   ```
+
+5. `layout`에 차트 키를 배치하고 실행합니다.
+
+   ```bash
+   make apply
+   ```
+
+6. 화면에서 임시로 만든 차트는 sync가 관리하지 않으므로 Superset에서 직접 지웁니다. sync가 만든 차트를 화면에서 고친 내용은 다음 `make apply`에서 덮어써집니다.
+
+축약 차트에 옵션만 하나 더하고 싶을 때(예: 막대 값 표시)도 같은 방법으로 키 이름을 찾아 `params: { show_value: true }`처럼 씁니다.
+
+---
+
+## 테스트
+
+```bash
+make test
+```
+
+1. 현재 `PROJECT`로 `tests/` 전체를 실행합니다.
+   - 설정 검사, 로더(임시 DB), sync(임시 프로젝트 이름)
+   - 지표 정합성(Superset 차트 데이터 API)
+   - 백엔드와 guest token 권한 경계
+   - 템플릿 코드의 도메인 단어 grep
+2. 다른 예시 프로젝트로 `apply`한 뒤 전환을 검사합니다(`tests/test_switch.py`). 탭·차트·위젯 데이터가 바뀌고 이전 Superset 객체가 남지 않는지 봅니다.
+3. 성공하든 실패하든 원래 프로젝트로 다시 `apply`합니다.
+
+UI 화면은 자동 테스트에 넣지 않았습니다.
+
+## 문제 해결
+
+| 증상 | 확인 |
+|---|---|
+| 섹션에 "아직 반영되지 않았습니다" | `make apply`를 실행했는지 |
+| Superset 섹션에 "Superset에 연결할 수 없습니다" | `make logs`에서 superset 상태, `.env`의 `SUPERSET_PUBLIC_URL`이 브라우저에서 열리는지 |
+| `make apply`의 sync가 "asset 번들 가져오기 실패" | Superset이 검증 오류를 500으로만 돌려줍니다. `make logs`에서 superset 로그를 보세요. 번들은 `.build/<이름>/bundle/`에 있습니다 |
+| 웹앱을 `127.0.0.1:8080`으로 열면 임베드 403 | `.env`의 `WEB_ORIGINS`에 그 출처가 있는지(기본값은 localhost와 127.0.0.1 둘 다) |
+| `.env`의 DB 비밀번호를 바꿨더니 접속 실패 | DB 계정은 처음 만들 때만 생깁니다. `make reset CONFIRM=1` 후 `make up && make apply` |
+
+버전: Superset 6.1.0, @superset-ui/embedded-sdk 0.4.0, PostgreSQL 16.10, nginx 1.29.3, Python 3.12.16. 모든 이미지와 패키지는 정확한 버전으로 고정했습니다.

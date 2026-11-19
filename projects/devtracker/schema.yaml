@@ -1,0 +1,95 @@
+# 스마트홈 앱 개발 현황. 출처: reference/index.html의 DATA와 validateData 규칙.
+# 테이블 키 = data/<키>.csv = raw.<키>. 열 규칙: type, required, values, ref, min, max, pattern.
+# 열 규칙으로 표현할 수 없는 규칙은 checks(위반 행을 돌려주는 SQL, 첫 열 = 위반 키)에 둔다.
+tables:
+  members:
+    primary_key: id
+    columns:
+      id:   { type: text, pattern: "^m\\d+$" }
+      name: { type: text, required: true }
+      role: { type: text }
+
+  milestones:
+    primary_key: id
+    columns:
+      id:         { type: text, pattern: "^ms\\d+$" }
+      title:      { type: text, required: true }
+      # 프로젝트 기간(2026-08-03 ~ 2027-02-26) 안이어야 한다
+      start_date: { type: date, required: true, min: "2026-08-03", max: "2027-02-26" }
+      end_date:   { type: date, required: true, min: "2026-08-03", max: "2027-02-26" }
+      status:     { type: enum, required: true, values: [done, in-progress, planned, delayed] }
+      progress:   { type: integer, required: true, min: 0, max: 100 }
+    checks:
+      - name: 마일스톤 시작일이 종료일보다 늦음
+        sql: SELECT id FROM raw.milestones WHERE start_date > end_date
+      - name: 마일스톤이 완료인데 진척률이 100이 아님
+        sql: SELECT id FROM raw.milestones WHERE status = 'done' AND progress <> 100
+
+  tasks:
+    primary_key: id
+    columns:
+      id:           { type: text, pattern: "^T\\d+$" }
+      title:        { type: text, required: true }
+      stage:        { type: enum, required: true, values: [todo, doing, review, done] }
+      assignee:     { type: text, required: true, ref: members.id }
+      milestone_id: { type: text, required: true, ref: milestones.id }
+
+  issues:
+    primary_key: id
+    columns:
+      id:           { type: text, pattern: "^ISS-\\d+$" }
+      title:        { type: text, required: true }
+      severity:     { type: enum, required: true, values: [critical, major, minor, trivial] }
+      status:       { type: enum, required: true, values: [open, in-progress, resolved, closed] }
+      assignee:     { type: text, required: true, ref: members.id }
+      milestone_id: { type: text, required: true, ref: milestones.id }
+      created:      { type: date, required: true }
+      updated:      { type: date, required: true }
+    checks:
+      - name: 이슈 생성일이 수정일보다 늦음
+        sql: SELECT id FROM raw.issues WHERE created > updated
+      - name: 이슈 수정일이 기준일보다 늦음(미래 수정일)
+        sql: SELECT id FROM raw.issues WHERE updated > dash.as_of()
+
+  docs:
+    primary_key: id
+    columns:
+      id:           { type: text, pattern: "^D\\d+$" }
+      title:        { type: text, required: true }
+      type:         { type: enum, required: true, values: [기획안, PRD, 기술 설계, 회의록] }
+      version:      { type: text, required: true, pattern: "^v\\d+\\.\\d+$" }
+      author:       { type: text, required: true, ref: members.id }
+      updated:      { type: date, required: true }
+      milestone_id: { type: text, required: true, ref: milestones.id }
+    checks:
+      - name: 문서 수정일이 기준일보다 늦음(미래 수정일)
+        sql: SELECT id FROM raw.docs WHERE updated > dash.as_of()
+
+  kpi_snapshots:
+    description: 주차별 스냅샷. week_start는 ISO 주의 월요일(W47 → 2026-11-16). 마지막 행은 현재 데이터와 같아야 한다
+    primary_key: week_start
+    columns:
+      week_start:    { type: date }
+      progress:      { type: integer, required: true, min: 0, max: 100 }
+      open_issues:   { type: integer, required: true, min: 0 }
+      critical_open: { type: integer, required: true, min: 0 }
+    checks:
+      - name: 스냅샷 주 시작일이 월요일이 아님
+        sql: SELECT week_start FROM raw.kpi_snapshots WHERE EXTRACT(ISODOW FROM week_start) <> 1
+      # 집계식은 dashboard.yaml 데이터셋 뷰(dash.issues의 is_open, dash.milestones의 days)를 그대로 쓴다
+      - name: 마지막 스냅샷이 현재 집계(열린 이슈, Critical 미해결, 가중 진척률)와 다름
+        sql: |
+          WITH last AS (
+            SELECT * FROM raw.kpi_snapshots ORDER BY week_start DESC LIMIT 1
+          ), cur AS (
+            SELECT
+              (SELECT COUNT(*) FILTER (WHERE is_open) FROM dash.issues) AS open_issues,
+              (SELECT COUNT(*) FILTER (WHERE is_open AND severity = 'critical') FROM dash.issues) AS critical_open,
+              (SELECT ROUND(SUM(progress * days)::numeric / NULLIF(SUM(days), 0)) FROM dash.milestones) AS progress
+          )
+          SELECT l.week_start || ': 스냅샷(' || l.open_issues || ', ' || l.critical_open || ', ' || l.progress
+                 || ') ≠ 현재(' || c.open_issues || ', ' || c.critical_open || ', ' || c.progress || ')'
+          FROM last l CROSS JOIN cur c
+          WHERE l.open_issues <> c.open_issues
+             OR l.critical_open <> c.critical_open
+             OR l.progress <> c.progress

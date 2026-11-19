@@ -1,0 +1,25 @@
+id,title,severity,status,assignee,milestone_id,created,updated
+ISS-101,Wi-Fi 페어링 시 앱 크래시(Android 14),critical,in-progress,m2,ms2,2026-10-28,2026-11-18
+ISS-102,Matter 브리지 기기 검색 누락,critical,open,m4,ms2,2026-11-03,2026-11-17
+ISS-103,자동화 루틴 시간 조건 타임존 오류,major,open,m3,ms3,2026-11-05,2026-11-16
+ISS-104,로그인 토큰 만료 후 재발급 실패,major,resolved,m3,ms1,2026-09-02,2026-09-10
+ISS-105,조명 밝기 슬라이더 반응 지연,minor,in-progress,m2,ms2,2026-10-30,2026-11-14
+ISS-106,온보딩 화면 다크모드 대비 부족,minor,closed,m6,ms1,2026-08-25,2026-09-05
+ISS-107,기기 목록 정렬 순서가 저장되지 않음,trivial,open,m2,ms3,2026-11-10,2026-11-12
+ISS-108,펌웨어 버전 표시 누락,minor,resolved,m4,ms2,2026-10-01,2026-10-15
+ISS-109,푸시 알림 중복 발송,major,in-progress,m3,ms3,2026-11-07,2026-11-19
+ISS-110,루틴 편집 시 조건 삭제 불가,major,open,m2,ms3,2026-11-11,2026-11-18
+ISS-111,Zigbee 센서 배터리 잔량 오표시,minor,open,m4,ms2,2026-11-04,2026-11-13
+ISS-112,스크린리더 접근성 라벨 누락,minor,open,m6,ms3,2026-11-12,2026-11-15
+ISS-113,회원가입 이메일 인증 링크 만료,major,closed,m3,ms1,2026-08-28,2026-09-08
+ISS-114,스마트 플러그 전력 그래프 단위 오류,minor,resolved,m2,ms2,2026-10-20,2026-11-02
+ISS-115,루틴 실행 이력 페이지 로딩 3초 이상,major,open,m3,ms3,2026-11-13,2026-11-18
+ISS-116,기기 공유 초대 수락 실패,critical,resolved,m3,ms2,2026-10-12,2026-10-25
+ISS-117,설정 화면 오탈자,trivial,closed,m6,ms1,2026-09-01,2026-09-03
+ISS-118,오프라인 기기 상태가 갱신되지 않음,major,in-progress,m4,ms2,2026-11-01,2026-11-17
+ISS-119,위젯 아이콘 해상도 저하,trivial,open,m6,ms3,2026-11-14,2026-11-14
+ISS-120,지오펜스 루틴 반경 설정 오류,major,open,m2,ms3,2026-11-15,2026-11-19
+ISS-121,QA 회귀 테스트 케이스 누락,minor,in-progress,m5,ms4,2026-11-16,2026-11-18
+ISS-122,앱 시작 시 스플래시 깜빡임,trivial,resolved,m2,ms1,2026-09-05,2026-09-09
+ISS-123,도어락 원격 해제 2단계 인증 우회 가능,critical,open,m3,ms3,2026-11-17,2026-11-19
+ISS-124,베타 피드백 수집 폼 제출 오류,minor,open,m5,ms4,2026-11-18,2026-11-18

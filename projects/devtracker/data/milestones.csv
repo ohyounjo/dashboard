@@ -1,0 +1,6 @@
+id,title,start_date,end_date,status,progress
+ms1,M1 요구사항·설계,2026-08-03,2026-09-11,done,100
+ms2,M2 기기 연동(Wi-Fi/Matter),2026-09-14,2026-11-13,delayed,85
+ms3,M3 자동화 루틴,2026-10-19,2026-12-18,in-progress,55
+ms4,M4 베타 테스트,2026-12-21,2027-01-29,planned,0
+ms5,M5 정식 출시,2027-02-01,2027-02-26,planned,0
