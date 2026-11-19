@@ -509,3 +509,18 @@ def test_format_incomparable_and_new_table():
     text = plan.format_plan(_plan(tables, [], plan.diff_bundles({}, {})))
     assert "t  +1행 −2행 ~0행  열 추가: code  열 삭제: id  (열 구성이 지난 적재와 달라 행을 맞출 수 없음: 전부 추가·전부 삭제로 셈)" in text
     assert "fresh  +1행 −0행 ~0행  (새 테이블)" in text
+
+
+def test_number_fingerprint_keeps_full_precision():
+    """Decimal 컨텍스트 정밀도(28자리)를 넘는 값도 반올림 없이 구분한다(리뷰 지적 회귀)."""
+    a = Decimal("1.12345678901234567890123456781")
+    b = Decimal("1.12345678901234567890123456782")
+    assert record.canonical(a) == "1.12345678901234567890123456781"
+    assert record.canonical(a) != record.canonical(b)
+    # 기본 키로 써도 서로 다른 키가 된다
+    assert record.row_key(["n"], ["n"], [a]) != record.row_key(["n"], ["n"], [b])
+    assert record.row_hash(["n"], [a]) != record.row_hash(["n"], [b])
+    # 표기만 다른 같은 값은 여전히 같다
+    for text, expected in (("1.50", "1.5"), ("1.0", "1"), ("100", "100"), ("1E+3", "1000"), ("-0.0", "0"),
+                           ("0.000", "0"), ("-2.500", "-2.5"), ("12345678901234567890123456789012.10", "12345678901234567890123456789012.1")):
+        assert record.canonical(Decimal(text)) == expected, text

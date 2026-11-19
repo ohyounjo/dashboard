@@ -51,7 +51,12 @@ def canonical(value: Any) -> str | None:
     if isinstance(value, Decimal):
         if value == 0:
             return "0"
-        return format(value.normalize(), "f")
+        # normalize()는 컨텍스트 정밀도(기본 28자리)로 반올림하므로 쓰지 않는다. 전체 자릿수를 그대로 펼친 뒤
+        # 소수부 끝의 0만 지운다.
+        text = format(value, "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text
     if isinstance(value, datetime):
         if value.tzinfo is not None:
             return value.astimezone(timezone.utc).isoformat()

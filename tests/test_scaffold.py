@@ -685,3 +685,23 @@ def test_cli_dry_run_prints_inference_json(tmp_path, monkeypatch, capsys):
     printed = json.loads(capsys.readouterr().out)
     assert printed == scaffold.infer_folder(PROJECTS / "sales-sample" / "data")
     assert not (tmp_path / "projects").exists()
+
+
+@pytest.mark.parametrize("word", ["off", "yes", "no", "on", "true", "null"])
+def test_names_yaml_reads_as_non_strings_are_quoted(word, tmp_path):
+    """off, yes 같은 이름이 열·테이블(= 데이터셋·대시보드 키)에 쓰여도 YAML이 불리언·null로 읽지 않는다(리뷰 지적 회귀)."""
+    sources = {
+        f"{word}.csv": f"id,{word},amount\n1,a,10\n2,b,20\n3,a,30\n4,b,40\n".encode(),
+    }
+    inference = scaffold.infer(sources)
+    names = {t["name"] for t in inference["tables"]}
+    files = scaffold.render("p", inference, sources)
+    for fname in ("schema.yaml", "dashboard.yaml"):
+        doc = yaml.safe_load(files[fname].decode("utf-8"))
+        tops = doc["tables"] if fname == "schema.yaml" else {**doc["datasets"], **doc["dashboards"]}
+        assert all(isinstance(k, str) for k in tops), (fname, list(tops))
+    schema = yaml.safe_load(files["schema.yaml"].decode("utf-8"))
+    for tname in names:
+        assert all(isinstance(c, str) for c in schema["tables"][tname]["columns"])
+    scaffold.create_project("p", sources, tmp_path)
+    loaded("p", tmp_path)

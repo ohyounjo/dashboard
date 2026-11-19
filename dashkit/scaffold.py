@@ -673,13 +673,14 @@ def _schema_yaml(name: str, tables: list[dict]) -> str:
     for table in tables:
         keys = list(table["primary_key"])
         out.append("")
-        out.append(f"  {table['name']}:    # 원본: {_remark(table.get('source') or '')}, {table.get('rows', 0)}행")
+        out.append(f"  {_scalar(table['name'])}:    # 원본: {_remark(table.get('source') or '')}, {table.get('rows', 0)}행")
         for note in table.get("notes") or []:
             out.append(f"    {_marked(note)}")
         key_text = _scalar(keys[0]) if len(keys) == 1 else _flow(keys)
         out.append(f"    primary_key: {key_text}    {_marked(table.get('primary_key_basis'))}")
         out.append("    columns:")
-        width = max(len(c["name"]) for c in table["columns"]) + 1
+        # 키도 값처럼 인코딩한다: off, yes 같은 이름은 따옴표가 없으면 YAML이 불리언으로 읽는다
+        width = max(len(_scalar(c["name"])) for c in table["columns"]) + 1
         for col in table["columns"]:
             spec: dict[str, Any] = {"type": col["type"]}
             if col.get("required") and col["name"] not in keys:
@@ -696,7 +697,7 @@ def _schema_yaml(name: str, tables: list[dict]) -> str:
                 basis += f" / ref: {col.get('ref_basis') or '사람이 지정'}"
             for note in col.get("notes") or []:
                 out.append(f"      {_marked(note)}")
-            out.append(f"      {(col['name'] + ':').ljust(width)} {_flow(spec)}    {_marked(basis)}")
+            out.append(f"      {(_scalar(col['name']) + ':').ljust(width)} {_flow(spec)}    {_marked(basis)}")
     return "\n".join(out) + "\n"
 
 
@@ -721,7 +722,7 @@ def _dashboard_yaml(name: str, dash: dict) -> str:
 
     out += ["", "datasets:    # 키마다 dash.<키> 뷰가 된다. 조인이나 계산 열이 필요하면 table 대신 sql을 쓴다"]
     for key, ds in dash["datasets"].items():
-        out.append(f"  {key}:")
+        out.append(f"  {_scalar(key)}:")
         for field in ("table", "sql", "description"):
             if ds.get(field) is not None:
                 out.append(f"    {field}: {_scalar(ds[field])}")
@@ -730,11 +731,11 @@ def _dashboard_yaml(name: str, dash: dict) -> str:
         if ds.get("metrics"):
             out.append("    metrics:")
             for mkey, expr in ds["metrics"].items():
-                out.append(f"      {mkey}: {_scalar(expr)}")
+                out.append(f"      {_scalar(mkey)}: {_scalar(expr)}")
 
     out += ["", "dashboards:    # Superset 대시보드. layout은 12칸 격자의 행 목록"]
     for key, board in dash["dashboards"].items():
-        out += [f"  {key}:", f"    title: {_scalar(board['title'])}"]
+        out += [f"  {_scalar(key)}:", f"    title: {_scalar(board['title'])}"]
         if board.get("cross_filters"):
             out.append("    cross_filters: true")
         out.append("    charts:")
