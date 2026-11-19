@@ -1,0 +1,12 @@
+{
+  "name": "dashkit-e2e",
+  "private": true,
+  "type": "module",
+  "description": "웹앱 화면 캡처(Playwright). CI의 ui-screenshots 워크플로가 쓴다.",
+  "scripts": {
+    "capture": "node capture.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.65.1"
+  }
+}

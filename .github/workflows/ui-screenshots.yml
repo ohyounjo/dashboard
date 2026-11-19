@@ -1,0 +1,189 @@
+# PR의 화면을 변경 전(base)·변경 후(head)로 캡처해 PR 댓글로 비교한다.
+#
+# 1. capture (base, head 동시에): 전체 서비스를 띄우고(make env → up → apply) e2e/capture.mjs로 캡처
+# 2. comment: 이미지를 ui-screenshots 브랜치에 올리고, PR에 비교 댓글을 달거나 고친다
+#
+# 캡처 스크립트(e2e/)는 항상 PR(head) 쪽 것을 쓴다. base에 e2e/가 없어도 동작한다.
+name: UI 화면 캡처
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "web/**"
+      - "projects/**"
+      - "superset/**"
+      - "dashkit/**"
+      - "docker-compose.yml"
+      - "Makefile"
+      - "e2e/**"
+      - ".github/workflows/ui-screenshots.yml"
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "다시 캡처할 PR 번호"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-screenshots-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  meta:
+    runs-on: ubuntu-24.04
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
+      base_ref: ${{ steps.pr.outputs.base_ref }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+    permissions:
+      pull-requests: read
+    steps:
+      - id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+        run: |
+          gh pr view "$NUMBER" -R "$GITHUB_REPOSITORY" --json number,baseRefName,headRefOid \
+            --jq '"number=\(.number)\nbase_ref=\(.baseRefName)\nhead_sha=\(.headRefOid)"' >> "$GITHUB_OUTPUT"
+          base_ref=$(gh pr view "$NUMBER" -R "$GITHUB_REPOSITORY" --json baseRefName --jq .baseRefName)
+          # 변경 전 = PR이 갈라져 나온 지점이 아니라 지금의 base 브랜치 끝
+          echo "base_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$base_ref" --jq .sha)" >> "$GITHUB_OUTPUT"
+
+  capture:
+    needs: meta
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        side: [base, head]
+    steps:
+      - name: 앱 코드 받기 (${{ matrix.side }})
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.side == 'base' && needs.meta.outputs.base_sha || needs.meta.outputs.head_sha }}
+          path: app
+
+      - name: 캡처 스크립트 받기 (항상 head)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.meta.outputs.head_sha }}
+          path: tools
+          sparse-checkout: e2e
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/e2e/package-lock.json
+
+      - name: Playwright·한글 폰트 설치
+        working-directory: tools/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
+      - name: 서비스 기동 (make env → up → apply)
+        working-directory: app
+        run: |
+          make env
+          make up
+          make apply
+
+      - name: 화면 캡처
+        working-directory: tools/e2e
+        run: node capture.mjs "$RUNNER_TEMP/shots/${{ matrix.side }}"
+
+      - name: 실패 시 컨테이너 로그
+        if: failure()
+        working-directory: app
+        run: docker compose logs --tail=200
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: shots-${{ matrix.side }}
+          path: ${{ runner.temp }}/shots/${{ matrix.side }}
+          if-no-files-found: ignore
+          retention-days: 14
+
+  comment:
+    needs: [meta, capture]
+    if: always() && needs.meta.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write        # ui-screenshots 브랜치에 이미지 push
+      pull-requests: write   # PR 댓글
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NUMBER: ${{ needs.meta.outputs.number }}
+      HEAD_SHA: ${{ needs.meta.outputs.head_sha }}
+      BASE_REF: ${{ needs.meta.outputs.base_ref }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      SHOTS_BRANCH: ui-screenshots
+    steps:
+      - name: 비교 스크립트 받기
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.meta.outputs.head_sha }}
+          path: tools
+          sparse-checkout: e2e
+
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: shots-*
+          path: shots
+
+      - name: 이미지를 ui-screenshots 브랜치에 올리기
+        id: publish
+        run: |
+          dest="pr-$NUMBER/${HEAD_SHA:0:7}"
+          work="$RUNNER_TEMP/pub"
+          git init -q "$work" && cd "$work"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth=1 origin "$SHOTS_BRANCH"; then
+            git checkout -q -B "$SHOTS_BRANCH" FETCH_HEAD
+          else
+            git checkout -q --orphan "$SHOTS_BRANCH"
+            printf '# ui-screenshots\n\nPR 화면 캡처 이미지 저장용 브랜치입니다. 워크플로가 자동으로 관리합니다.\n' > README.md
+          fi
+          rm -rf "pr-$NUMBER"   # 같은 PR의 예전 캡처는 지운다(최신 커밋 것만 유지)
+          for side in base head; do
+            if [ -d "$GITHUB_WORKSPACE/shots/shots-$side" ]; then
+              mkdir -p "$dest/$side"
+              cp "$GITHUB_WORKSPACE/shots/shots-$side"/* "$dest/$side/"
+            fi
+          done
+          git add -A
+          git commit -q -m "PR #$NUMBER 화면 캡처 (${HEAD_SHA:0:7})" || echo "변경 없음"
+          for i in 1 2 3; do
+            git push -q origin "$SHOTS_BRANCH" && break
+            git fetch -q --depth=1 origin "$SHOTS_BRANCH" && git rebase -q FETCH_HEAD || true
+            sleep 3
+          done
+          echo "url_prefix=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${SHOTS_BRANCH}/${dest}" >> "$GITHUB_OUTPUT"
+
+      - name: 비교 댓글 만들기
+        run: |
+          mkdir -p cmp
+          [ -d shots/shots-base ] && mv shots/shots-base cmp/base
+          [ -d shots/shots-head ] && mv shots/shots-head cmp/head
+          node tools/e2e/report.mjs cmp "${{ steps.publish.outputs.url_prefix }}" comment.md
+
+      - name: PR에 댓글 달기 (있으면 고치기)
+        run: |
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- ui-screenshots -->"))) | .id' | head -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@comment.md > /dev/null
+            echo "댓글 수정: $id"
+          else
+            gh pr comment "$NUMBER" -R "$GITHUB_REPOSITORY" --body-file comment.md
+          fi
