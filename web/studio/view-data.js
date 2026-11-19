@@ -17,6 +17,8 @@ export function mount(container, ctx) {
   }
   const state = (name) => { if (!cards.has(name)) cards.set(name, { step: "idle" }); return cards.get(name); };
 
+  let alive = true;   // 화면을 떠나면 false(떠난 뒤 끝난 검증·교체가 화면을 건드리지 않게)
+
   async function check(name, files) {
     const st = state(name);
     if (st.step === "checking" || st.step === "replacing") return;
@@ -28,6 +30,7 @@ export function mount(container, ctx) {
     paint(name);
     try {
       st.result = await ctx.api.checkData(ctx.project, name, st.file);
+      if (!alive) return;
       st.step = "checked";
       ctx.announce(st.result.valid ? S.dataCheckOk(name) : S.dataCheckBad(name, (st.result.errors || []).length));
     } catch (e) {
@@ -43,8 +46,9 @@ export function mount(container, ctx) {
     try {
       await ctx.api.putData(ctx.project, name, st.file);
       st.step = "replaced";
-      ctx.announce(S.dataReplaced(name));
       ctx.refreshChanges();
+      if (!alive) return;
+      ctx.announce(S.dataReplaced(name));
       await ctx.reloadConfig({ quiet: true });
     } catch (e) {
       st.step = "error"; st.error = ctx.describeError(e); ctx.announce(st.error.title);
@@ -117,6 +121,7 @@ export function mount(container, ctx) {
   }
 
   function render() {
+    if (!alive) return;   // 화면을 떠난 뒤 끝난 요청은 그리지 않는다
     els.clear();
     const list = tables();
     fill(container,
@@ -125,5 +130,5 @@ export function mount(container, ctx) {
   }
 
   render();
-  return { refresh: render };
+  return { refresh: render, destroy: () => { alive = false; } };
 }

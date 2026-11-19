@@ -167,7 +167,10 @@ def test_views_release_listeners_on_the_shared_container():
     assert "view.destroy()" in shell, "셸이 화면을 바꾸기 전에 이전 화면의 destroy를 불러야 함"
     dom = (root / "dom.js").read_text(encoding="utf-8")
     assert "signal: off.signal" in dom and "off.abort()" in dom, "fileDrop은 리스너를 떼는 함수를 돌려줘야 함"
-    for path in sorted(root.glob("view-*.js")):
+    views = sorted(root.glob("view-*.js"))
+    assert len(views) >= 4
+    for path in views:
         text = path.read_text(encoding="utf-8")
-        if re.search(r"fileDrop\(container\b|container\.addEventListener\(", text):
-            assert "destroy:" in text, f"{path.name}: 컨테이너에 건 리스너를 떼는 destroy가 없음"
+        # 모든 화면: 떠난 뒤 끝난 요청이 같이 쓰는 컨테이너를 다시 그리지 않게 destroy와 생존 검사를 둔다
+        assert "destroy:" in text, f"{path.name}: destroy가 없음"
+        assert re.search(r"function render\(\) \{\n\s+if \(!alive\) return;", text), f"{path.name}: render()에 생존 검사가 없음"

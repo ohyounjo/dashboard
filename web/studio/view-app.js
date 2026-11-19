@@ -21,6 +21,8 @@ export function mount(container, ctx) {
     pending = clone(original); dirty = false; error = null;
   }
 
+  let alive = true;   // 화면을 떠나면 false(떠난 뒤 끝난 저장이 컨테이너를 다시 그리지 않게)
+
   async function save() {
     if (busy) return;
     const values = {};
@@ -37,8 +39,10 @@ export function mount(container, ctx) {
     busy = true; error = null; render();
     try {
       await ctx.patch([{ op: "app.update", values }]);
+      if (!alive) return;
       load(); ctx.announce(S.saved);
     } catch (e) {
+      if (!alive) return;
       const info = ctx.describeError(e);
       if (info.detail === "stale_config") load();   // 설정을 새로 읽었다 → 초안을 버린다
       error = info; ctx.announce(error.title);
@@ -66,6 +70,7 @@ export function mount(container, ctx) {
   }
 
   function render() {
+    if (!alive) return;   // 화면을 떠난 뒤 끝난 요청은 그리지 않는다
     const title = h("input", { type: "text", class: "input", value: pending.title, autocomplete: "off", "data-app": "title" });
     title.addEventListener("input", () => { pending.title = title.value; touch(); });
     const logo = h("input", { type: "text", class: "input short", value: pending.logo_text, maxlength: 3, autocomplete: "off", "data-app": "logo_text" });
@@ -114,5 +119,5 @@ export function mount(container, ctx) {
 
   load();
   render();
-  return { canLeave: () => !dirty || window.confirm(S.discardConfirm) };
+  return { canLeave: () => !dirty || window.confirm(S.discardConfirm), destroy: () => { alive = false; } };
 }

@@ -95,6 +95,9 @@ export function mount(container, ctx) {
 
   /* ---------------- 저장 ---------------- */
 
+  // 화면을 떠나면 false. 떠난 뒤 끝난 저장이 같이 쓰는 컨테이너를 다시 그리거나 선택 상태를 바꾸지 않게 한다
+  let alive = true;
+
   async function patch(ops, { message, onDone, form = false }) {
     if (busy) return;
     busy = true; listError = null; formError = null;
@@ -102,10 +105,12 @@ export function mount(container, ctx) {
     try {
       await ctx.patch(ops);
       busy = false;
+      if (!alive) return;
       if (onDone) onDone();
       if (message) ctx.announce(message);
     } catch (e) {
       busy = false;
+      if (!alive) return;
       const info = ctx.describeError(e);
       if (info.detail === "stale_config") { dirty = false; if (sel && sel.kind !== "tab" && sel.kind !== "section") sel = null; resetDraftFromSelection(); form = false; }   // 설정을 새로 읽었다 → 초안을 버린다
       if (form) formError = info; else listError = info;
@@ -466,6 +471,7 @@ export function mount(container, ctx) {
   }
 
   function render() {
+    if (!alive) return;   // 화면을 떠난 뒤 끝난 요청은 그리지 않는다
     const list = h("ol", { class: "tab-list", "aria-label": S.tabList }, tabs().map((t, i) => tabCard(t, i, tabs().length)));
     list.addEventListener("dragover", onDragOver);
     list.addEventListener("drop", onDrop);
@@ -501,5 +507,6 @@ export function mount(container, ctx) {
   return {
     /** 화면을 떠나도 되는지(저장하지 않은 폼) */
     canLeave: () => leave(),
+    destroy: () => { alive = false; },
   };
 }
