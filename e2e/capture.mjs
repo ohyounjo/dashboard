@@ -37,25 +37,46 @@ async function waitSettled(page) {
   await page
     .waitForFunction(() => !document.querySelector(".view.active .sk-note"), null, { timeout: 30_000 })
     .catch(() => {});
-  // 보이는 탭에 Superset iframe이 있으면 차트가 나타나고 로딩 표시가 사라질 때까지
-  const hasEmbed = await page.locator(".view.active iframe").count();
-  if (hasEmbed) {
-    await page.waitForTimeout(500);
-    for (const frame of page.frames()) {
-      if (frame === page.mainFrame() || !frame.url().includes("/embedded/")) continue;
-      await frame
-        .waitForFunction(
-          () =>
-            document.querySelector(".dashboard-component-chart-holder, .chart-container") &&
-            !document.querySelector(".loading, [data-test='loading-indicator'], .ant-skeleton"),
-          null,
-          { timeout: 45_000, polling: 500 },
-        )
-        .catch(() => console.warn("  ⚠ Superset 로딩 대기 시간 초과"));
-    }
+  // 보이는 탭의 Superset iframe마다: Superset 주소로 바뀌고, 차트가 1개 이상 있고,
+  // 로딩 표시가 없는 상태가 1초 동안 유지될 때까지 기다린다.
+  // 다른 탭의 iframe은 숨겨진 채 남아 있으므로 page.frames()가 아니라 보이는 탭의 iframe만 본다.
+  const warnings = [];
+  const iframes = await page.locator(".view.active iframe").elementHandles();
+  for (const [i, handle] of iframes.entries()) {
+    const ok = await waitEmbedReady(handle);
+    if (!ok) warnings.push(`Superset iframe ${i + 1}이 ${EMBED_TIMEOUT_MS / 1000}초 안에 다 그려지지 않음`);
   }
   await page.evaluate(() => document.fonts.ready).catch(() => {});
   await page.waitForTimeout(SETTLE_MS);
+  return warnings;
+}
+
+const EMBED_TIMEOUT_MS = 60_000;
+
+async function waitEmbedReady(handle) {
+  const deadline = Date.now() + EMBED_TIMEOUT_MS;
+  let readySince = 0;
+  while (Date.now() < deadline) {
+    const frame = await handle.contentFrame().catch(() => null);
+    const ready =
+      frame &&
+      frame.url().includes("/embedded/") &&
+      (await frame
+        .evaluate(
+          () =>
+            document.querySelectorAll(".dashboard-component-chart-holder").length > 0 &&
+            !document.querySelector(".loading, [data-test='loading-indicator'], .ant-skeleton"),
+        )
+        .catch(() => false));
+    if (ready) {
+      readySince ||= Date.now();
+      if (Date.now() - readySince >= 1000) return true;
+    } else {
+      readySince = 0;
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return false;
 }
 
 async function main() {
@@ -90,11 +111,11 @@ async function main() {
 
         for (const tab of tabs) {
           await page.goto(`${BASE_URL}/#${encodeURIComponent(tab.key)}`, { waitUntil: "domcontentloaded" });
-          await waitSettled(page);
+          const warnings = await waitSettled(page);
           const file = `${tab.key}-${vp.name}-${theme}.png`;
           await page.screenshot({ path: path.join(OUT, file), fullPage: true });
-          shots.push({ tab: tab.key, label: tab.label, viewport: vp.name, theme, file });
-          console.log(`✔ ${file}`);
+          shots.push({ tab: tab.key, label: tab.label, viewport: vp.name, theme, file, warnings });
+          console.log(`${warnings.length ? "⚠" : "✔"} ${file}${warnings.length ? " — " + warnings.join(", ") : ""}`);
         }
         await context.close();
       }

@@ -141,6 +141,18 @@ jobs:
           path: tools
           sparse-checkout: e2e
 
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/e2e/package-lock.json
+
+      - name: 비교 스크립트 의존성 설치 (pixelmatch, pngjs)
+        working-directory: tools/e2e
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci
+
       # 한쪽 캡처가 실패해 artifact가 없어도 계속 진행한다(댓글에 "캡처 실패"로 표시)
       - name: 변경 전 캡처 받기
         uses: actions/download-artifact@v8

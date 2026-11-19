@@ -5,9 +5,14 @@
 // <캡처 폴더>/base, <캡처 폴더>/head 아래에 capture.mjs가 만든 png와 manifest.json이 있어야 한다.
 // 한쪽 캡처가 실패해 폴더가 없으면 그쪽은 "캡처 실패"로 표시한다.
 // 이미지 URL은 <이미지 URL 접두사>/<base|head>/<파일>?raw=true 로 만든다.
+//
+// 비교 방식(허용 오차)
+//   pixelmatch로 색이 눈에 띄게 다른 픽셀 수를 센다(안티에일리어싱 차이는 무시).
+//   다른 픽셀이 DIFF_MIN_PIXELS(기본 50)개 이하이면서 전체의 DIFF_MAX_RATIO(기본 0.01%) 이하면 "거의 같음"으로 본다.
 import { readFile, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import path from "node:path";
+import { PNG } from "pngjs";
+import pixelmatch from "pixelmatch";
 
 export const MARKER = "<!-- ui-screenshots -->";
 
@@ -29,13 +34,24 @@ async function loadSide(side) {
   }
 }
 
-async function hashOf(dir, file) {
-  try {
-    return createHash("sha256").update(await readFile(path.join(dir, file))).digest("hex");
-  } catch {
-    return null;
-  }
+const DIFF_MIN_PIXELS = Number(process.env.DIFF_MIN_PIXELS || 50);
+const DIFF_MAX_RATIO = Number(process.env.DIFF_MAX_RATIO || 0.0001);
+
+// { kind: "same" | "tiny" | "changed", ratio }
+async function compare(fileA, fileB) {
+  const [bufA, bufB] = await Promise.all([readFile(fileA), readFile(fileB)]);
+  if (bufA.equals(bufB)) return { kind: "same", ratio: 0 };
+  const a = PNG.sync.read(bufA);
+  const b = PNG.sync.read(bufB);
+  if (a.width !== b.width || a.height !== b.height) return { kind: "changed", ratio: null, resized: true };
+  const n = pixelmatch(a.data, b.data, null, a.width, a.height, { threshold: 0.1 });
+  const ratio = n / (a.width * a.height);
+  if (n === 0) return { kind: "same", ratio: 0 };
+  if (n <= DIFF_MIN_PIXELS || ratio <= DIFF_MAX_RATIO) return { kind: "tiny", ratio };
+  return { kind: "changed", ratio };
 }
+
+const pct = (r) => `${(r * 100).toFixed(r < 0.001 ? 3 : 2)}%`;
 
 const img = (side, file, width) =>
   `<img src="${urlPrefix}/${side}/${encodeURIComponent(file)}?raw=true" width="${width}">`;
@@ -79,14 +95,23 @@ if (!head) {
       const label = `${VIEWPORT_LABEL[s.viewport] || s.viewport} · ${THEME_LABEL[s.theme] || s.theme}`;
       let before = "—";
       let state = "🆕 새 화면";
+      let isChanged = !!base;
       if (base && baseFiles.has(s.file)) {
-        const same = (await hashOf(base.dir, s.file)) === (await hashOf(head.dir, s.file));
-        state = same ? "같음" : "🔸 달라짐";
+        const r = await compare(path.join(base.dir, s.file), path.join(head.dir, s.file));
+        isChanged = r.kind === "changed";
+        state =
+          r.kind === "same" ? "같음"
+          : r.kind === "tiny" ? `거의 같음 (${pct(r.ratio)})`
+          : r.resized ? "🔸 달라짐 (크기 변경)"
+          : `🔸 달라짐 (${pct(r.ratio)})`;
         before = img("base", s.file, width);
       } else if (!base) {
         state = "";
+        isChanged = false;
       }
-      if (state && state !== "같음") changed++;
+      const warn = [...(s.warnings || []), ...((base?.manifest.shots.find((x) => x.file === s.file)?.warnings) || []).map((w) => `변경 전: ${w}`)];
+      if (warn.length) state += `<br>⚠️ ${warn.join("<br>⚠️ ")}`;
+      if (isChanged) changed++;
       rows.push(`| ${label}${state ? `<br>${state}` : ""} | ${before} | ${img("head", s.file, width)} |`);
     }
     changedTotal += changed;
@@ -108,7 +133,7 @@ if (!head) {
     lines.push(
       changedTotal
         ? `달라진 화면이 **${changedTotal}개** 있습니다. 달라진 탭은 펼쳐 두었습니다.`
-        : "변경 전과 픽셀 단위로 같은 화면만 있습니다. (UI 변경 없음으로 보입니다)",
+        : "변경 전과 같거나 거의 같은 화면만 있습니다. (UI 변경 없음으로 보입니다)",
       "",
     );
   }
@@ -117,7 +142,8 @@ if (!head) {
   lines.push(...sections);
   lines.push(
     "<sub>`e2e/capture.mjs`가 Playwright로 모든 탭을 데스크톱(1440×900)·모바일(390×844) × 라이트·다크로 캡처합니다. " +
-      "'달라짐'은 파일이 바이트 단위로 다르다는 뜻이라, 차트 애니메이션 등으로 실제 변화 없이 표시될 수도 있습니다.</sub>",
+      `색이 눈에 띄게 다른 픽셀이 ${DIFF_MIN_PIXELS}개 이하이거나 전체의 ${pct(DIFF_MAX_RATIO)} 이하면 '거의 같음'으로 봅니다(괄호 안은 다른 픽셀 비율). ` +
+      "'⚠️'는 Superset 차트가 시간 안에 다 그려지지 않은 채 캡처됐다는 뜻입니다.</sub>",
   );
 }
 
