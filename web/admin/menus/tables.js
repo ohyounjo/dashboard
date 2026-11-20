@@ -353,7 +353,7 @@ function makeBulkFlow({ alive, out }) {
     try {
       r = await send(src, { dry: true, ...opts }, null, my);
     } catch (err) {
-      if (alive() && my === gen) failed(err, "preview");
+      if (alive() && my === gen) failed(err, "preview", my);
       return;
     }
     if (!alive() || !r || my !== gen) return;
@@ -376,7 +376,7 @@ function makeBulkFlow({ alive, out }) {
     try {
       r = await send(src, { dry: false, ...opts }, prev, my);
     } catch (err) {
-      if (alive() && my === gen) failed(err, "commit");
+      if (alive() && my === gen) failed(err, "commit", my);
       return;
     }
     if (!alive() || !r || my !== gen) return;
@@ -388,7 +388,9 @@ function makeBulkFlow({ alive, out }) {
     }
   }
 
-  async function failed(err, step) {
+  async function failed(err, step, my = gen) {
+    // 열 정의를 읽는 사이 파일이 바뀌거나 새 요청이 시작되면(my !== gen) 이 오류 화면을 그리지 않는다
+    const current = () => alive() && my === gen;
     const body = (err instanceof ApiFail && err.body) || {};
     if (err instanceof ApiFail && err.detail === "unknown_columns" && Array.isArray(body.columns)) {
       const names = I.filesForError(state.src.files, body);
@@ -399,7 +401,8 @@ function makeBulkFlow({ alive, out }) {
           columnNames.set(body.table, cols);
         } catch (e) { cols = null; }
       }
-      if (cols && names.length && alive()) { settle(headerMatchBox(body, names, cols)); return; }
+      if (!current()) return;
+      if (cols && names.length) { settle(headerMatchBox(body, names, cols)); return; }
     }
     const lines = Array.isArray(body.errors) ? body.errors.map(String) : [];
     const actions = [];
@@ -410,7 +413,7 @@ function makeBulkFlow({ alive, out }) {
       }, "primary"));
     }
     const count = typeof body.error_count === "number" && body.error_count > lines.length ? D.moreErrors(body.error_count) : null;
-    if (!alive()) return;
+    if (!current()) return;
     settle(box("bad", failText(err), {
       body: err instanceof ApiFail && err.detail === "duplicate_file" ? h("p", { text: D.duplicateBody }) : null,
       lines, more: count, actions,

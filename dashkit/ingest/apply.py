@@ -249,6 +249,7 @@ def apply_batch(cur: psycopg.Cursor, project_schema: Mapping[str, Any], staged: 
     policy = policies.POLICIES[table.get("on_conflict") or policies.DEFAULT_POLICY]
     policy(ctx)
     _insert_new(cur, table, staged, target, temp, join, counts)
+    counts["total"] = staged.rows        # 새 행의 필수 열 오류로 뺀 행이 있으면 줄어든다(배치 파일의 행 수와 같게)
     return {**counts, "changes": ctx.changes}
 
 

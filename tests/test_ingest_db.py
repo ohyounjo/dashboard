@@ -751,3 +751,19 @@ def test_skip_invalid_keeps_raw_cells_of_bad_rows_and_rechecks_duplicates(tmp_pa
     e = expect_error("duplicate_file", ingest, "ledger", item, projects_dir=root, dbname=scratch_db, skip_invalid=True)
     assert e.extra["duplicates"][0]["file"] == r["batches"][0]["file"]
     rebuilt_equals_current(root, scratch_db)
+
+
+def test_rows_recorded_match_the_file_after_dropping_new_rows_without_required_columns(tmp_path, scratch_db):
+    """리뷰 지적 회귀(PR 26): 필수 열이 빠진 새 행을 빼고 넣으면 배치 기록의 rows도 배치 파일의 행 수와 같다."""
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    # events.entry_id는 필수이고 default가 없다. 머리글에 없으므로 새 행(id 40, 41)은 모두 빠진다
+    r = ingest("ledger", [Item("events", {"kind": "rows", "rows": [{"id": 40}, {"id": 41}]})], projects_dir=root,
+               dbname=scratch_db, skip_invalid=True)
+    b = r["batches"][0]
+    assert b["rows"]["inserted"] == 0 and b["rejected"] == 2
+    with db.owner_conn(scratch_db) as conn:
+        recorded = conn.execute("SELECT rows FROM dashkit_meta.batch WHERE file = %s", (b["file"],)).fetchone()[0]
+    stored = gzip.decompress((root / "ledger" / "data" / "events" / b["file"]).read_bytes()).decode().splitlines()
+    assert recorded == len(stored) - 1 == 0
+    rebuilt_equals_current(root, scratch_db)
