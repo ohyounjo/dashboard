@@ -83,11 +83,41 @@ def lock_section(root: Path, dbname: str, rows: list[dict], **kw) -> tuple[float
     return t1 - t0, t1 - marks["lock"]
 
 
+def measure_paging(dbname: str, n: int) -> dict:
+    """키 방식 커서로 첫 페이지·한가운데·마지막 페이지(200행)를 읽는 시간과 행 수(설계서 14절 3단계 완료 조건)."""
+    from dashkit import paging
+
+    cols = [paging.Column(c, t) for c, t in (("id", "text"), ("group_id", "text"), ("state", "text"),
+                                              ("amount", "number"), ("on_day", "date"), ("flag", "boolean"),
+                                              ("qty", "integer"), ("memo", "text"))]
+    rel = sql.SQL("raw.entries")
+    out: dict = {}
+    with db.owner_conn(dbname) as conn, conn.cursor() as cur:
+        def page(body, label):
+            q = paging.parse_query(body, cols)
+            t0 = time.perf_counter()
+            p = paging.fetch_page(cur, rel, cols, q, key_columns=["id"], version="v", total_rows=n)
+            out[label] = {"rows": len(p.rows), "ms": round((time.perf_counter() - t0) * 1000, 1)}
+            return p
+        first = page({"limit": 200}, "first_200")
+        mid_id = conn.execute("SELECT id FROM raw.entries ORDER BY id OFFSET %s LIMIT 1", (n // 2,)).fetchone()[0]
+        doc = paging.decode_cursor(first.next_cursor)
+        doc["last"] = [mid_id]
+        page({"limit": 200, "cursor": paging.encode_cursor(doc)}, "middle_200")
+        last_id = conn.execute("SELECT id FROM raw.entries ORDER BY id DESC OFFSET 150 LIMIT 1").fetchone()[0]
+        doc["last"] = [last_id]
+        page({"limit": 200, "cursor": paging.encode_cursor(doc)}, "last_page")
+        page({"limit": 200, "sort": [{"column": "amount", "dir": "desc"}]}, "sorted_by_amount_200")
+        page({"limit": 200, "filters": [{"column": "state", "op": "eq", "value": "done"}]}, "filtered_200")
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=1_000_000)
     ap.add_argument("--batches", type=int, default=200)
     ap.add_argument("--upload-mb", type=int, default=0, help="이 크기(MB)의 파일 하나를 미리보기한 뒤 넣는다")
+    ap.add_argument("--paging", action="store_true", help="행 조회의 페이지 시간(첫·깊은 페이지, 정렬·필터)을 잰다")
     args = ap.parse_args()
     dbname = f"dash_bench_{uuid.uuid4().hex[:8]}"
     with db.owner_conn(autocommit=True) as conn:
@@ -97,6 +127,8 @@ def main() -> None:
         with tempfile.TemporaryDirectory(prefix="dashkit-bench-") as tmp:
             root = project(Path(tmp) / "one", args.rows, 1)
             out["apply_one_batch_s"] = round(timed_load(root, dbname), 2)
+            if args.paging:
+                out["paging"] = measure_paging(dbname, args.rows)
             n = args.rows
             total, lock = lock_section(root, dbname, [dict(zip(HEADER, row(n + 1)))])
             out["add_1_row"] = {"total_s": round(total, 3), "lock_s": round(lock, 3)}

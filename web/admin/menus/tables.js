@@ -6,6 +6,8 @@ import { h } from "../../common.js";
 import { fileDrop, filePicker, iconButton, uid } from "../../shared/dom.js";
 import * as F from "../../shared/fields.js";
 import * as I from "../../shared/ingest.js";
+import * as Q from "../../shared/query.js";
+import { rowsView } from "../rows.js";
 import { T, view, session, ApiFail, api, apiForm, waitJob, errorText, notice, head, checkbox, pagedTable, detailId } from "../kit.js";
 
 const D = T.data;
@@ -15,7 +17,7 @@ const batchPath = (name, file) => `${tablePath(name)}/batches/${encodeURICompone
 const FIELD_TEXT = { yes: D.yes, no: D.no, choose: D.choose, empty: D.emptyValue };
 
 let gen = 0;                 // 화면을 그릴 때마다 늘린다. 비동기 일이 끝났을 때 아직 그 화면인지 본다
-let detailTab = "batches";   // 상세에서 마지막으로 연 탭(같은 메뉴 안에서 기억한다)
+let detailTab = "preview";   // 상세에서 마지막으로 연 탭(같은 메뉴 안에서 기억한다)
 
 const isAdmin = () => ((session.manage && session.manage.role) || (session.me && session.me.role)) === "admin";
 const limits = () => (session.manage && session.manage.limits) || {};
@@ -155,7 +157,8 @@ function tabStrip(label, items, current, onSelect) {
     onSelect(key);
   };
   items.forEach((it) => {
-    const b = h("button", { type: "button", role: "tab", id: it.tabId, "aria-controls": it.panelId, text: it.label, onclick: () => select(it.key) });
+    // data-tab: e2e 캡처가 문구·차례 대신 이 값으로 탭을 고른다
+    const b = h("button", { type: "button", role: "tab", id: it.tabId, "aria-controls": it.panelId, "data-tab": it.key, text: it.label, onclick: () => select(it.key) });
     buttons.set(it.key, b);
     el.append(b);
   });
@@ -483,14 +486,16 @@ async function detailView(name, my) {
   const tabsBox = h("div");
   const addBox = h("div", { hidden: true });
   const panel = h("div", { class: "d-panel", role: "tabpanel", id: uid("panel"), tabindex: "0" });
-  const ids = { columns: uid("tab"), batches: uid("tab") };
+  const ids = { preview: uid("tab"), columns: uid("tab"), batches: uid("tab") };
   const draw = (key) => {
     detailTab = key;
     panel.setAttribute("aria-labelledby", ids[key]);
-    if (key === "columns") panel.replaceChildren(columnsPanel(t));
+    if (key === "preview") panel.replaceChildren(previewPanel(t, alive));
+    else if (key === "columns") panel.replaceChildren(columnsPanel(t));
     else panel.replaceChildren(batchesPanel(t, alive));
   };
   const strip = tabStrip(D.detailTabs, [
+    { key: "preview", label: D.tabPreview, tabId: ids.preview, panelId: panel.id },
     { key: "columns", label: D.tabColumns, tabId: ids.columns, panelId: panel.id },
     { key: "batches", label: D.tabBatches, tabId: ids.batches, panelId: panel.id },
   ], detailTab, draw);
@@ -523,6 +528,134 @@ async function detailView(name, my) {
 
 function infoRow(label, value) {
   return h("div", { class: "a-info" }, h("dt", { text: label }), h("dd", {}, value));
+}
+
+/* ---------------- 미리보기(행 조회)와 이 행 고치기 ---------------- */
+
+/** 미리보기 탭: 원본 테이블(raw)의 행. 충돌 정책이 update인 누적 테이블에는 행마다 "고치기"(설계서 5-2) */
+function previewPanel(t, alive) {
+  const canEdit = t.mode === "append" && t.on_conflict === "update";
+  const editBox = h("div");
+  const labels = Object.fromEntries(t.columns.filter((c) => c.label).map((c) => [c.name, c.label]));
+  let opener = null;
+  const rows = rowsView({
+    path: `${tablePath(t.name)}/rows/query`, columns: t.columns, labels, alive,
+    rowAction: canEdit ? (row) => {
+      const b = btn(D.editRow, () => { opener = b; openEdit(row); }, "small");
+      b.setAttribute("aria-label", D.editRowFor(t.primary_key.map((k) => row[k]).join(", ")));
+      return b;
+    } : null,
+  });
+  const close = () => { editBox.replaceChildren(); if (opener && opener.isConnected) opener.focus(); };
+
+  async function openEdit(row) {
+    // 목록의 값은 잘렸을 수 있다 → 그 행을 기본 키로 따로 읽어 폼을 채운다
+    const key = Object.fromEntries(t.primary_key.map((k) => [k, row[k]]));
+    editBox.replaceChildren(h("div", { class: "sk-note", role: "status", text: T.loading }));
+    let one;
+    try {
+      one = await api("POST", `${tablePath(t.name)}/rows/query`, { key });
+    } catch (err) {
+      if (alive()) editBox.replaceChildren(box("bad", failText(err)));
+      return;
+    }
+    if (!alive()) return;
+    editBox.replaceChildren(editCard(t, one, alive, { onClose: close, onDone: () => rows.reload() }));
+    const first = editBox.querySelector("input:not([disabled]):not([readonly]), select:not([disabled])");
+    if (first) first.focus();
+    editBox.scrollIntoView({ block: "nearest" });
+  }
+
+  return h("div", { class: "d-stack gap" },
+    h("p", { class: "a-note", text: canEdit ? D.previewIntroEdit : D.previewIntro }), editBox, rows.el);
+}
+
+/** 이 행 고치기 폼: 한 행 읽기의 값으로 채운다. 기본 키는 읽기만, 잘린 칸(truncated_cells)은 잠근다.
+ *  저장은 기본 키와 바뀐 열만 담은 한 행(method form)을 미리보기 → 넣기(2a의 흐름). 바뀐 것이 없으면 미리보기를 끈다. */
+function editCard(t, one, alive, { onClose, onDone }) {
+  const initial = one.row || {};
+  const locked = (one.truncated_cells || []).map(String);
+  const out = h("div", { class: "d-out" });
+  const fields = t.columns.map((c) => {
+    const id = uid("ed");
+    const hintId = `${id}-hint`, errId = `${id}-err`;
+    // 처음 값이 빈 칸일 수 있으므로 필수·기본값 없는 부품을 쓴다(검사는 c의 규칙으로 한다)
+    const input = F.createInput({ ...c, required: false, primary_key: false, default: null },
+      { text: FIELD_TEXT, attrs: { id, name: c.name, "aria-describedby": `${hintId} ${errId}` } });
+    input.set(Q.valueToInput(initial[c.name]));
+    const isLocked = locked.includes(c.name);
+    if (c.primary_key && input.el.tagName === "INPUT") input.el.readOnly = true;
+    else if (c.primary_key || isLocked) input.el.disabled = true;
+    const hint = c.primary_key ? D.keyReadOnly : isLocked ? D.lockedLong
+      : [c.description, D.formatHint[c.type], ...ruleTexts(c, { withRequired: false })].filter(Boolean).join(" · ");
+    const err = h("span", { class: "d-err", id: errId });
+    const setErr = (text) => {
+      err.textContent = text || "";
+      if (text) input.el.setAttribute("aria-invalid", "true"); else input.el.removeAttribute("aria-invalid");
+    };
+    const el = h("div", { class: "field d-field" },
+      h("label", { for: id }, c.label || c.name, c.label ? h("small", { class: "a-key mono", text: ` ${c.name}` }) : null,
+        c.primary_key ? h("span", { class: "d-req", text: ` ${D.primaryKey}` }) : null),
+      input.el, h("span", { class: "hint", id: hintId, text: hint }), err);
+    return { c, input, setErr, el };
+  });
+  const current = () => Object.fromEntries(fields.map((f) => [f.c.name, f.input.get()]));
+  const changedNote = h("p", { class: "a-note", role: "status" });
+  const flow = makeFlow(t, {
+    alive, out,
+    // 넣었으면 지금 값이 새 기준이다(같은 변경을 두 번 보내지 않게). 결과(방금 추가 취소)는 남긴다
+    onDone: () => {
+      const now = current();
+      for (const name of changed) initial[name] = now[name];
+      changed = [];
+      previewBtn.disabled = true;
+      changedNote.textContent = D.noChanges;
+      fields.forEach((f) => f.el.classList.remove("is-changed"));
+      onDone();
+    },
+    onCells: (lines) => {
+      const { cells } = F.splitErrors(lines);
+      fields.forEach((f) => f.setErr(null));
+      for (const e of cells) {
+        const f = fields.find((x) => x.c.name === e.column);
+        if (f && e.row === 0) f.setErr(e.message);
+      }
+    },
+  });
+  let changed = [];
+  const update = () => {
+    changed = Q.changedColumns(t.columns, initial, current(), { locked });
+    previewBtn.disabled = !changed.length;
+    changedNote.textContent = changed.length ? D.changedColumns(changed) : D.noChanges;
+    fields.forEach((f) => f.el.classList.toggle("is-changed", changed.includes(f.c.name)));
+    flow.reset();
+  };
+  const form = h("form", { class: "d-form", novalidate: true }, h("div", { class: "d-fields" }, fields.map((f) => f.el)));
+  form.addEventListener("input", update);
+  form.addEventListener("change", update);
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (!changed.length) return;
+    const bad = fields.filter((f) => {
+      if (!changed.includes(f.c.name)) return false;
+      const p = f.input.invalid() || F.checkValue(f.c, f.input.get());
+      f.setErr(p ? checkText(p) : null);
+      return !!p;
+    });
+    if (bad.length) { bad[0].input.focus(); return; }
+    flow.preview({ kind: "rows", rows: [Q.editRow(t.columns, initial, current(), changed)], method: "form" });
+  });
+  form.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing && e.target.tagName === "SELECT") { e.preventDefault(); form.requestSubmit(); }
+  });
+  const previewBtn = h("button", { type: "submit", class: "btn primary", disabled: true }, D.previewEdit);
+  form.append(h("div", { class: "a-actions d-form-actions" }, previewBtn, btn(D.close, onClose), changedNote));
+  changedNote.textContent = D.noChanges;
+  const keyText = t.primary_key.map((k) => initial[k]).join(", ");
+  return h("section", { class: "a-card d-add", "aria-label": D.editTitle(keyText) },
+    h("div", { class: "a-head d-add-head" }, h("h3", { text: D.editTitle(keyText) }), btn(D.close, onClose)),
+    h("p", { class: "a-note", text: locked.length ? `${D.editIntro} ${D.lockedSome(locked)}` : D.editIntro }),
+    form, out);
 }
 
 function columnsPanel(t) {

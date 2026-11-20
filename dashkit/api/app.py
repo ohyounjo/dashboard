@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictStr
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .. import config, widgets
+from .. import config, paging, widgets
 from ..auth import access
 from ..auth import admin_routes
 from ..auth import settings as auth_settings
@@ -254,7 +254,8 @@ def post_guest_token(body: GuestTokenRequest, user: Principal = Depends(require_
 
 
 @app.get("/api/data/{dataset}")
-def get_data(dataset: str, user: Principal = Depends(require_user)):
+def get_data(dataset: str, limit: str | None = None, cursor: str | None = None,
+             user: Principal = Depends(require_user)):
     # 볼 수 있는 탭의 위젯 섹션이 참조하는 데이터셋만. 아니면 설정에 없는 것과 같은 404
     allowed = access.allowed_datasets(user, ctx.current().project)
     if dataset not in allowed:
@@ -262,6 +263,16 @@ def get_data(dataset: str, user: Principal = Depends(require_user)):
     # 이후에는 허용 목록 쪽 문자열만 SQL에 넣는다
     name = next(d for d in allowed if d == dataset)
     try:
+        if limit is not None or cursor is not None:
+            # 선택: 페이지로 나눠 받기(설계서 8-5. dashkit/paging.py, 관리 서비스의 행 조회와 같은 규칙)
+            try:
+                n = int(limit) if limit is not None else paging.DEFAULT_LIMIT
+            except ValueError:
+                raise ApiError(422, "invalid_query", "limit은 정수입니다") from None
+            try:
+                return data.fetch_page(name, ctx.current().project, n, cursor)
+            except paging.QueryError as exc:
+                raise ApiError(422, exc.detail, exc.message) from None
         return data.fetch(name)
     except psycopg.errors.UndefinedTable:
         log.warning("뷰 dash.%s가 없음(적재 전)", name)

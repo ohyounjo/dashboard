@@ -96,3 +96,44 @@ def ping() -> bool:
         return True
     except Exception:
         return False
+
+
+def fetch_page(dataset: str, project: Any, limit: int, cursor: str | None) -> dict:
+    """한 페이지(limit 1~200, cursor). dataset은 허용 목록과 대조된 이름. 행을 가리킬 키가 뷰에 있으면 키 방식,
+    없으면 건너뛰기 방식(dashkit/paging.py). 응답은 {columns, rows, next_cursor, changed, truncated: false}."""
+    from .. import paging
+
+    ds = project.dashboard["datasets"].get(dataset, {})
+    q = paging.parse_query({"limit": limit, "cursor": cursor}, [])
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'dash' "
+                    "AND table_name = %s ORDER BY ordinal_position", (dataset,))
+        found = cur.fetchall()
+        if not found:
+            raise psycopg.errors.UndefinedTable(f"dash.{dataset}")
+        columns = [paging.Column(c, _VIEW_TYPES.get(t, "text")) for c, t in found]
+        names = {c.name for c in columns}
+        table = ds.get("table")
+        pk = list(project.schema["tables"][table]["primary_key"]) if table else []
+        key_columns = pk if table and all(k in names for k in pk) else None
+        # 데이터 판: 다시 만든 시각과 배치 기록(추가 적재가 줄을 더한다). dash_reader가 읽을 수 있는 적재 기록이다
+        cur.execute("SELECT loaded_at FROM dashkit_meta.load_snapshot WHERE id = 1")
+        row = cur.fetchone()
+        try:
+            cur.execute("SELECT table_name || '/' || file, sha256 FROM dashkit_meta.batch")
+            batches = dict(cur.fetchall())
+        except psycopg.errors.UndefinedTable:
+            conn.rollback()
+            batches = {}
+        version = paging.data_version(row[0] if row else None, batches)
+        page = paging.fetch_page(cur, sql.SQL("{}.{}").format(sql.Identifier("dash"), sql.Identifier(dataset)),
+                                 columns, q, key_columns=key_columns, version=version, total_rows=None,
+                                 to_json=_value, cut_cells=False)     # 대시보드 데이터는 값을 자르지 않는다(전체 조회와 같게)
+    out = page.public()
+    return {"columns": out["columns"], "rows": out["rows"], "next_cursor": out["next_cursor"],
+            "changed": out["changed"], "truncated": False}
+
+
+_VIEW_TYPES = {"bigint": "integer", "integer": "integer", "smallint": "integer", "numeric": "number",
+               "double precision": "number", "real": "number", "boolean": "boolean", "date": "date",
+               "timestamp with time zone": "timestamp", "timestamp without time zone": "timestamp"}
