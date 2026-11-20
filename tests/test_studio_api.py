@@ -325,10 +325,11 @@ def test_hand_edit_between_requests_is_respected(client):
 def test_ops_registry_takes_new_ops(monkeypatch):
     """연산은 등록 표에 함수를 더하면 는다."""
     assert sorted(ops.OPS) == [
-        "app.update", "chart.add", "chart.remove", "chart.update", "column.update", "dashboard.update",
+        "app.update", "chart.add", "chart.remove", "chart.update", "column.add", "column.update",
+        "dashboard.add", "dashboard.update", "dataset.add", "dataset.remove", "dataset.update",
         "filter.add", "filter.move", "filter.remove", "filter.update", "layout.set",
         "section.add", "section.move", "section.remove", "section.update",
-        "tab.add", "tab.move", "tab.remove", "tab.update"]
+        "tab.add", "tab.move", "tab.remove", "tab.update", "table.add", "table.remove", "table.update"]
     monkeypatch.setattr(ops, "OPS", dict(ops.OPS))
     monkeypatch.setattr(ops, "OP_FILES", dict(ops.OP_FILES))
 

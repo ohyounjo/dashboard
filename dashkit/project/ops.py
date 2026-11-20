@@ -711,14 +711,26 @@ def filter_remove(doc: MutableMapping, item: Mapping[str, Any]) -> None:
 
 # ---------------------------------------------------------------- schema.yaml: 열(데이터 운용, contracts/ingest.md)
 
-# 열 연산이 바꿀 수 있는 키. 머리글 맞추기를 저장하는 aliases와 설명만 받는다(DB의 내용을 바꾸지 않으므로 적용이
-# 필요 없다). 유형·규칙을 바꾸는 키는 구조 변경 단계에서 이 표에 더한다
-COLUMN_UPDATE_KEYS = ("aliases", "description")
+# 열 연산이 바꿀 수 있는 키(설계서 6-2 표). 유형은 넓히기만(integer → number, 무엇이든 → text) 받는다. 규칙을 좁히면 옛
+# 배치가 검증에서 걸리고, 그것은 적용(load)이 파일·줄로 알린다
+COLUMN_UPDATE_KEYS = ("aliases", "description", "type", "values", "min", "max", "pattern", "default", "required")
+_WIDER = {("integer", "number"), ("integer", "text"), ("number", "text"), ("boolean", "text"), ("date", "text"),
+          ("timestamp", "text"), ("enum", "text")}
+TABLE_KEYS = ("description", "mode", "on_conflict", "primary_key", "columns", "checks")
+TABLE_UPDATE_KEYS = ("description", "mode", "on_conflict")
+COLUMN_KEYS = ("type", "required", "values", "ref", "min", "max", "pattern", "description", "default", "aliases")
+
+
+def _schema_tables(doc: MutableMapping) -> MutableMapping:
+    tables = doc.get("tables")
+    if not isinstance(tables, dict):
+        raise OpError("schema.yaml에 tables가 없음")
+    return tables
 
 
 def _schema_column(doc: MutableMapping, table: str, column: str) -> MutableMapping:
-    tables = doc.get("tables")
-    if not isinstance(tables, dict) or not isinstance(tables.get(table), dict):
+    tables = _schema_tables(doc)
+    if not isinstance(tables.get(table), dict):
         raise OpError(f"테이블 '{table}'이 없음")
     columns = tables[table].get("columns")
     if not isinstance(columns, dict) or not isinstance(columns.get(column), dict):
@@ -726,15 +738,163 @@ def _schema_column(doc: MutableMapping, table: str, column: str) -> MutableMappi
     return columns[column]
 
 
+def _column_spec(value: Mapping[str, Any]) -> dict[str, Any]:
+    bad = sorted(set(value) - set(COLUMN_KEYS))
+    if bad or not isinstance(value.get("type"), str):
+        raise OpError("열 정의는 type이 있고 " + ", ".join(COLUMN_KEYS) + "만 가짐"
+                      + (f"(모르는 키: {', '.join(bad)})" if bad else ""))
+    # type을 맨 앞에, null은 쓰지 않는다
+    return {"type": value["type"], **{k: copy.deepcopy(v) for k, v in value.items() if k != "type" and v is not None}}
+
+
+@op("table.add", SCHEMA_FILE)
+def table_add(doc: MutableMapping, item: Mapping[str, Any]) -> None:
+    """{op, table, value: {mode?, on_conflict?, primary_key, columns: {열: {type, …}}, description?, checks?}}."""
+    _fields(item, ("table", "value"))
+    name = _text(item, "table")
+    value = _object(item, "value")
+    bad = sorted(set(value) - set(TABLE_KEYS))
+    if bad or "primary_key" not in value or not isinstance(value.get("columns"), dict) or not value["columns"]:
+        raise OpError("`value`는 primary_key와 columns가 있고 " + ", ".join(TABLE_KEYS) + "만 가짐")
+    tables = _schema_tables(doc)
+    if name in tables:
+        raise OpError(f"테이블 '{name}'이 이미 있음")
+    new: dict[str, Any] = {}
+    for k in ("description", "mode", "on_conflict", "primary_key"):
+        if value.get(k) is not None:
+            new[k] = copy.deepcopy(value[k])
+    new["columns"] = {str(c): _column_spec(_object({"c": spec}, "c")) for c, spec in value["columns"].items()}
+    if value.get("checks"):
+        new["checks"] = copy.deepcopy(value["checks"])
+    tables[name] = new
+
+
+@op("table.update", SCHEMA_FILE)
+def table_update(doc: MutableMapping, item: Mapping[str, Any]) -> None:
+    """{op, table, set: {description?, mode?, on_conflict?}}. null은 그 키를 지운다(방식 변경 포함)."""
+    _fields(item, ("table", "set"))
+    values = _object(item, "set")
+    bad = sorted(set(values) - set(TABLE_UPDATE_KEYS))
+    if bad:
+        raise OpError(f"바꿀 수 없는 키: {', '.join(bad)}")
+    tables = _schema_tables(doc)
+    name = _text(item, "table")
+    if not isinstance(tables.get(name), dict):
+        raise OpError(f"테이블 '{name}'이 없음")
+    _set_values(tables[name], values, allow_remove=True)
+
+
+@op("table.remove", SCHEMA_FILE)
+def table_remove(doc: MutableMapping, item: Mapping[str, Any]) -> None:
+    _fields(item, ("table",))
+    tables = _schema_tables(doc)
+    name = _text(item, "table")
+    if name not in tables:
+        raise OpError(f"테이블 '{name}'이 없음")
+    del tables[name]
+
+
+@op("column.add", SCHEMA_FILE)
+def column_add(doc: MutableMapping, item: Mapping[str, Any]) -> None:
+    """{op, table, column, value: {type, required?, default?, …}}. 맨 뒤에 더한다. replace 테이블의 CSV에 열을 더하는 일은
+    구조 변경 작업이 함께 한다(dashkit/ingest/structure.py)."""
+    _fields(item, ("table", "column", "value"))
+    tables = _schema_tables(doc)
+    name, col = _text(item, "table"), _text(item, "column")
+    if not isinstance(tables.get(name), dict) or not isinstance(tables[name].get("columns"), dict):
+        raise OpError(f"테이블 '{name}'이 없음")
+    if col in tables[name]["columns"]:
+        raise OpError(f"열 '{col}'이 이미 있음")
+    spec = _column_spec(_object(item, "value"))
+    if spec.get("required") and "default" not in spec:
+        raise OpError("필수 열을 더할 때는 default가 있어야 함(이미 있는 행이 검증에서 걸린다)")
+    tables[name]["columns"][col] = spec
+
+
 @op("column.update", SCHEMA_FILE)
 def column_update(doc: MutableMapping, item: Mapping[str, Any]) -> None:
-    """{op, table, column, set: {aliases?, description?}}. null은 그 키를 지운다."""
+    """{op, table, column, set: {aliases?, description?, type?, values?, min?, max?, pattern?, default?, required?}}.
+    null은 그 키를 지운다. 유형은 넓히기만 받는다."""
     _fields(item, ("table", "column", "set"))
     values = _object(item, "set")
     bad = sorted(set(values) - set(COLUMN_UPDATE_KEYS))
     if bad:
         raise OpError(f"바꿀 수 없는 키: {', '.join(bad)}")
+    current = _schema_column(doc, _text(item, "table"), _text(item, "column"))
+    if "type" in values and values["type"] != current.get("type") and \
+            (current.get("type"), values["type"]) not in _WIDER:
+        raise OpError(f"유형은 넓히기만 할 수 있음({current.get('type')} → {values['type']}는 안 됨)")
     if "aliases" in values and values["aliases"] is not None and (
             not isinstance(values["aliases"], list) or not all(isinstance(a, str) and a for a in values["aliases"])):
         raise OpError("`aliases`는 비어 있지 않은 문자열의 목록이어야 함")
     _set_values(_schema_column(doc, _text(item, "table"), _text(item, "column")), values, allow_remove=True)
+
+
+
+# ---------------------------------------------------------------- dashboard.yaml: 데이터셋·대시보드(데이터 운용)
+
+DATASET_KEYS = ("table", "sql", "labels", "metrics", "description")
+
+
+def _datasets(doc: MutableMapping) -> MutableMapping:
+    datasets = doc.get("datasets")
+    if not isinstance(datasets, dict):
+        raise OpError("dashboard.yaml에 datasets가 없음")
+    return datasets
+
+
+@op("dataset.add")
+def dataset_add(doc: MutableMapping, item: Mapping[str, Any]) -> None:
+    """{op, key, value: {table | sql, labels?, metrics?, description?}}."""
+    _fields(item, ("key", "value"))
+    key = _text(item, "key")
+    value = _object(item, "value")
+    bad = sorted(set(value) - set(DATASET_KEYS))
+    if bad or ("table" in value) == ("sql" in value):
+        raise OpError("`value`는 table과 sql 가운데 하나를 갖고 " + ", ".join(DATASET_KEYS) + "만 가짐")
+    datasets = _datasets(doc)
+    if key in datasets:
+        raise OpError(f"데이터셋 '{key}'가 이미 있음")
+    datasets[key] = _new_keyed(value, ("table", "sql", "description", "labels", "metrics"))
+
+
+@op("dataset.update")
+def dataset_update(doc: MutableMapping, item: Mapping[str, Any]) -> None:
+    """{op, key, set: {sql?, labels?, metrics?, description?}}. null은 그 키를 지운다."""
+    _fields(item, ("key", "set"))
+    values = _object(item, "set")
+    bad = sorted(set(values) - {"sql", "labels", "metrics", "description"})
+    if bad:
+        raise OpError(f"바꿀 수 없는 키: {', '.join(bad)}")
+    datasets = _datasets(doc)
+    key = _text(item, "key")
+    if not isinstance(datasets.get(key), dict):
+        raise OpError(f"데이터셋 '{key}'가 없음")
+    _set_values(datasets[key], values, allow_remove=True)
+
+
+@op("dataset.remove")
+def dataset_remove(doc: MutableMapping, item: Mapping[str, Any]) -> None:
+    _fields(item, ("key",))
+    datasets = _datasets(doc)
+    key = _text(item, "key")
+    if key not in datasets:
+        raise OpError(f"데이터셋 '{key}'가 없음")
+    del datasets[key]
+
+
+@op("dashboard.add")
+def dashboard_add(doc: MutableMapping, item: Mapping[str, Any]) -> None:
+    """{op, key, value: {title, charts, layout, filters?, cross_filters?}}. 새 테이블의 초안 그래프(suggest_dashboard)가 쓴다."""
+    _fields(item, ("key", "value"))
+    key = _text(item, "key")
+    value = _object(item, "value")
+    if not isinstance(value.get("title"), str) or not isinstance(value.get("charts"), list) \
+            or not isinstance(value.get("layout"), list):
+        raise OpError("`value`는 title, charts, layout이 필요함")
+    dashboards = doc.get("dashboards")
+    if not isinstance(dashboards, dict):
+        raise OpError("dashboard.yaml에 dashboards가 없음")
+    if key in dashboards:
+        raise OpError(f"대시보드 '{key}'가 이미 있음")
+    dashboards[key] = _new_keyed(value, ("title", "charts", "layout", "filters", "cross_filters"))

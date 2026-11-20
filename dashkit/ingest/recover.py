@@ -206,8 +206,22 @@ def _recover_move(project: Project, conn: "psycopg.Connection | None", record: M
     return recover_move(project, conn, record, mode)
 
 
+def _recover_config(project: Project, conn: "psycopg.Connection | None", record: Mapping[str, Any], mode: str) -> Outcome:
+    from .structure import recover_config      # structure.py가 이 모듈을 쓰므로 부를 때 가져온다
+
+    return recover_config(project, conn, record, mode)
+
+
+def _recover_compact(project: Project, conn: "psycopg.Connection | None", record: Mapping[str, Any], mode: str) -> Outcome:
+    from .compact import recover_compact      # compact.py가 이 모듈을 쓰므로 부를 때 가져온다
+
+    return recover_compact(project, conn, record, mode)
+
+
 RECOVERERS: dict[str, Recoverer] = {
     "add": recover_add,
+    "compact": _recover_compact,   # 합치기(compact.py)
+    "config": _recover_config,     # 구조 변경(structure.py)
     "remove": _recover_move,       # 되돌리기(remove.py)
     "restore": _recover_move,      # 되살리기(remove.py)
 }

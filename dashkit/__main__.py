@@ -14,7 +14,11 @@ from .config import ConfigError, load_project
 
 
 def _project():
+    """현재 프로젝트의 설정. 읽기 전에 끝나지 않은 구조 변경(묶음 기록 config)을 먼저 정리한다(contracts/ingest.md)."""
+    from .ingest.structure import recover_before_read
+
     name = os.environ.get("PROJECT", "")
+    recover_before_read(name)
     return load_project(name)
 
 

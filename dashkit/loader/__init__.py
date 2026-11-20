@@ -87,10 +87,16 @@ def load(project: Project, *, dbname: str | None = None, lock_wait_ms: int = LOC
         except psycopg.Error as exc:
             raise LoadError([f"DB 오류: {_pg_message(exc)}"]) from None
         try:
-            ingest_recover.recover(project, mode="load")
+            outcomes = ingest_recover.recover(project, conn, mode="load")
+            if any(o.kind == "config" for o in outcomes):
+                # 설정 파일이 복구로 바뀌었다(이미 읽은 설정은 낡았다). 다시 읽고 실행해야 한다
+                raise LoadError(["끝나지 않은 구조 변경을 정리했습니다(설정 파일이 바뀌었을 수 있음). 다시 실행하세요"])
         except ingest_recover.RecoverError as exc:
             raise LoadError(exc.errors) from None
         counts = _rebuild_on(project, conn, data, order, as_of_sql)
+        from ..ingest.compact import clear_merged
+
+        clear_merged(project)      # 합친 뒤의 다시 만들기가 성공했으니 합치기 전의 배치(_merged/)는 지운다(설계서 6-4)
     except _StepError as exc:
         raise LoadError(exc.errors) from None
     except psycopg.Error as exc:
@@ -268,6 +274,9 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
     if errors:
         raise _StepError(errors)
 
+    # 계보: 데이터셋 뷰가 읽는 raw 테이블·열(PostgreSQL의 의존 정보. 뷰가 뷰를 쓰면 끝까지 따라간다. 설계서 7-2)
+    sources = read_sources(cur)
+
     # checks(위반 행이 하나라도 있으면 실패). 모든 규칙을 실행해 결과를 모은다. 추가 적재와 같은 함수다
     errors = ingest_apply.run_checks(cur, project.schema, order)
     if errors:
@@ -306,12 +315,39 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
     # 적재 기록(plan이 dash_reader로 읽는다). 원본 값은 넣지 않는다(기본 키의 해시와 행 해시, 파일 이름·해시·행 수뿐).
     # 누적 테이블은 행 지문을 남기지 않는다(배치 단위로 비교한다)
     prints = {t: record.fingerprints(tables[t], data[t].rows) for t in order if t in data}
-    snap = record.snapshot(project.name, project.schema, project.dashboard, counts)
+    snap = record.snapshot(project.name, project.schema, project.dashboard, counts, sources=sources)
     try:
         record.write(cur, snap, prints, os.environ.get("DATA_DB_READER_USER") or "dash_reader", batch_rows, readers)
     except psycopg.Error as exc:
         raise _StepError([f"적재 기록({record.META}) 쓰기: {_pg_message(exc)}"]) from None
     return {t: counts[t] for t in order}
+
+
+def read_sources(cur: psycopg.Cursor) -> dict[str, dict[str, list[str]]]:
+    """dash 뷰 → {raw 테이블: [그 뷰가 읽는 열(이름순)]}. 열 없이 테이블만 읽으면(count(*) 등) 빈 목록이다.
+    뷰가 다른 dash 뷰를 읽으면 그 뷰의 원본까지 따라가 합친다. 쿼리 글에서 이름을 찾는 것보다 정확하다."""
+    cur.execute(
+        "SELECT view_name, table_schema, table_name, column_name FROM information_schema.view_column_usage "
+        "WHERE view_schema = %s UNION ALL "
+        "SELECT view_name, table_schema, table_name, NULL FROM information_schema.view_table_usage WHERE view_schema = %s",
+        (DASH, DASH))
+    direct: dict[str, dict[tuple[str, str], set[str]]] = {}
+    for view, schema, table, column in cur.fetchall():
+        cols = direct.setdefault(view, {}).setdefault((schema, table), set())
+        if column:
+            cols.add(column)
+
+    def resolve(view: str, seen: frozenset[str]) -> dict[str, set[str]]:
+        out: dict[str, set[str]] = {}
+        for (schema, table), cols in direct.get(view, {}).items():
+            if schema == RAW:
+                out.setdefault(table, set()).update(cols)
+            elif schema == DASH and table not in seen:
+                for t, c in resolve(table, seen | {table}).items():
+                    out.setdefault(t, set()).update(c)
+        return out
+
+    return {view: {t: sorted(c) for t, c in sorted(resolve(view, frozenset({view})).items())} for view in direct}
 
 
 def _create_table_sql(tname: str, table: dict) -> sql.Composed:

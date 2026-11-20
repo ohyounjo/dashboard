@@ -124,7 +124,20 @@ Studio에서 적용(apply)하면 그 프로젝트가 웹앱에 보인다. backen
 
 | 연산 | 필드 | 결과 |
 |---|---|---|
-| `column.update` | `table`, `column`, `set: {aliases?, description?}` | 그 열의 키를 바꾼다(`null`은 지움). 지금은 DB의 내용과 상관없는 `aliases`·`description`만 받는다(유형·규칙은 구조 변경 단계에서 더한다) |
+| `table.add` | `table`, `value: {mode?, on_conflict?, primary_key, columns: {열: {type, …}}, description?, checks?}` | 테이블을 더한다. 같은 이름이 있으면 `invalid_op`. 열 정의의 키는 schema.yaml과 같다(`type`을 맨 앞에, `null`은 쓰지 않는다) |
+| `table.update` | `table`, `set: {description?, mode?, on_conflict?}` | 테이블의 키를 바꾼다(`null`은 지움) |
+| `table.remove` | `table` | 테이블을 지운다(데이터 파일은 지우지 않는다). 관리 서비스는 쓰는 곳이 있으면 409 `in_use`로 먼저 거절한다 |
+| `column.add` | `table`, `column`, `value: {type, required?, default?, …}` | 열을 맨 뒤에 더한다. `required`면 `default`가 있어야 한다(기존 행이 검증에서 걸린다). **`replace` 테이블은 CSV에도 열을 더해야 해서** Studio의 저장(YAML만 쓴다)은 400 `invalid_op`로 거절한다. 관리 서비스의 구조 변경이 두 파일을 한 번에 바꾼다([ingest.md](ingest.md) "구조 변경") |
+| `column.update` | `table`, `column`, `set: {aliases?, description?, type?, values?, min?, max?, pattern?, default?, required?}` | 그 열의 키를 바꾼다(`null`은 지움). `type`은 넓히기만 받는다(`integer` → `number`, 무엇이든 → `text`. 그 밖은 `invalid_op`). 규칙을 좁히면 옛 배치가 load에서 걸린다(파일·줄로 알린다) |
+
+`dashboard.yaml`의 데이터셋·대시보드를 더하는 연산(데이터 운용):
+
+| 연산 | 필드 | 결과 |
+|---|---|---|
+| `dataset.add` | `key`, `value: {table \| sql, labels?, metrics?, description?}` | 데이터셋을 더한다(`table`과 `sql` 가운데 하나) |
+| `dataset.update` | `key`, `set: {sql?, labels?, metrics?, description?}` | 데이터셋의 키를 바꾼다(`null`은 지움) |
+| `dataset.remove` | `key` | 데이터셋을 지운다. 관리 서비스는 그래프가 쓰면 409 `in_use`로 먼저 거절한다 |
+| `dashboard.add` | `key`, `value: {title, charts, layout, filters?, cross_filters?}` | 대시보드를 더한다(새 테이블의 초안 그래프가 쓴다) |
 
 저장 로직(고친 곳만 다시 쓰기 → 사본 검증 → 원자적 교체, `revision` 확인)은 `dashkit/project/store.py`의 `save_ops` 하나이고 Studio의 `PATCH …/config`와 관리 서비스가 함께 쓴다.
 
