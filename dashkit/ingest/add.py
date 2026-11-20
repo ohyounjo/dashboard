@@ -19,7 +19,7 @@ import psycopg
 from .. import config, db
 from ..config import Project, table_order
 from . import batches, ledger, pending
-from .apply import StagedBatch, apply_batch, drop_stage, pg_message, stage_batch, stage_source
+from .apply import RejectWriter, StagedBatch, apply_batch, drop_stage, pg_message, stage_batch, stage_source
 from .batches import CanonicalWriter
 from .intake import PARSERS, Intake, IntakeError, Parser, table_labels
 from .operation import IngestError, Move, StaleConfig, Session, after_ingest, finish, locked
@@ -91,10 +91,12 @@ def check_table(project: Project, table: str) -> str:
 def ingest(project_name: str, items: list[Item], *, dry_run: bool = False, force: bool = False,
            strict: bool = False, skip_invalid: bool = False, projects_dir: Path | None = None,
            dbname: str | None = None, wait_ms: int | None = None, max_rows: int | None = None,
+           rejects_dir: Path | None = None,
            progress: Callable[[str, Mapping[str, Any]], None] | None = None) -> dict[str, Any]:
     """데이터를 더한다. 성공하면 결과(contracts/ingest.md "결과 형식"), 실패하면 IngestError.
 
     dry_run이면 반영까지 해 보고 되돌린다(미리보기). 결과 형식은 같다.
+    skip_invalid이고 rejects_dir이 있으면 항목마다 빠진 행 파일 `<번호>.csv`(rejects_file_name)를 그 폴더에 쓴다.
     """
     if not items:
         raise IngestError(400, "bad_request", "더할 입력이 없습니다")
@@ -107,8 +109,10 @@ def ingest(project_name: str, items: list[Item], *, dry_run: bool = False, force
             raise IngestError(503, "db_unavailable", f"DB 접속 실패: {pg_message(exc)}") from None
         prepared: list[_Prepared] = []
         try:
-            prepared = _prepare(conn, project, items, tables, strict=strict, skip_invalid=skip_invalid,
-                                progress=progress)
+            # 미리보기는 오류 행을 뺀다고 치고 끝까지(참조 대조·반영까지) 해 본다: 모든 오류와 실제로 들어갈 행 수를
+            # 한 번에 보여 준다. 사용자가 빼고 넣기를 고르지 않았으면 결과는 ok: false다
+            prepared = _prepare(conn, project, items, tables, strict=strict, skip_invalid=skip_invalid or dry_run,
+                                progress=progress, rejects_dir=rejects_dir if skip_invalid else None)
             big = [p for p in prepared if max_rows is not None and p.staged.total > max_rows]
             if big:
                 raise IngestError(413, "too_many_rows", f"파일 하나는 {max_rows}행까지입니다. 나눠 올려 주세요",
@@ -125,7 +129,12 @@ def ingest(project_name: str, items: list[Item], *, dry_run: bool = False, force
                 progress("lock", {})
             try:
                 with locked(project, conn, revision=revision, wait_ms=wait_ms) as session:
-                    return _commit(session, prepared, force=force, dry_run=dry_run)
+                    result = _commit(session, prepared, force=force, dry_run=dry_run)
+                for b in result["batches"]:
+                    b["skip_invalid"] = skip_invalid
+                if dry_run and not skip_invalid and any(p.staged.invalid for p in prepared):
+                    result["ok"] = False       # 오류가 있다. 그대로는 넣을 수 없고, 빼고 넣으면 rows.inserted만큼 들어간다
+                return result
             except StaleConfig:
                 if attempt == 2:
                     raise IngestError(409, "stale_config",
@@ -134,6 +143,8 @@ def ingest(project_name: str, items: list[Item], *, dry_run: bool = False, force
                 continue
         finally:
             for p in prepared:
+                if p.staged.rejects is not None:
+                    p.staged.rejects.close()
                 if p.writer_path is not None:
                     try:
                         p.writer_path.unlink()
@@ -152,12 +163,17 @@ def ingest(project_name: str, items: list[Item], *, dry_run: bool = False, force
     raise AssertionError("unreachable")
 
 
+def rejects_file_name(index: int) -> str:
+    """빠진 행 파일의 이름(rejects_dir 안). index는 items의 자리다."""
+    return f"{index:03d}.csv"
+
+
 def _prepare(conn: psycopg.Connection, project: Project, items: list[Item], tables: list[str], *,
-             strict: bool, skip_invalid: bool, progress: Callable[[str, Mapping[str, Any]], None] | None
-             ) -> list[_Prepared]:
+             strict: bool, skip_invalid: bool, progress: Callable[[str, Mapping[str, Any]], None] | None,
+             rejects_dir: Path | None = None) -> list[_Prepared]:
     """잠금 밖: 접수·검증·정규형 쓰기·임시 테이블 채우기. 올린 내용만 보고 정해지는 일이다."""
     out: list[_Prepared] = []
-    for item, tname in zip(items, tables):
+    for index, (item, tname) in enumerate(zip(items, tables)):
         table = project.schema["tables"][tname]
         if progress:
             progress("read", {"table": tname})
@@ -170,16 +186,29 @@ def _prepare(conn: psycopg.Connection, project: Project, items: list[Item], tabl
                 intake = Intake(parser, tname, table, labels=table_labels(project.dashboard, tname),
                                 overrides=item.columns, strict=strict)
             except IntakeError as exc:
-                raise IngestError(422, exc.detail, exc.message, exc.errors or None, **exc.extra) from None
+                extra = dict(exc.extra)
+                if item.source.get("kind") == "csv":
+                    extra["file"] = str(item.source.get("name"))     # 여러 파일일 때 어느 파일인지
+                raise IngestError(422, exc.detail, exc.message, exc.errors or None, **extra) from None
             path = pending.incoming_path(project.data_dir)
             writer = CanonicalWriter(path)
+            rejects = RejectWriter(rejects_dir / rejects_file_name(index)) \
+                if skip_invalid and rejects_dir is not None else None
+
+            def tick(rows: int, done: int, total: int | None, tname: str = tname) -> None:
+                if progress:
+                    progress("read", {"table": tname, "rows": rows, "bytes": done, "total_bytes": total})
+
             try:
                 with conn.cursor() as cur:
-                    staged = stage_batch(cur, intake, writer=writer, skip_invalid=skip_invalid)
+                    staged = stage_batch(cur, intake, writer=writer, skip_invalid=skip_invalid, rejects=rejects,
+                                         progress=tick)
                 conn.commit()
                 sha = writer.close()
             except BaseException:
                 writer.abort()
+                if rejects is not None:
+                    rejects.close()
                 raise
             staged.sha256 = sha
             out.append(_Prepared(item, staged, path, sha, staged.normalized, staged.columns))
@@ -241,13 +270,31 @@ def _commit(session: Session, prepared: list[_Prepared], *, force: bool, dry_run
         for i in ordered:
             p = prepared[i]
             results[i] = apply_batch(cur, project.schema, p.staged, changes_limit=CHANGES_SHOWN)
+            if p.staged.dropped and not dry_run and p.writer_path is not None:
+                # 잠금 안에서 뺀 행(참조·새 행의 필수 열 오류)을 배치 파일에서도 뺀다(배치 파일에는 들어간 행만)
+                new_path = pending.incoming_path(project.data_dir)
+                p.sha256 = batches.rewrite_without(p.writer_path, p.staged.written, set(p.staged.dropped), new_path)
+                p.writer_path.unlink()
+                p.writer_path = new_path
+                moves_by[i].source, moves_by[i].sha256 = new_path, p.sha256
+                if not force:
+                    # 행을 뺀 뒤의 최종 내용으로 같은 내용 다시 올리기를 다시 확인한다(배치 기록과, 같은 요청의 다른 항목과)
+                    same = [n for n, rec in session.recorded.get(p.staged.table, {}).items() if rec.sha256 == p.sha256]
+                    same += [names[j] for j in ordered if j != i and prepared[j].staged.table == p.staged.table
+                             and prepared[j].sha256 == p.sha256]
+                    if same:
+                        raise IngestError(409, "duplicate_file", "오류 행을 뺀 내용이 이미 있는 배치와 같습니다"
+                                          "(force=true면 그래도 넣습니다)",
+                                          [f"data/{p.staged.table}/{same[0]}"],
+                                          duplicates=[{"table": p.staged.table, "file": same[0]}])
 
     def add_records(cur: psycopg.Cursor) -> None:    # 파일을 옮긴 뒤 배치 기록을 더한다(5-4의 확정 순서)
         for i in ordered:
             ledger.add(cur, prepared[i].staged.table, names[i], prepared[i].sha256, results[i])
 
-    moves = [Move(prepared[i].staged.table, names[i], prepared[i].writer_path, prepared[i].sha256)   # type: ignore[arg-type]
-             for i in ordered]
+    moves_by = {i: Move(prepared[i].staged.table, names[i], prepared[i].writer_path, prepared[i].sha256)   # type: ignore[arg-type]
+                for i in ordered}
+    moves = [moves_by[i] for i in ordered]
     def recorded() -> None:
         for p in prepared:
             p.writer_path = None          # 묶음 기록이 가리킨다. 지우지 않는다(복구 절차만 치운다)
@@ -281,4 +328,6 @@ def _result(p: _Prepared, counts: Mapping[str, Any] | None, name: str | None = N
         "errors": st.errors,
         "error_count": st.error_count,
         "changes": list((counts or {}).get("changes") or []),
+        "skip_invalid": st.skip_invalid,
+        "rejected": st.invalid if st.skip_invalid else 0,     # 빼고 넣은 오류 행 수(빠진 행 파일의 행)
     }

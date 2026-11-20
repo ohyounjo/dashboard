@@ -41,13 +41,17 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `GET /health` | 불필요 | `{"status": "ok"}` |
 | `GET /config` | 운용자 | `{"project", "role", "limits"}`. 운용 화면이 데이터 메뉴를 그리는 데 쓴다 |
 | `GET /tables` | 운용자 | `{"items", "total", "project"}`. 항목 `{name, mode, on_conflict, description, rows, batches, compact_hint, last_batch: {file, added_at, actor_email} \| null}`. `rows`는 배치 기록의 `inserted` 합(적용한 적이 없으면 `null`), `batches`는 배치 폴더의 파일 수, `compact_hint`는 그 수가 `INGEST_COMPACT_HINT`를 넘는지 |
-| `GET /tables/{t}` | 운용자 | 입력 폼을 만드는 정의: `{name, mode, on_conflict, description, primary_key, columns: [{name, type, required, primary_key, label, values?, ref?, min?, max?, pattern?, description?, default?, aliases?}], checks: [이름], datasets: [그 테이블을 그대로 보는 데이터셋]}`. `label`은 그 테이블을 보는 `table:` 데이터셋의 `labels` |
+| `GET /tables/{t}` | 운용자 | 입력 폼을 만드는 정의: `{name, mode, on_conflict, description, primary_key, revision, columns: [{name, type, required, primary_key, label, values?, ref?, min?, max?, pattern?, description?, default?, aliases?}], checks: [이름], datasets: [그 테이블을 그대로 보는 데이터셋]}`. `label`은 그 테이블을 보는 `table:` 데이터셋의 `labels` |
 | `POST /tables/{t}/batches` | 운용자 | **데이터 더하기**([ingest.md](ingest.md) "더하기"). 아래 "데이터 더하기" |
 | `GET /tables/{t}/batches?removed=1` | 운용자 | 배치 이력, 최근 것부터: `{"items", "total"}`. 항목 `{file, removed, first, added_at, recorded, rows, inserted, updated, skipped, unchanged, actor_email, method, source_name, mine}`. 누가·방법·원래 파일 이름은 감사 로그(`data.batch.create`)에서 온다. `mine`은 요청한 사람이 더한 배치인지. `removed=1`이면 `_removed/`의 배치도 싣는다 |
 | `GET /tables/{t}/batches/{file}` | 운용자 | 배치 파일 내려받기(정규형 그대로, `.csv.gz`는 `application/gzip`) |
 | `DELETE /tables/{t}/batches/{file}` | admin, 또는 그 배치를 더한 operator | 되돌리기. 빠른 길(방금 추가 취소)이면 200 `{"ok", "fast": true, "table", "file", "rows"}`, 아니면 202 작업(다시 만들기) |
 | `POST /tables/{t}/batches/{file}/restore` | admin, 또는 그 배치를 더한 operator | `_removed/`의 배치 되살리기 → 202 작업 |
+| `POST /batches` | 운용자 | **여러 파일 한꺼번에**(아래 "여러 파일") → 202 작업 |
+| `GET /tables/{t}/template` | 운용자 | 빈 양식: 열 이름 머리글 + 예시 한 줄(`default`, enum의 첫 값, 유형별 예시)의 CSV(UTF-8 BOM) |
+| `POST /tables/{t}/aliases` | admin | 머리글 맞춤 저장: `{"aliases": {"<머리글>": "<열>"}, "revision"}` → 200 `{"revision", "changed"}`. `column.update` 연산으로 그 열의 `aliases`에 더한다(Studio와 같은 저장. [studio.md](studio.md) "변경 연산"). `revision`은 `GET /tables/{t}`가 준 값이고 다르면 409 `stale_config`. aliases는 DB와 상관없어 적용이 필요 없다. 감사 로그 `data.table.alter` |
 | `GET /jobs`, `GET /jobs/{id}` | 운용자 | 작업 목록(최근 것부터, 로그 없이), 작업 하나(아래 "작업") |
+| `GET /jobs/{id}/rejects` | 운용자 | 오류 행을 빼고 넣은 작업의 빠진 행: 올린 행(정규형 머리글) + `오류` 열의 CSV(UTF-8 BOM). 여러 파일이면 파일마다 하나씩 담은 zip. 없으면 404 `unknown_job` |
 
 경로는 `dashkit/manage/routes/`의 모듈 하나씩이다. 경로를 더하는 일은 모듈 하나와 `routes/__init__.py`의 목록 한 줄이다.
 
@@ -61,6 +65,20 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 
 - 대상이 `replace` 테이블이면 409 `not_append`. 그 밖의 오류 코드는 [ingest.md](ingest.md)와 같다(422 `invalid_rows`·`unknown_columns`·`key_conflict`·`check_failed`, 409 `duplicate_file`·`rebuild_required`·`project_mismatch`·`stale_config`·`apply_running`).
 - 감사 로그: 넣으면 `data.batch.create`(`detail`: `project`, `table`, `file`, `sha256`, `rows`, `method`(`form`·`paste`·`upload`), `source_name`(올린 파일 이름)), 실패하면 `data.batch.failed`(`detail_code`). 미리보기는 남기지 않는다. 데이터 값은 싣지 않는다.
+
+- **오류 행 빼고 넣기**(`skip_invalid`): 행 단위 검증 오류, 참조 오류, `default`가 없는 필수 열이 빠진 새 행을 빼고 나머지를 넣는다. 배치 파일에는 들어간 행만 쓴다. 결과의 batch에 `skip_invalid`, `rejected`(뺀 행 수)가 있고 작업 결과에 `rejects: true`면 `GET /jobs/{id}/rejects`로 빠진 행을 내려받는다. 키 충돌(`error` 정책), `checks` 위반, 배치 안의 기본 키 중복은 빼고 넣는 대상이 아니라 전체 거절이다.
+- **진행률:** 파일 적재 작업의 `progress`는 읽는 동안 `{"step": "read", "table", "rows", "bytes", "total_bytes"}`(1만 행마다), 잠금을 기다리고 반영하는 동안 `{"step": "lock"}`이다.
+
+### 여러 파일 (`POST /batches`)
+
+| 본문 | 응답 |
+|---|---|
+| multipart `files`(여러 개, `<이름>.csv`) + 글 부분 `map`(JSON `{"<파일 이름>": "<테이블>"}`), `dry_run`·`force`·`skip_invalid`·`strict`, `columns`(JSON `{"<파일 이름>": {"<머리글>": "<열>" \| null}}`) | 202 `{"job"}`. 결과의 `batches`는 파일마다 하나(보낸 순서) |
+| JSON `{"upload_id", "map"?, "columns"?, "force"?, "skip_invalid"?}` | 202. 미리보기한 파일들을 다시 올리지 않고 넣는다 |
+
+- **한 트랜잭션이다**(설계서 D12): 참조 순서(`config.table_order`)대로 넣고, 하나라도 실패하면 어느 파일도 들어가지 않는다. 확정 도중에 끊겨도 묶음 단위로 복구한다([ingest.md](ingest.md) "묶음 기록과 끊김 복구").
+- `map`을 빼면 파일 이름(확장자 제외)이 테이블 이름이어야 한다. 짝지을 수 없으면 422 `unknown_table`(`errors`에 파일별 이유). 같은 테이블에 파일 여럿도 된다(번호를 이어 매긴다).
+- 한 번에 50개까지(넘으면 400 `too_many_files`), 합계 `INGEST_MAX_REQUEST_MB`.
 
 ### 되돌리기와 되살리기
 

@@ -126,22 +126,35 @@ def definition_hash(dataset: Mapping[str, Any]) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+# DB의 내용과 상관없는 테이블·열 키(머리글 맞추기와 설명). 바꿔도 다시 만들 필요가 없으므로 지문에 넣지 않는다
+DB_IRRELEVANT_KEYS = ("aliases", "description")
+
+
+def db_relevant(table: Mapping[str, Any]) -> dict[str, Any]:
+    """테이블 정의에서 DB의 내용을 정하는 부분만(aliases·description을 뺀다)."""
+    out = {k: v for k, v in table.items() if k not in DB_IRRELEVANT_KEYS}
+    out["columns"] = {c: {k: v for k, v in spec.items() if k not in DB_IRRELEVANT_KEYS}
+                      for c, spec in table["columns"].items()}
+    return out
+
+
 def table_rules_hash(table: Mapping[str, Any]) -> str:
-    """테이블 정의(정규화한 값: 열·규칙·방식·충돌 정책·default·checks)의 해시."""
-    text = json.dumps(table, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    """테이블 정의(정규화한 값: 열·규칙·방식·충돌 정책·default·checks. aliases·description은 빼고)의 해시."""
+    text = json.dumps(db_relevant(table), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def data_revision(schema: Mapping[str, Any], dashboard: Mapping[str, Any]) -> str:
     """데이터 설정 지문: DB의 내용을 정하는 설정만으로 구한 해시(contracts/ingest.md "데이터 설정 지문").
 
-    schema.yaml의 tables 전체(열, 규칙, 방식, 충돌 정책, checks)와 dashboard.yaml의 datasets(뷰 정의: table·sql)·
-    app.as_of. 탭·그래프 배치, 데이터셋의 지표·표시 이름처럼 DB와 상관없는 설정은 넣지 않는다.
+    schema.yaml의 tables(열, 규칙, 방식, 충돌 정책, checks. aliases·description은 빼고)와 dashboard.yaml의
+    datasets(뷰 정의: table·sql)·app.as_of. 탭·그래프 배치, 데이터셋의 지표·표시 이름, 머리글 맞추기(aliases)처럼
+    DB와 상관없는 설정은 넣지 않는다.
     정규화한 설정(config.load_project의 결과)에서 구한다.
     """
     views = {k: {"table": ds["table"]} if "table" in ds else {"sql": ds.get("sql")}
              for k, ds in (dashboard.get("datasets") or {}).items()}
-    doc = {"tables": schema["tables"], "datasets": views, "as_of": (dashboard.get("app") or {}).get("as_of")}
+    doc = {"tables": {t: db_relevant(spec) for t, spec in schema["tables"].items()}, "datasets": views, "as_of": (dashboard.get("app") or {}).get("as_of")}
     text = json.dumps(doc, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 

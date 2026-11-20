@@ -304,28 +304,12 @@ async def patch_config(p: str, request: Request):
     base = body.get("revision")
 
     def work() -> dict[str, Any]:
-        root = store.project_root(name)
         with _Busy(name):
-            if base is not None and base != store.revision(root):
-                raise StoreError(409, "stale_config", "설정 파일이 그 사이에 바뀌었습니다. 다시 불러온 뒤 시도하세요")
-            files: dict[str, bytes] = {}
-            how: dict[str, str] = {}
-            for file in ops.files_of(op_list):
-                try:
-                    text = (root / file).read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
-                    raise StoreError(422, "invalid_config", "설정 파일을 읽을 수 없습니다",
-                                     [f"{file}:(최상위): 파일을 읽을 수 없음"]) from None
-                new_text, how[file] = store.edit_yaml(text, lambda doc, file=file: ops.apply_ops(doc, op_list, file))
-                files[file] = new_text.encode("utf-8")
-            store.prepare(name, files, with_csv=False)
-            changed = store.commit(name, files)
-        if changed:
-            log.info("프로젝트 '%s' 설정 저장: %s (%s)", name, ", ".join(changed),
-                     ", ".join(f"{f}={h}" for f, h in how.items()))
-        return {"changed": changed, "dashboard": store.read_raw(root, config.DASHBOARD_FILE),
-                "schema": store.read_raw(root, config.SCHEMA_FILE), "revision": store.revision(root),
-                "written": how}
+            out = store.save_ops(name, op_list, base)
+        if out["changed"]:
+            log.info("프로젝트 '%s' 설정 저장: %s (%s)", name, ", ".join(out["changed"]),
+                     ", ".join(f"{f}={h}" for f, h in out["written"].items()))
+        return out
 
     return await run_in_threadpool(work)
 

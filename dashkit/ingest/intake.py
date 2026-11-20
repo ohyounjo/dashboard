@@ -66,6 +66,10 @@ class Parser:
     def where(self, at: int, column: str) -> str:
         raise NotImplementedError
 
+    def progress(self) -> tuple[int, int | None]:
+        """(읽은 바이트, 전체 바이트). 모르면 (0, None)."""
+        return 0, None
+
     def close(self) -> None:
         pass
 
@@ -112,6 +116,11 @@ class CsvParser(Parser):
         else:
             self.encoding = "utf-8" if _utf8_ok(path) else "cp949"
         raw = batches.open_binary(path)
+        self._raw_file = getattr(raw, "fileobj", None) or raw     # gzip이면 바깥 파일
+        try:
+            self._size: int | None = path.stat().st_size
+        except OSError:
+            self._size = None
         self._hasher = batches.HashingReader(raw) if hash_input else None
         binary: IO[bytes] = io.BufferedReader(self._hasher) if self._hasher else raw   # type: ignore[arg-type]
         enc = "utf-8-sig" if self.encoding == "utf-8" else "cp949"
@@ -167,12 +176,20 @@ class CsvParser(Parser):
             if not record or (len(record) == 1 and record[0].strip() == ""):
                 continue      # 빈 줄
             if len(record) != width:
-                yield line, RowError(self.where(line, "-"), f"값 개수 {len(record)}개가 머리글 {width}개와 다름")
+                yield line, RowError(self.where(line, "-"), f"값 개수 {len(record)}개가 머리글 {width}개와 다름",
+                                     raw=record)
                 continue
             yield line, record
 
     def where(self, at: int, column: str) -> str:
         return f"{self.name}:{at}:{column}"
+
+    def progress(self) -> tuple[int, int | None]:
+        """(읽은 바이트, 전체 바이트). 압축 파일은 압축된 크기 기준이다."""
+        try:
+            return self._raw_file.tell(), self._size
+        except (OSError, ValueError, AttributeError):
+            return 0, self._size
 
     @property
     def input_hash(self) -> str | None:
@@ -232,7 +249,8 @@ class RowsParser(Parser):
             for k in self._keys:
                 cell = _cell(row[k])
                 if cell is None:
-                    bad = RowError(self.where(i, k), "값은 문자열·숫자·참거짓·null만 받음")
+                    bad = RowError(self.where(i, k), "값은 문자열·숫자·참거짓·null만 받음",
+                                   raw=[_cell(row[x]) or "" for x in self._keys])
                     break
                 values.append(cell)
             yield i, (bad if bad is not None else values)
@@ -248,12 +266,14 @@ PARSERS: dict[str, Callable[..., Parser]] = {
 
 
 class RowError:
-    """행 하나의 형식 오류(파서가 값 대신 내놓는다). fatal이면 그 뒤를 읽을 수 없다(CSV 문법 오류)."""
+    """행 하나의 형식 오류(파서가 값 대신 내놓는다). fatal이면 그 뒤를 읽을 수 없다(CSV 문법 오류).
+    raw는 읽을 수 있었던 원래 칸들(빠진 행 파일에 남겨 고쳐 다시 올릴 수 있게)."""
 
-    def __init__(self, where: str, reason: str, *, fatal: bool = False):
+    def __init__(self, where: str, reason: str, *, fatal: bool = False, raw: list[str] | None = None):
         self.where = where
         self.reason = reason
         self.fatal = fatal
+        self.raw = list(raw) if raw is not None else None
 
 
 # ---------------------------------------------------------------- 머리글 맞추기
@@ -440,6 +460,7 @@ class Intake:
                                "unknown": [], "dropped": list(self.match.dropped)}
         self.report.normalized = {"encoding": parser.encoding, "delimiter": parser.delimiter}
         self._counts: dict[str, int] = {}
+        self.last_problems: list[str] = []      # 바로 앞에 내놓은 오류 행의 이유들(빠진 행 파일에 쓴다)
 
     def rows(self) -> Iterator[tuple[int, list[str], list[Any] | None]]:
         """(위치, 정규형 값, 파이썬 값). 검증 오류가 있는 행은 파이썬 값이 None이고 오류는 report에 쌓인다."""
@@ -451,15 +472,22 @@ class Intake:
                 if isinstance(record, RowError):
                     report.invalid += 1
                     report.error(f"{record.where}: {record.reason}")
+                    self.last_problems = [record.reason]
                     if record.fatal:
                         report.fatal = True
                         return
-                    yield at, [], None
+                    values = []
+                    if record.raw is not None:
+                        # 칸을 정규형 머리글 자리에 놓고, 개수가 달라 놓지 못한 칸은 원래 줄 그대로 이유에 덧붙인다
+                        values = [record.raw[i] if i < len(record.raw) else "" for i in self._take]
+                        self.last_problems = [record.reason, "원래 칸: " + " | ".join(record.raw)]
+                    yield at, values, None
                     continue
                 values = [record[i] for i in self._take]
                 long = [c for c, v in zip(self.header, values) if len(v) > MAX_CELL_CHARS]
                 if long:
                     report.invalid += 1
+                    self.last_problems = [f"{col}: 값이 너무 김(최대 {MAX_CELL_CHARS}자)" for col in long]
                     for col in long:
                         report.error(f"{where(at, col)}: 값이 너무 김(최대 {MAX_CELL_CHARS}자)")
                     yield at, values, None
@@ -469,6 +497,7 @@ class Intake:
                 typed, problems = self.checker.check(values)
                 if problems:
                     report.invalid += 1
+                    self.last_problems = [f"{col}: {reason}" for col, reason in problems]
                     for col, reason in problems:
                         report.error(f"{where(at, col)}: {reason}")
                     yield at, values, None

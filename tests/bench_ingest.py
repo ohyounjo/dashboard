@@ -8,6 +8,8 @@ tools 컨테이너(데이터 DB 접속 환경변수)에서 실행한다. 임시 
 1. 행 N개를 첫 배치 하나로 둔 테이블의 apply(load) 시간
 2. 그 테이블에 배치 하나를 더할 때 잠금 구간의 시간(1행, 1만 행, update 정책으로 1만 행 고치기)
 3. 같은 N개를 배치 B개로 나눈 테이블의 apply 시간
+4. (--upload-mb M) 그 테이블에 M MB짜리 파일 하나를 미리보기(dry_run)한 뒤 같은 디스크의 파일로 넣기(관리 서비스가
+   upload_id로 확정할 때와 같은 길. 다시 올리지 않는다)
 """
 from __future__ import annotations
 
@@ -85,6 +87,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=1_000_000)
     ap.add_argument("--batches", type=int, default=200)
+    ap.add_argument("--upload-mb", type=int, default=0, help="이 크기(MB)의 파일 하나를 미리보기한 뒤 넣는다")
     args = ap.parse_args()
     dbname = f"dash_bench_{uuid.uuid4().hex[:8]}"
     with db.owner_conn(autocommit=True) as conn:
@@ -104,6 +107,31 @@ def main() -> None:
             total, lock = lock_section(root, dbname, upd)
             out["update_10k_rows"] = {"total_s": round(total, 3), "lock_s": round(lock, 3)}
             out["apply_after_adds_s"] = round(timed_load(root, dbname), 2)
+            if args.upload_mb:
+                big = Path(tmp) / "big.csv"
+                start, written = n + 20_000, 0
+                with open(big, "w", encoding="utf-8", newline="") as f:
+                    w = csv.writer(f, lineterminator="\n")
+                    w.writerow(HEADER)
+                    i = start
+                    while f.tell() < args.upload_mb * 1024 * 1024:
+                        r = row(i)
+                        r[-1] = r[-1] + " " + "가" * 20
+                        w.writerow(r)
+                        i += 1
+                    written = i - start
+                item = [Item("entries", {"kind": "csv", "path": big, "name": "big.csv"})]
+                t0 = time.perf_counter()
+                pre = ingest("ledger", item, projects_dir=root, dbname=dbname, dry_run=True)
+                t1 = time.perf_counter()
+                marks: dict[str, float] = {}
+                ingest("ledger", item, projects_dir=root, dbname=dbname,
+                       progress=lambda phase, _i: marks.setdefault(phase, time.perf_counter()))
+                t2 = time.perf_counter()
+                out["upload"] = {"mb": round(big.stat().st_size / 1e6, 1), "rows": written,
+                                 "preview_s": round(t1 - t0, 2), "insert_s": round(t2 - t1, 2),
+                                 "insert_lock_s": round(t2 - marks["lock"], 2),
+                                 "preview_inserted": pre["batches"][0]["rows"]["inserted"]}
             root2 = project(Path(tmp) / "many", args.rows, args.batches)
             out["apply_many_batches_s"] = round(timed_load(root2, dbname), 2)
             files = sorted((root / "ledger" / "data").rglob("*.csv*"))

@@ -20,7 +20,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 BATCH_RE = re.compile(r"(\d{1,18})(?:-([^/\\]*))?\.csv(\.gz)?")
 STAMP_RE = re.compile(r"(\d{8}T\d{4}(?:\d{2})?Z)")
@@ -245,3 +245,23 @@ class CanonicalWriter:
             self.path.unlink()
         except OSError:
             pass
+
+
+def rewrite_without(path: Path, written: Any, dropped: set[int], out: Path) -> str:
+    """정규형 파일에서 dropped 위치의 행을 뺀 새 정규형 파일(out)을 쓰고 내용 해시를 돌려준다.
+
+    written[i]는 파일의 i번째 데이터 행의 원래 위치다(stage_batch가 적는다). 오류 행을 빼고 넣을 때 잠금 안에서
+    참조·새 행의 필수 열 오류로 뺀 행을 배치 파일에서도 빼는 데 쓴다(배치 파일에는 들어간 행만 있다).
+    """
+    writer = CanonicalWriter(out)
+    try:
+        with open_binary(path) as f:
+            reader = csv.reader(io.TextIOWrapper(f, encoding="utf-8", newline=""))
+            writer.header(next(reader))
+            for i, row in enumerate(reader):
+                if written[i] not in dropped:
+                    writer.row(row)
+        return writer.close()
+    except BaseException:
+        writer.abort()
+        raise

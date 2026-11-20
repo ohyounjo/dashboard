@@ -14,7 +14,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Callable, Mapping, MutableMapping, MutableSequence
 
-from ..config import DASHBOARD_FILE
+from ..config import DASHBOARD_FILE, SCHEMA_FILE
 
 __all__ = ["OPS", "OpError", "apply_ops", "op"]
 
@@ -707,3 +707,34 @@ def filter_remove(doc: MutableMapping, item: Mapping[str, Any]) -> None:
     filters.pop(i)
     if not filters:
         del d["filters"]                # 마지막 필터를 지우면 `filters` 키도 지운다
+
+
+# ---------------------------------------------------------------- schema.yaml: 열(데이터 운용, contracts/ingest.md)
+
+# 열 연산이 바꿀 수 있는 키. 머리글 맞추기를 저장하는 aliases와 설명만 받는다(DB의 내용을 바꾸지 않으므로 적용이
+# 필요 없다). 유형·규칙을 바꾸는 키는 구조 변경 단계에서 이 표에 더한다
+COLUMN_UPDATE_KEYS = ("aliases", "description")
+
+
+def _schema_column(doc: MutableMapping, table: str, column: str) -> MutableMapping:
+    tables = doc.get("tables")
+    if not isinstance(tables, dict) or not isinstance(tables.get(table), dict):
+        raise OpError(f"테이블 '{table}'이 없음")
+    columns = tables[table].get("columns")
+    if not isinstance(columns, dict) or not isinstance(columns.get(column), dict):
+        raise OpError(f"테이블 '{table}'에 열 '{column}'이 없음")
+    return columns[column]
+
+
+@op("column.update", SCHEMA_FILE)
+def column_update(doc: MutableMapping, item: Mapping[str, Any]) -> None:
+    """{op, table, column, set: {aliases?, description?}}. null은 그 키를 지운다."""
+    _fields(item, ("table", "column", "set"))
+    values = _object(item, "set")
+    bad = sorted(set(values) - set(COLUMN_UPDATE_KEYS))
+    if bad:
+        raise OpError(f"바꿀 수 없는 키: {', '.join(bad)}")
+    if "aliases" in values and values["aliases"] is not None and (
+            not isinstance(values["aliases"], list) or not all(isinstance(a, str) and a for a in values["aliases"])):
+        raise OpError("`aliases`는 비어 있지 않은 문자열의 목록이어야 함")
+    _set_values(_schema_column(doc, _text(item, "table"), _text(item, "column")), values, allow_remove=True)

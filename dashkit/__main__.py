@@ -161,6 +161,7 @@ def cmd_ingest(args) -> int:
     from pathlib import Path
 
     from .ingest import IngestError, Item, ingest
+    from .loader import LOCK_WAIT_MS     # CLI는 load와 같이 10초까지 쓰기 잠금을 기다린다
 
     name = os.environ.get("PROJECT", "")
     path = Path(args.file)
@@ -168,7 +169,8 @@ def cmd_ingest(args) -> int:
         return _fail("ingest 실패", [f"파일이 없음: {args.file}"])
     try:
         result = ingest(name, [Item(args.table, {"kind": "csv", "path": path, "name": path.name})],
-                        dry_run=args.dry_run, force=args.force, skip_invalid=args.skip_invalid)
+                        dry_run=args.dry_run, force=args.force, skip_invalid=args.skip_invalid,
+                        wait_ms=LOCK_WAIT_MS)
     except IngestError as exc:
         extra = [json.dumps(exc.extra, ensure_ascii=False, default=str)] if exc.extra and not exc.errors else []
         return _fail(f"ingest 실패({exc.detail}): {exc.message}", (exc.errors or []) + extra)

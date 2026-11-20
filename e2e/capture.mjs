@@ -44,6 +44,8 @@ const ADMIN_PAGES = [
   { key: "_admin-data", label: "운용: 데이터 목록", path: "/admin/#tables", menu: "tables" },
   { key: "_admin-data-columns", label: "운용: 테이블 구조", path: "/admin/#tables", menu: "tables", detailTab: 0 },
   { key: "_admin-data-batches", label: "운용: 테이블 배치", path: "/admin/#tables", menu: "tables", detailTab: 1 },
+  // 여러 파일 올리기(빈 화면): 그 버튼이 없는 버전(2a 이전)이면 건너뛴다
+  { key: "_admin-data-bulk", label: "운용: 여러 파일 올리기", path: "/admin/#tables", menu: "tables", open: "[data-action=bulk]" },
   { key: "_account", label: "내 정보", path: "/account.html" },
 ];
 
@@ -200,6 +202,12 @@ async function main() {
             if (!hasMenu) { console.log(`- ${pg.key}: 메뉴 없음, 건너뜀`); continue; }
             await page.waitForSelector("#view .a-table tbody tr, #view .a-empty, #view .a-msg", { timeout: 30_000 }).catch(() => {});
             if (pg.detailTab !== undefined) await openDetail(page, pg.detailTab);
+            if (pg.open) {
+              const opener = page.locator(`#view ${pg.open}`);
+              if (!(await opener.count())) { console.log(`- ${pg.key}: 화면 없음, 건너뜀`); continue; }
+              await opener.click();
+              await page.waitForSelector("#view .d-drop", { timeout: 30_000 }).catch(() => {});
+            }
           }
           const warnings = await waitSettled(page);
           const file = `${pg.key}-${vp.name}-${theme}.png`;

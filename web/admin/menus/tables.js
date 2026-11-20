@@ -5,6 +5,7 @@
 import { h } from "../../common.js";
 import { fileDrop, filePicker, iconButton, uid } from "../../shared/dom.js";
 import * as F from "../../shared/fields.js";
+import * as I from "../../shared/ingest.js";
 import { T, view, session, ApiFail, api, apiForm, waitJob, errorText, notice, head, checkbox, pagedTable, detailId } from "../kit.js";
 
 const D = T.data;
@@ -71,11 +72,74 @@ function checkText(problem) {
   return typeof m === "function" ? m(problem.arg) : m || problem.code;
 }
 
-/** 진행 중인 작업 한 줄(GET /jobs/{id}의 progress.step). */
+/** 진행 중인 작업 한 줄(GET /jobs/{id}의 progress: {step, table?, rows?, bytes?, total_bytes?}). */
 function jobText(job) {
   const p = (job && job.progress) || {};
-  const label = D.jobStep[p.step] || D.jobRunning;
-  return p.rows != null ? `${label} · ${D.rowsRead(p.rows)}` : label;
+  const parts = [D.jobStep[p.step] || D.jobRunning];
+  if (p.table) parts.push(p.table);
+  if (p.rows != null) parts.push(D.rowsRead(p.rows));
+  if (p.bytes != null && p.total_bytes) parts.push(D.bytesRead(D.size(p.bytes), D.size(p.total_bytes)));
+  return parts.join(" · ");
+}
+
+/** 작업 진행 표시: 글 한 줄 + (전체 크기를 알면) 진행률 막대 + (파일 작업이면) 화면을 떠나도 계속된다는 안내 */
+function jobBox(job, { keepsRunning = false } = {}) {
+  const ratio = I.progressRatio(job && job.progress);
+  return h("div", { class: "d-progress", role: "status" },
+    h("span", { text: jobText(job) }),
+    ratio === null ? null : h("progress", { max: "1000", value: String(Math.round(ratio * 1000)), "aria-label": D.progressLabel(Math.round(ratio * 100)) }),
+    keepsRunning ? h("small", { class: "a-key", text: D.keepsRunning }) : null);
+}
+
+/** 오류 행을 빼고 넣은 작업의 빠진 행(CSV, 여러 파일이면 zip) 내려받기 링크 */
+const rejectsLink = (jobId) => h("a", { class: "btn small", href: `${BASE}/jobs/${encodeURIComponent(jobId)}/rejects`, download: "" }, D.downloadRejects);
+
+/** 머리글 맞춤을 그 테이블의 aliases로 저장한다(admin. "다음에도 이렇게"). 설정이 그 사이 바뀌었으면(409 stale_config)
+ *  한 번 다시 읽어 저장한다. 돌려주는 것: 결과 글(저장할 것이 없으면 null) */
+async function saveAliases(table, columns) {
+  const aliases = I.aliasesToSave(columns);
+  if (!Object.keys(aliases).length) return null;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const def = await api("GET", tablePath(table));
+      await api("POST", `${tablePath(table)}/aliases`, { aliases, revision: def.revision });
+      return { tone: "good", text: D.aliasesSaved(table, Object.keys(aliases)) };
+    } catch (err) {
+      if (attempt === 0 && err instanceof ApiFail && err.detail === "stale_config") continue;
+      return { tone: "warn", text: `${D.aliasesNotSaved(table)} ${failText(err)}` };
+    }
+  }
+}
+
+/** 422 unknown_columns의 머리글마다 있는 열을 고르거나 버리는 칸들. admin에게는 "다음에도 이렇게"(aliases 저장).
+ *  돌려주는 것: {el, collect() → {머리글: 열|null} 또는 null(덜 고름), remember() → bool} */
+function headerPicker(unknown, columnNames) {
+  const picks = unknown.map((u) => {
+    const id = uid("map");
+    const candidates = (u.candidates || []).map(String);
+    const rest = columnNames.filter((n) => !candidates.includes(n));
+    const sel = h("select", { class: "input", id },
+      h("option", { value: "", text: D.choose }),
+      candidates.length ? h("optgroup", { label: D.candidates }, candidates.map((n) => h("option", { value: `c:${n}`, text: n }))) : null,
+      h("optgroup", { label: D.otherColumns }, rest.map((n) => h("option", { value: `c:${n}`, text: n }))),
+      h("option", { value: "drop", text: D.dropHeader }));
+    if (candidates.length === 1) sel.value = `c:${candidates[0]}`;
+    return { header: String(u.header), sel, el: h("div", { class: "field" }, h("label", { for: id, text: D.headerLabel(String(u.header) || D.blankHeader) }), sel) };
+  });
+  const warn = h("div");
+  const remember = isAdmin() ? checkbox(D.rememberMatch, false, D.rememberMatchHint) : null;
+  return {
+    el: h("div", { class: "d-stack gap" }, h("div", { class: "d-fields" }, picks.map((p) => p.el)), remember ? remember.el : null, warn),
+    collect() {
+      const map = {};
+      for (const p of picks) {
+        if (!p.sel.value) { warn.replaceChildren(box("warn", D.pickEveryHeader)); p.sel.focus(); return null; }
+        map[p.header] = p.sel.value === "drop" ? null : p.sel.value.slice(2);
+      }
+      return map;
+    },
+    remember: () => !!(remember && remember.input.checked),
+  };
 }
 
 /** 탭 묶음(role=tablist). 화살표·Home·End로 옮긴다. onSelect(key)를 부른다. 돌려주는 것: {el, select(key)} */
@@ -114,7 +178,8 @@ function tabStrip(label, items, current, onSelect) {
 
 /* ---------------- 목록 ---------------- */
 
-function listView() {
+function listView(my) {
+  const alive = () => my === gen;
   let cache = null;
   const table = pagedTable({
     defaultSort: "name",
@@ -141,8 +206,257 @@ function listView() {
     ],
   });
   const refresh = btn(D.refresh, () => { cache = null; table.state.page = 1; table.draw(); });
-  view().replaceChildren(head(D.listTitle, D.listIntro(session.manage ? session.manage.project : ""), refresh), table.el);
+  // 여러 파일 올리기(9-1, 9-2): 목록 위에 펼친다. 닫으면 목록을 다시 읽는다(넣었을 수 있다)
+  const note = notice();
+  const bulkBox = h("div", { hidden: true });
+  const bulkBtn = btn(D.bulkUpload, async () => {
+    let items;
+    try {
+      items = cache || (await api("GET", `${BASE}/tables`)).items || [];
+    } catch (err) { if (alive()) note.set(failText(err), "bad"); return; }
+    if (!alive()) return;
+    note.set(null);
+    bulkBtn.hidden = true;
+    bulkBox.replaceChildren(bulkScreen(items, alive, () => {
+      bulkBox.hidden = true;
+      bulkBox.replaceChildren();
+      bulkBtn.hidden = false;
+      cache = null;
+      table.draw();
+      bulkBtn.focus();
+    }));
+    bulkBox.hidden = false;
+    const first = bulkBox.querySelector(".file-pick button");
+    if (first) first.focus();
+  }, "primary");
+  bulkBtn.dataset.action = "bulk";        // e2e 캡처가 문구 대신 이 표시로 찾는다
+  view().replaceChildren(head(D.listTitle, D.listIntro(session.manage ? session.manage.project : ""), bulkBtn, refresh),
+    note.el, bulkBox, table.el);
   table.draw();
+}
+
+/* ---------------- 여러 파일 올리기(한 트랜잭션) ---------------- */
+
+const MAX_FILES = 50;
+
+function bulkScreen(tables, alive, onClose) {
+  const targets = tables.filter((x) => x.mode === "append").map((x) => x.name);
+  let files = [];                    // [{file, name, table}] 놓은 순서
+  const note = notice();
+  const status = h("p", { class: "a-note", role: "status" });
+  const listWrap = h("div");
+  const out = h("div", { class: "d-out" });
+  const flow = makeBulkFlow({ alive, out });
+  const changed = () => { flow.reset(); draw(); };
+
+  function add(list) {
+    const csv = list.filter((f) => /\.csv$/i.test(f.name));
+    const notes = [];
+    if (csv.length < list.length) notes.push(D.csvOnlySkipped(list.length - csv.length));
+    const merged = I.mergeFiles(files.map((x) => x.file), csv);
+    if (merged.replaced.length) notes.push(D.filesReplaced(merged.replaced));
+    const chosen = new Map(files.map((x) => [x.name, x.table]));
+    const pairs = I.pairFiles(merged.files.map((f) => f.name), targets);
+    files = merged.files.map((f, i) => ({ file: f, name: f.name, table: chosen.get(f.name) || pairs[i].table }));
+    note.set(notes.length ? notes.join(" ") : null, "warn");
+    changed();
+  }
+
+  function draw() {
+    clearBtn.hidden = !files.length;
+    if (!files.length) {
+      listWrap.replaceChildren();
+      status.textContent = "";
+      previewBtn.disabled = true;
+      return;
+    }
+    const rows = files.map((f, i) => {
+      const sel = h("select", { class: "input", "aria-label": D.tableFor(f.name) },
+        h("option", { value: "", text: D.choose }), targets.map((n) => h("option", { value: n, text: n })));
+      sel.value = f.table || "";
+      sel.addEventListener("change", () => { files[i].table = sel.value || null; changed(); });
+      return h("tr", {},
+        h("td", { class: "wrap" }, h("span", { class: "d-stack" }, h("span", { class: "mono", text: f.name }), h("small", { class: "a-key", text: D.size(f.file.size) }))),
+        h("td", {}, sel),
+        h("td", {}, f.table ? null : pill(D.noMatchingTable, "warn")),
+        h("td", {}, iconButton("trash", D.removeFile(f.name), { cls: "small", onclick: () => { files.splice(i, 1); changed(); } })));
+    });
+    listWrap.replaceChildren(h("div", { class: "a-table-wrap" }, h("table", { class: "a-table" },
+      h("thead", {}, h("tr", {}, h("th", { scope: "col", text: D.file }), h("th", { scope: "col", text: D.table }),
+        h("th", { scope: "col" }, h("span", { class: "sr-only", text: D.pairState })), h("th", { scope: "col" }, h("span", { class: "sr-only", text: D.actions })))),
+      h("tbody", {}, rows))));
+    const missing = files.filter((f) => !f.table).length;
+    previewBtn.disabled = missing > 0 || files.length > MAX_FILES;
+    status.textContent = files.length > MAX_FILES ? D.tooManyFiles(MAX_FILES) : missing ? D.pairMissing(missing) : D.pairReady(files.length);
+  }
+
+  const previewBtn = btn(D.previewAll, () => flow.preview({ files: files.map((f) => ({ ...f })) }), "primary");
+  const clearBtn = btn(D.clearFiles, () => { files = []; note.set(null); changed(); });
+  const drop = h("div", { class: "d-drop" }, h("p", { text: D.dropManyHere }), filePicker(D.pickFiles, { multiple: true, onFiles: add }),
+    h("small", { class: "a-key", text: D.manyLimits(MAX_FILES, limits().max_request_mb || 500) }));
+  fileDrop(drop, add);
+  draw();
+  return h("section", { class: "a-card d-add", "aria-label": D.bulkTitle },
+    h("div", { class: "a-head d-add-head" }, h("h3", { text: D.bulkTitle }), btn(D.close, onClose)),
+    h("p", { class: "a-note", text: D.bulkIntro }),
+    targets.length ? null : box("warn", D.noAppendTables),
+    note.el, drop, listWrap, status, h("div", { class: "a-actions" }, previewBtn, clearBtn), out);
+}
+
+/** 여러 파일의 미리보기 → 넣기(전체가 한 단위) → 결과·빠진 행 내려받기. src: {files: [{file, name, table}]} */
+function makeBulkFlow({ alive, out }) {
+  const path = `${BASE}/batches`;
+  let state = { src: null, opts: {}, preview: null };
+  let gen = 0;                       // 요청 세대(makeFlow와 같다)
+  const columnNames = new Map();     // 테이블 → 열 이름(머리글 맞추기)
+  const busy = (content) => out.replaceChildren(typeof content === "string" ? h("div", { class: "sk-note", role: "status", text: content }) : content);
+  const settle = (el) => { out.replaceChildren(el); el.tabIndex = -1; el.focus({ preventScroll: false }); };
+  const mapOf = (src) => Object.fromEntries(src.files.map((f) => [f.name, f.table]));
+
+  async function send(src, { dry, columns, force, skip_invalid: skip }, prev, my) {
+    const current = () => alive() && my === gen;
+    const show = (content) => { if (current()) busy(content); };
+    const map = mapOf(src);
+    const hasColumns = columns && Object.keys(columns).length;
+    let r = null;
+    if (!dry && prev && prev.upload_id) {
+      try {
+        r = await api("POST", path, { upload_id: prev.upload_id, map, ...(hasColumns ? { columns } : {}),
+          ...(force ? { force: true } : {}), ...(skip ? { skip_invalid: true } : {}) });
+      } catch (err) {
+        if (!(err instanceof ApiFail && err.detail === "upload_expired")) throw err;
+        r = null;                    // 잡아 둔 파일이 없어졌다 → 같은 파일들을 다시 올려 넣는다
+      }
+    }
+    if (!r) {
+      show(D.uploadingMany(src.files.length));
+      const form = new FormData();
+      for (const f of src.files) form.append("files", f.file, f.name);
+      form.append("map", JSON.stringify(map));
+      if (dry) form.append("dry_run", "1");
+      if (force) form.append("force", "1");
+      if (skip && !dry) form.append("skip_invalid", "1");
+      if (hasColumns) form.append("columns", JSON.stringify(columns));
+      r = await apiForm(path, form);
+    }
+    if (!r || !r.job) return r;
+    show(jobBox(r.job, { keepsRunning: true }));
+    const res = await waitJob(r.job.id, { alive: current, onTick: (job) => show(jobBox(job, { keepsRunning: true })) });
+    return res && { ...res, jobId: r.job.id };
+  }
+
+  async function preview(src, opts = {}) {
+    const my = ++gen;
+    state = { src, opts, preview: null };
+    busy(D.uploadingMany(src.files.length));
+    let r;
+    try {
+      r = await send(src, { dry: true, ...opts }, null, my);
+    } catch (err) {
+      if (alive() && my === gen) failed(err, "preview", my);
+      return;
+    }
+    if (!alive() || !r || my !== gen) return;
+    state.preview = r;
+    const shown = { src, opts, preview: r };
+    const list = r.batches || [];
+    const invalid = list.reduce((n, b) => n + ((b.rows || {}).invalid || 0), 0);
+    const total = list.reduce((n, b) => n + ((b.rows || {}).total || 0), 0);
+    const commitBtn = r.ok ? btn(D.insertAll, () => commit(shown.src, shown.opts, shown.preview), "primary") : null;
+    const skipBtn = !r.ok && invalid > 0 && total > invalid && r.upload_id
+      ? btn(D.insertSkipping(total - invalid), () => commit(shown.src, { ...shown.opts, skip_invalid: true }, shown.preview), "primary") : null;
+    settle(bulkResult(r, src, { preview: true, actions: [commitBtn, skipBtn, btn(D.cancel, () => out.replaceChildren())] }));
+  }
+
+  async function commit(src, opts, prev) {
+    const my = ++gen;
+    state = { src, opts, preview: prev };
+    busy(D.inserting);
+    let r;
+    try {
+      r = await send(src, { dry: false, ...opts }, prev, my);
+    } catch (err) {
+      if (alive() && my === gen) failed(err, "commit", my);
+      return;
+    }
+    if (!alive() || !r || my !== gen) return;
+    const done = bulkResult(r, src, { preview: false, actions: [r.rejects && r.jobId ? rejectsLink(r.jobId) : null] });
+    settle(done);
+    for (const [table, columns] of Object.entries(opts.remember || {})) {
+      const saved = await saveAliases(table, columns);
+      if (saved && alive()) done.append(h("p", { class: "d-more", text: saved.text }));
+    }
+  }
+
+  async function failed(err, step, my = gen) {
+    // 열 정의를 읽는 사이 파일이 바뀌거나 새 요청이 시작되면(my !== gen) 이 오류 화면을 그리지 않는다
+    const current = () => alive() && my === gen;
+    const body = (err instanceof ApiFail && err.body) || {};
+    if (err instanceof ApiFail && err.detail === "unknown_columns" && Array.isArray(body.columns)) {
+      const names = I.filesForError(state.src.files, body);
+      let cols = columnNames.get(body.table);
+      if (!cols && body.table) {
+        try {
+          cols = (await api("GET", tablePath(body.table))).columns.map((c) => c.name);
+          columnNames.set(body.table, cols);
+        } catch (e) { cols = null; }
+      }
+      if (!current()) return;
+      if (cols && names.length) { settle(headerMatchBox(body, names, cols)); return; }
+    }
+    const lines = Array.isArray(body.errors) ? body.errors.map(String) : [];
+    const actions = [];
+    if (err instanceof ApiFail && err.detail === "duplicate_file") {
+      actions.push(btn(D.forceInsert, () => {
+        const opts = { ...state.opts, force: true };
+        if (step === "preview") preview(state.src, opts); else commit(state.src, opts, state.preview);
+      }, "primary"));
+    }
+    const count = typeof body.error_count === "number" && body.error_count > lines.length ? D.moreErrors(body.error_count) : null;
+    if (!current()) return;
+    settle(box("bad", failText(err), {
+      body: err instanceof ApiFail && err.detail === "duplicate_file" ? h("p", { text: D.duplicateBody }) : null,
+      lines, more: count, actions,
+    }));
+  }
+
+  function headerMatchBox(body, names, cols) {
+    const picker = headerPicker(body.columns, cols);
+    const again = btn(D.retryWithMatch, () => {
+      const map = picker.collect();
+      if (!map) return;
+      const columns = { ...(state.opts.columns || {}) };
+      for (const n of names) columns[n] = { ...(columns[n] || {}), ...map };
+      const remember = { ...(state.opts.remember || {}) };
+      if (picker.remember()) remember[body.table] = { ...(remember[body.table] || {}), ...map };
+      preview(state.src, { ...state.opts, columns, remember });
+    }, "primary");
+    return box("warn", D.unknownColumnsTitle, {
+      body: h("div", { class: "d-stack gap" }, h("p", { text: D.unknownColumnsIn(names, body.table || "") }), picker.el),
+      actions: [again, btn(D.cancel, () => out.replaceChildren())],
+    });
+  }
+
+  return { preview, reset: () => { gen += 1; state = { src: null, opts: {}, preview: null }; out.replaceChildren(); } };
+}
+
+/** 여러 파일의 미리보기·결과: 파일마다(파일 순서) 결과를 보인다. */
+function bulkResult(r, src, { preview, actions }) {
+  const ok = r.ok !== false;
+  const list = r.batches || [];
+  const title = preview ? (ok ? D.bulkPreviewOk(list.length) : D.previewBad) : D.bulkDone(list.length);
+  const parts = list.map((b, i) => {
+    const name = (src.files[i] || {}).name || "";
+    const label = preview ? h("strong", { text: D.fileToTable(name, b.table) })
+      : h("strong", {}, D.fileToTable(name, ""), h("a", { class: "a-link", href: `#table/${encodeURIComponent(b.table)}`, text: b.table }),
+        b.file ? h("small", { class: "a-key mono", text: ` ${b.file}` }) : null);
+    return h("section", { class: "d-file-result" }, label, batchBody(b));
+  });
+  const notes = runNotes(r);
+  return box(ok ? (preview ? "primary" : "good") : "bad", title, {
+    body: h("div", { class: "d-stack gap" }, notes.length ? h("ul", { class: "d-lines" }, notes.map((n) => h("li", { text: n }))) : null, parts),
+    actions: (actions || []).filter(Boolean),
+  });
 }
 
 /* ---------------- 상세 ---------------- */
@@ -321,14 +635,14 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
   let state = { src: null, opts: {}, preview: null };
   // 요청 세대 번호. 미리보기·넣기를 새로 시작할 때마다 오르고, 늦게 온 앞 요청의 응답은 버린다
   let gen = 0;
-  const busy = (text) => out.replaceChildren(h("div", { class: "sk-note", role: "status", text }));
+  const busy = (content) => out.replaceChildren(typeof content === "string" ? h("div", { class: "sk-note", role: "status", text: content }) : content);
   const settle = (el) => { out.replaceChildren(el); el.tabIndex = -1; el.focus({ preventScroll: false }); };
 
-  async function send(src, { dry, columns, force }, prev = null, my = gen) {
+  async function send(src, { dry, columns, force, skip_invalid: skip }, prev = null, my = gen) {
     // 이 요청이 아직 마지막 요청일 때만 화면을 바꾸고 작업을 지켜본다(늦게 온 앞 요청의 진행 표시가 결과를 덮지 않게)
     const current = () => alive() && my === gen;
     const show = (text) => { if (current()) busy(text); };
-    const extra = { ...(columns ? { columns } : {}), ...(force ? { force: true } : {}) };
+    const extra = { ...(columns ? { columns } : {}), ...(force ? { force: true } : {}), ...(skip && !dry ? { skip_invalid: true } : {}) };
     if (src.kind === "rows") return api("POST", path, { rows: src.rows, method: src.method, dry_run: dry, ...extra });
     let r = null;
     if (!dry && prev && prev.upload_id) {
@@ -345,12 +659,14 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
       form.append("file", src.file, src.file.name);
       if (dry) form.append("dry_run", "1");
       if (force) form.append("force", "1");
+      if (skip && !dry) form.append("skip_invalid", "1");
       if (columns) form.append("columns", JSON.stringify(columns));
       r = await apiForm(path, form);
     }
     if (!r || !r.job) return r;
-    show(jobText(r.job));
-    return waitJob(r.job.id, { alive: current, onTick: (job) => show(jobText(job)) });
+    show(jobBox(r.job, { keepsRunning: true }));
+    const res = await waitJob(r.job.id, { alive: current, onTick: (job) => show(jobBox(job, { keepsRunning: true })) });
+    return res && { ...res, jobId: r.job.id };     // 빠진 행 내려받기(GET /jobs/{id}/rejects)에 쓴다
   }
 
   async function preview(src, opts = {}) {
@@ -372,7 +688,12 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
     // 넣기 버튼은 이 미리보기에 쓴 입력·옵션·업로드에 묶는다(그 뒤 입력이 바뀌어도 본 것만 넣는다)
     const shown = { src, opts, preview: r };
     const commitBtn = r.ok ? btn(D.insert, () => commit(shown.src, shown.opts, shown.preview), "primary") : null;
-    settle(resultBox(r, { preview: true, actions: [commitBtn, btn(D.cancel, () => { onCells([]); out.replaceChildren(); })] }));
+    // 오류 행 빼고 넣기: 남는 행이 있을 때. 파일은 잡아 둔 업로드로(다시 올리지 않는다), 붙여넣기는 같은 행을 다시 보낸다
+    const rows = b.rows || {};
+    const canSkip = !r.ok && rows.invalid > 0 && rows.total > rows.invalid
+      && (src.kind === "file" ? !!r.upload_id : src.method === "paste");
+    const skipBtn = canSkip ? btn(D.insertSkipping(rows.total - rows.invalid), () => commit(shown.src, { ...shown.opts, skip_invalid: true }, shown.preview), "primary") : null;
+    settle(resultBox(r, { preview: true, actions: [commitBtn, skipBtn, btn(D.cancel, () => { onCells([]); out.replaceChildren(); })] }));
   }
 
   async function commit(src = state.src, opts = state.opts, prev = null) {
@@ -390,8 +711,13 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
     onCells([]);
     const b = (r.batches || [])[0] || {};
     const undo = b.file ? btn(D.undoJust, () => undoBatch(b.file, undo)) : null;
-    settle(resultBox(r, { preview: false, actions: [undo] }));
+    const done = resultBox(r, { preview: false, actions: [undo, r.rejects && r.jobId ? rejectsLink(r.jobId) : null] });
+    settle(done);
     onDone(r);
+    if (opts.remember) {
+      const saved = await saveAliases(t.name, opts.remember);
+      if (saved && alive()) done.append(h("p", { class: "d-more", text: saved.text }));
+    }
     return r;
   }
 
@@ -402,7 +728,7 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
     try {
       let r = await api("DELETE", batchPath(t.name, file), {});
       if (r && r.job) {
-        r = await waitJob(r.job.id, { alive, onTick: (job) => busy(jobText(job)) });
+        r = await waitJob(r.job.id, { alive, onTick: (job) => busy(jobBox(job)) });
         if (r === null) return;
       }
       if (!alive()) return;
@@ -435,31 +761,19 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
     }));
   }
 
-  /** 422 unknown_columns: 맞지 않은 머리글마다 있는 열을 고르거나 버린다 → columns로 다시 미리보기 */
+  /** 422 unknown_columns: 맞지 않은 머리글마다 있는 열을 고르거나 버린다 → columns로 다시 미리보기.
+   *  admin이 "다음에도 이렇게"를 고르면 넣기에 성공한 뒤 그 맞춤을 aliases로 저장한다(opts.remember) */
   function headerMatchBox(unknown) {
-    const picks = unknown.map((u) => {
-      const id = uid("map");
-      const candidates = (u.candidates || []).map(String);
-      const rest = t.columns.map((c) => c.name).filter((n) => !candidates.includes(n));
-      const sel = h("select", { class: "input", id },
-        h("option", { value: "", text: D.choose }),
-        candidates.length ? h("optgroup", { label: D.candidates }, candidates.map((n) => h("option", { value: `c:${n}`, text: n }))) : null,
-        h("optgroup", { label: D.otherColumns }, rest.map((n) => h("option", { value: `c:${n}`, text: n }))),
-        h("option", { value: "drop", text: D.dropHeader }));
-      if (candidates.length === 1) sel.value = `c:${candidates[0]}`;
-      return { header: String(u.header), sel, el: h("div", { class: "field" }, h("label", { for: id, text: D.headerLabel(String(u.header) || D.blankHeader) }), sel) };
-    });
-    const warn = h("div");
+    const picker = headerPicker(unknown, t.columns.map((c) => c.name));
     const again = btn(D.retryWithMatch, () => {
-      const map = { ...(state.opts.columns || {}) };
-      for (const p of picks) {
-        if (!p.sel.value) { warn.replaceChildren(box("warn", D.pickEveryHeader)); p.sel.focus(); return; }
-        map[p.header] = p.sel.value === "drop" ? null : p.sel.value.slice(2);
-      }
-      preview(state.src, { ...state.opts, columns: map });
+      const map = picker.collect();
+      if (!map) return;
+      const columns = { ...(state.opts.columns || {}), ...map };
+      const remember = picker.remember() ? { ...(state.opts.remember || {}), ...map } : state.opts.remember;
+      preview(state.src, { ...state.opts, columns, remember });
     }, "primary");
     return box("warn", D.unknownColumnsTitle, {
-      body: h("div", { class: "d-stack gap" }, h("p", { text: D.unknownColumnsBody }), h("div", { class: "d-fields" }, picks.map((p) => p.el)), warn),
+      body: h("div", { class: "d-stack gap" }, h("p", { text: D.unknownColumnsBody }), picker.el),
       actions: [again, btn(D.cancel, () => out.replaceChildren())],
     });
   }
@@ -468,28 +782,42 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
   return { preview, commit, reset: () => { gen += 1; state = { src: null, opts: {}, preview: null }; onCells([]); out.replaceChildren(); } };
 }
 
-/** 미리보기·결과 상자(contracts/ingest.md "결과"). */
+/** 미리보기·결과 상자(contracts/ingest.md "결과"). 한 테이블에 한 배치. */
 function resultBox(r, { preview, actions }) {
   const b = (r.batches || [])[0] || {};
-  const rows = b.rows || {};
   const ok = r.ok !== false;
   const title = preview ? (ok ? D.previewOk : D.previewBad) : D.doneTitle(b.file || "");
-  const counts = h("dl", { class: "a-infos d-counts" },
-    ["total", "inserted", "updated", "skipped", "unchanged", "invalid"].filter((k) => rows[k] != null && (k === "total" || rows[k] > 0 || k === "inserted"))
-      .map((k) => infoRow(D.count[k], h("span", { class: "num", text: D.num(rows[k]) }))));
-  const notes = [...D.normalizedLines(b.normalized || {}), ...D.columnLines(b.columns || {})];
-  for (const f of r.applied_first || []) notes.push(D.appliedFirst(f.file, f.rows));
-  if (r.recovered && r.recovered.length) notes.push(D.recovered(r.recovered.length));
-  const changes = (b.changes || []).slice(0, 20);
-  const errs = (b.errors || []).map(String);
   return box(ok ? (preview ? "primary" : "good") : "bad", title, {
-    body: h("div", { class: "d-stack gap" },
-      counts,
-      notes.length ? h("ul", { class: "d-lines" }, notes.map((n) => h("li", { text: n }))) : null,
-      changes.length ? changesTable(changes) : null,
-      errs.length ? h("div", {}, h("strong", { text: D.errorsTitle(b.error_count || errs.length) }), h("ul", { class: "d-lines mono" }, errs.slice(0, 50).map((e) => h("li", { text: e })))) : null),
+    body: batchBody(b, runNotes(r)),
     actions: (actions || []).filter(Boolean),
   });
+}
+
+/** 요청 전체에 붙는 안내(먼저 반영한 손 파일, 끊긴 작업 복구) */
+function runNotes(r) {
+  const notes = (r.applied_first || []).map((f) => D.appliedFirst(f.file, f.rows));
+  if (r.recovered && r.recovered.length) notes.push(D.recovered(r.recovered.length));
+  return notes;
+}
+
+/** 배치 하나의 결과: 행 수, 맞춰 준 것, 바뀌는 값, 오류 */
+function batchBody(b, extraNotes = []) {
+  const rows = b.rows || {};
+  const counted = { ...rows, rejected: b.rejected || 0 };
+  const counts = h("dl", { class: "a-infos d-counts" },
+    ["total", "inserted", "updated", "skipped", "unchanged", "invalid", "rejected"]
+      .filter((k) => counted[k] != null && (k === "total" || counted[k] > 0 || (k === "inserted" && rows.inserted != null)))
+      .filter((k) => !(k === "invalid" && b.rejected))       // 빼고 넣었으면 "빠진 행"으로 한 번만 보인다
+      .map((k) => infoRow(D.count[k], h("span", { class: "num", text: D.num(counted[k]) }))));
+  const notes = [...D.normalizedLines(b.normalized || {}), ...D.columnLines(b.columns || {}), ...extraNotes];
+  const changes = (b.changes || []).slice(0, 20);
+  const errs = (b.errors || []).map(String);
+  return h("div", { class: "d-stack gap" },
+    counts,
+    notes.length ? h("ul", { class: "d-lines" }, notes.map((n) => h("li", { text: n }))) : null,
+    changes.length ? changesTable(changes) : null,
+    errs.length ? h("div", {}, h("strong", { text: b.rejected ? D.rejectedTitle(b.error_count || errs.length) : D.errorsTitle(b.error_count || errs.length) }),
+      h("ul", { class: "d-lines mono" }, errs.slice(0, 50).map((e) => h("li", { text: e })))) : null);
 }
 
 function changesTable(changes) {
@@ -800,7 +1128,10 @@ function filePanel(t, { alive }) {
   const drop = h("div", { class: "d-drop" }, h("p", { text: D.dropHere }), filePicker(D.pickFile, { onFiles }),
     h("small", { class: "a-key", text: D.fileLimits(limits().max_upload_mb || 200, limits().max_rows || 2000000) }));
   fileDrop(drop, onFiles);
-  return h("div", { class: "d-stack gap" }, h("p", { class: "a-note", text: D.fileIntro }), note.el, drop, chosen, out);
+  // 빈 양식: 머리글(열 이름)과 예시 한 줄의 CSV(UTF-8 BOM, 엑셀에서 열린다)
+  const template = h("a", { class: "btn small", href: `${tablePath(t.name)}/template`, download: "" }, D.downloadTemplate);
+  return h("div", { class: "d-stack gap" }, h("div", { class: "d-row" }, h("p", { class: "a-note", text: D.fileIntro }), template),
+    note.el, drop, chosen, out);
 }
 
 /* ---------------- 메뉴 ---------------- */
@@ -814,6 +1145,6 @@ export default {
     gen += 1;
     const name = detailId(hash, "table");
     if (name !== null) detailView(name, gen);
-    else listView();
+    else listView(gen);
   },
 };

@@ -191,3 +191,63 @@ def test_uploads_are_guarded_and_audited(who):
     actions = {i["action"] for i in body["items"]}
     assert {"data.batch.create", "data.batch.remove", "data.batch.restore", "data.batch.failed"} <= actions
     assert not any("1,234" in json.dumps(i["detail"], ensure_ascii=False) for i in body["items"]), "데이터 값을 싣지 않는다"
+
+
+# ---------------------------------------------------------------- 2b: 여러 파일, 오류 행 빼고 넣기, 빈 양식, 머리글 맞춤 저장
+
+def test_many_files_are_one_transaction(who):
+    before = view_count()
+    files = [("자식.csv", b"id,entry_id\n700,E700\n"), ("부모.csv", b"id\nE700\n")]
+    boundary = "----dk" + secrets.token_hex(8)
+
+    def body(fields):
+        out = b""
+        for k, v in fields.items():
+            out += f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
+        for n, c in files:
+            out += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{n}\"\r\n\r\n"
+                    ).encode() + c + b"\r\n"
+        return out + f"--{boundary}--\r\n".encode()
+    ctype = f"multipart/form-data; boundary={boundary}"
+    code, b, _h = call("POST", "/batches", who["operator1"], raw=body({"dry_run": "1"}), ctype=ctype)
+    assert code == 422 and b["detail"] == "unknown_table" and len(b["errors"]) == 2      # 이름으로는 짝지을 수 없다
+    mapping = json.dumps({"자식.csv": "events", "부모.csv": "entries"}, ensure_ascii=False)
+    code, b, _h = call("POST", "/batches", who["operator1"], raw=body({"dry_run": "1", "map": mapping}), ctype=ctype)
+    assert code == 202, b
+    job = wait_job(b["job"], who["operator1"])
+    assert job["status"] == "succeeded" and [x["table"] for x in job["result"]["batches"]] == ["events", "entries"], job
+    code, b, _h = call("POST", "/batches", who["operator1"], {"upload_id": job["result"]["upload_id"]})
+    job = wait_job(b["job"], who["operator1"])
+    assert job["status"] == "succeeded", job
+    assert [b["rows"]["inserted"] for b in job["result"]["batches"]] == [1, 1]
+    assert view_count() == before + 1
+
+
+def test_skip_invalid_with_rejects_download(who):
+    ctype, raw = multipart({"skip_invalid": "1"}, ("섞임.csv", b"id,entry_id\n710,E1\n711,E-none\n712,E2\n"))
+    code, b, _h = call("POST", "/tables/events/batches", who["operator1"], raw=raw, ctype=ctype)
+    job = wait_job(b["job"], who["operator1"])
+    assert job["status"] == "succeeded" and job["result"]["rejects"], job
+    rows = job["result"]["batches"][0]["rows"]
+    assert rows["inserted"] == 2 and rows["invalid"] == 1
+    assert job["progress"].get("step") in ("read", "lock")
+    code, body, headers = call("GET", f"/jobs/{job['id']}/rejects", who["operator1"])
+    assert code == 200 and headers.get("Content-Type", "").startswith("text/csv")
+    text = body if isinstance(body, str) else json.dumps(body)
+    assert "711,E-none" in text and "오류" in text
+
+
+def test_template_and_alias_saving(who):
+    code, body, headers = call("GET", "/tables/entries/template", who["operator1"])
+    assert code == 200 and isinstance(body, str) and body.lstrip("﻿").startswith("id,group_id,state")
+    code, t, _h = call("GET", "/tables/entries", who["operator1"])
+    revision = t["revision"]
+    code, b, _h = call("POST", "/tables/entries/aliases", who["operator1"], {"aliases": {"분류": "state"}, "revision": revision})
+    assert code == 403, "aliases 저장은 admin만"
+    code, b, _h = call("POST", "/tables/entries/aliases", who["admin1"], {"aliases": {"분류": "state"}, "revision": "stale"})
+    assert code == 409 and b["detail"] == "stale_config"
+    code, b, _h = call("POST", "/tables/entries/aliases", who["admin1"], {"aliases": {"분류": "state"}, "revision": revision})
+    assert code == 200 and b["changed"] == ["schema.yaml"], b
+    # 저장한 머리글이 다음 파일에서 저절로 맞고, aliases는 DB와 상관없어 적용하지 않아도 더할 수 있다
+    code, b, _h = call("POST", "/tables/entries/batches", who["operator1"], {"rows": [{"id": "E720", "분류": "done"}], "dry_run": True})
+    assert code == 200 and b["batches"][0]["columns"]["matched"] == {"분류": "state"}, b

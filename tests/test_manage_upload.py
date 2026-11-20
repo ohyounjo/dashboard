@@ -59,3 +59,13 @@ def test_too_many_files(tmp_path):
     with pytest.raises(upload.UploadError) as exc:
         run(ctype, raw, tmp_path, max_files=2)
     assert exc.value.detail == "too_many_files" and not list(tmp_path.iterdir())
+
+
+def test_merged_rejects_leave_only_the_zip(tmp_path):
+    """여러 파일의 빠진 행은 zip 하나로 묶고 낱개 파일을 지운다(리뷰 지적 회귀. 작업을 잊을 때 폴더째 지운다)."""
+    from dashkit.manage.routes.tables import _merge_rejects
+
+    (tmp_path / "000.csv").write_text("a\n", encoding="utf-8")
+    (tmp_path / "001.csv").write_text("b\n", encoding="utf-8")
+    out = _merge_rejects(tmp_path, [{"rejected": 1}, {"rejected": 1}], [{"name": "x.csv"}, {"name": "y.csv"}])
+    assert out.name == "rejects.zip" and [p.name for p in tmp_path.iterdir()] == ["rejects.zip"]

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import itertools
+from array import array
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
@@ -57,6 +58,9 @@ class StagedBatch:
     columns: dict[str, Any] = field(default_factory=dict)
     sha256: str | None = None                  # 정규형 내용의 해시(정규형 파일을 썼거나 입력이 정규형일 때)
     fatal: bool = False
+    written: Any = None                        # 오류 행을 빼고 넣을 때: 정규형 파일에 쓴 행의 위치(array)
+    rejects: Any = None                        # 오류 행을 빼고 넣을 때: 빠진 행 파일(RejectWriter)
+    dropped: list[int] = field(default_factory=list)   # 잠금 안에서 뺀 행(참조·새 행 필수 열)의 위치
     skip_invalid: bool = False                 # 오류 행을 빼고 넣는다(빠진 행의 오류는 errors에 알리기만 한다)
     duplicates: int = 0                        # 배치 안의 기본 키 중복(언제나 전체 거절)
 
@@ -77,11 +81,43 @@ def default_value(spec: Mapping[str, Any]) -> Any:
     return _parse(text, spec)
 
 
+class RejectWriter:
+    """빠진 행 파일(설계서 5-4 "오류 행 빼고 넣기"): 빠진 행의 값(정규형 머리글 순서) + `오류` 열. 엑셀에서 열리도록
+    UTF-8 BOM을 붙인다. 고쳐서 그 파일만 다시 올리면 된다."""
+
+    ERROR_COLUMN = "오류"
+
+    def __init__(self, path: Any):
+        import csv as _csv
+
+        self.path = path
+        self._file = open(path, "w", encoding="utf-8-sig", newline="")
+        self._writer = _csv.writer(self._file, lineterminator="\r\n")
+        self.header: list[str] | None = None
+        self.rows = 0
+
+    def start(self, header: list[str]) -> None:
+        if self.header is None:
+            self.header = list(header)
+            self._writer.writerow([*header, self.ERROR_COLUMN])
+
+    def row(self, values: list[str], reasons: list[str]) -> None:
+        width = len(self.header or [])
+        cells = list(values) + [""] * (width - len(values))
+        self._writer.writerow([*cells[:width], "; ".join(reasons)])
+        self.rows += 1
+
+    def close(self) -> None:
+        self._file.close()
+
+
 def stage_batch(cur: psycopg.Cursor, intake: Intake, *, writer: CanonicalWriter | None = None,
-                skip_invalid: bool = False) -> StagedBatch:
+                skip_invalid: bool = False, rejects: "RejectWriter | None" = None,
+                progress: Callable[[int, int, int | None], None] | None = None) -> StagedBatch:
     """intake의 행을 검증하며 임시 테이블에 넣는다. 오류는 StagedBatch.errors에 모은다(예외를 던지지 않는다).
 
-    writer가 있으면 넣는 행만 정규형 파일에 쓴다(skip_invalid면 오류 행을 빼고 쓴다).
+    writer가 있으면 넣는 행만 정규형 파일에 쓴다(skip_invalid면 오류 행을 빼고 쓴다). skip_invalid이고 rejects가
+    있으면 빠진 행을 그 파일에 쓴다. progress(읽은 행, 읽은 바이트, 전체 바이트)는 1만 행마다 부른다.
     """
     table = intake.table
     name = f"_dk_stage_{next(_seq)}"
@@ -94,24 +130,37 @@ def stage_batch(cur: psycopg.Cursor, intake: Intake, *, writer: CanonicalWriter 
         writer.header(intake.header)
     rows = 0
     report = intake.report
+    written = array("q")           # 정규형 파일에 쓴 행의 위치(오류 행을 뺄 때 파일을 다시 쓰려고)
+    if rejects is not None and skip_invalid:
+        rejects.start(intake.header)
     stmt = sql.SQL("COPY {} ({}) FROM STDIN").format(
         temp, sql.SQL(", ").join([sql.Identifier("_at")] + [sql.Identifier(c) for c in intake.header]))
     with cur.copy(stmt) as copy:
         for at, values, typed in intake.rows():
+            if progress is not None and report.total % 10000 == 0:
+                done, total = intake.parser.progress()
+                progress(report.total, done, total)
             if typed is None:
                 if skip_invalid:
                     report.rejected.append(at)
+                    if rejects is not None:
+                        rejects.row(values, [f"{intake.parser.where(at, '-').rsplit(':', 1)[0]}: {p}"
+                                             for p in intake.last_problems])
                 continue
             if report.invalid and not skip_invalid:
                 continue          # 오류가 하나라도 있으면 더 넣지 않고 나머지 오류만 모은다
             copy.write_row([at, *typed])
             if writer is not None:
                 writer.row(values)
+                if skip_invalid:
+                    written.append(at)
             rows += 1
     staged = StagedBatch(intake.table_name, list(intake.header), name, rows, intake.parser.where,
                          total=report.total, invalid=report.invalid, errors=list(report.errors),
                          error_count=report.error_count, normalized=dict(report.normalized),
                          columns=dict(report.columns), fatal=report.fatal, skip_invalid=skip_invalid)
+    staged.written = written
+    staged.rejects = rejects if skip_invalid else None
     if staged.invalid and not skip_invalid:
         return staged
     _check_duplicates(cur, staged, intake)
@@ -200,13 +249,14 @@ def apply_batch(cur: psycopg.Cursor, project_schema: Mapping[str, Any], staged: 
     policy = policies.POLICIES[table.get("on_conflict") or policies.DEFAULT_POLICY]
     policy(ctx)
     _insert_new(cur, table, staged, target, temp, join, counts)
+    counts["total"] = staged.rows        # 새 행의 필수 열 오류로 뺀 행이 있으면 줄어든다(배치 파일의 행 수와 같게)
     return {**counts, "changes": ctx.changes}
 
 
 def _check_refs(cur: psycopg.Cursor, project_schema: Mapping[str, Any], staged: StagedBatch) -> None:
     """참조 열의 값이 대상 테이블(DB)에 있는지. 없으면 줄 단위로 알린다."""
     table = project_schema["tables"][staged.table]
-    errors: list[str] = []
+    errors: list[tuple[int, str, str]] = []
     for c in staged.header:
         ref = table["columns"][c].get("ref")
         if not ref:
@@ -216,11 +266,42 @@ def _check_refs(cur: psycopg.Cursor, project_schema: Mapping[str, Any], staged: 
             "SELECT b._at, b.{c} FROM {temp} b WHERE b.{c} IS NOT NULL AND NOT EXISTS "
             "(SELECT 1 FROM {target} r WHERE r.{rc} = b.{c}) ORDER BY b._at LIMIT %s").format(
             c=sql.Identifier(c), temp=sql.Identifier(staged.temp), target=_target(rt), rc=sql.Identifier(rc)),
-            (MAX_REPORTED,))
-        for at, v in cur.fetchall():
-            errors.append(f"{staged.where(at, c)}: 참조 대상 {rt}.{rc}에 값 '{v}'가 없음")
+            (None if staged.skip_invalid else MAX_REPORTED,))
+        found_limited = cur.fetchall()
+        for at, v in found_limited:
+            errors.append((at, c, f"참조 대상 {rt}.{rc}에 값 '{v}'가 없음"))
+    if errors and staged.skip_invalid:
+        _drop_rows(cur, staged, errors)
+        return
     if errors:
-        raise BatchError("invalid_rows", "참조 대상에 없는 값이 있습니다", errors[:MAX_REPORTED])
+        raise BatchError("invalid_rows", "참조 대상에 없는 값이 있습니다",
+                         [f"{staged.where(at, c)}: {reason}" for at, c, reason in errors[:MAX_REPORTED]])
+
+
+def _drop_rows(cur: psycopg.Cursor, staged: StagedBatch, found: list[tuple[int, str, str]]) -> None:
+    """오류 행을 빼고 넣을 때(skip_invalid): DB를 보고 정해진 오류(참조, 새 행의 필수 열)가 난 행을 임시 테이블에서 뺀다.
+    빠진 행 파일에 쓰고 staged.dropped에 위치를 적는다(부른 쪽이 정규형 파일을 다시 쓴다)."""
+    from ..loader.record import canonical
+
+    by_at: dict[int, list[str]] = {}
+    for at, col, reason in found:
+        by_at.setdefault(at, []).append(f"{col}: {reason}")
+        staged.error_count += 1
+        if len(staged.errors) < MAX_REPORTED:
+            staged.errors.append(f"{staged.where(at, col)}: {reason}")
+    ats = sorted(by_at)
+    temp = sql.Identifier(staged.temp)
+    if staged.rejects is not None:
+        cols = sql.SQL(", ").join(sql.Identifier(c) for c in staged.header)
+        cur.execute(sql.SQL("SELECT _at, {} FROM {} WHERE _at = ANY(%s) ORDER BY _at").format(cols, temp), (ats,))
+        for row in cur.fetchall():
+            values = ["" if v is None else str(canonical(v)) for v in row[1:]]
+            where = staged.where(row[0], "-").rsplit(":", 1)[0]
+            staged.rejects.row(values, [f"{where}: {r}" for r in by_at[row[0]]])
+    cur.execute(sql.SQL("DELETE FROM {} WHERE _at = ANY(%s)").format(temp), (ats,))
+    staged.dropped += ats
+    staged.invalid += len(ats)
+    staged.rows -= len(ats)
 
 
 def _insert_new(cur: psycopg.Cursor, table: Mapping[str, Any], staged: StagedBatch, target: sql.Composable,
@@ -232,13 +313,16 @@ def _insert_new(cur: psycopg.Cursor, table: Mapping[str, Any], staged: StagedBat
     new_only = sql.SQL("NOT EXISTS (SELECT 1 FROM {} t WHERE {})").format(target, join)
     if missing_required:
         cur.execute(sql.SQL("SELECT b._at FROM {} b WHERE {} ORDER BY b._at LIMIT %s").format(temp, new_only),
-                    (MAX_KEYS_SHOWN,))
+                    (None if staged.skip_invalid else MAX_KEYS_SHOWN,))
         ats = [r[0] for r in cur.fetchall()]
         if ats:
             col = missing_required[0]
-            raise BatchError("invalid_rows", "새 행에 필요한 열이 배치에 없습니다",
-                             [f"{staged.where(at, col)}: 값이 필요함(새 행. 열 '{col}'이 머리글에 없고 default도 없음)"
-                              for at in ats])
+            reason = f"값이 필요함(새 행. 열 '{col}'이 머리글에 없고 default도 없음)"
+            if staged.skip_invalid:
+                _drop_rows(cur, staged, [(at, col, reason) for at in ats])
+            else:
+                raise BatchError("invalid_rows", "새 행에 필요한 열이 배치에 없습니다",
+                                 [f"{staged.where(at, col)}: {reason}" for at in ats])
     select: list[sql.Composable] = []
     params: list[Any] = []
     for c in columns:
