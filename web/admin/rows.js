@@ -83,23 +83,34 @@ export function rowsView({ path, columns: known = null, labels = {}, alive = () 
   /* ---------- 읽기 ---------- */
 
   function restart() {
-    pager = Q.pagerStart();
     count = false;
-    load();
+    load({ at: Q.pagerStart() });
   }
 
-  async function load({ quiet = false } = {}) {
+  // 페이지 이동은 응답이 온 뒤에만 확정한다(at). 읽는 동안에는 이동 버튼을 막는다(두 번 눌러 같은 커서가 쌓이지 않게)
+  let busy = false;
+  function setBusy(on) {
+    busy = on;
+    pagerBox.querySelectorAll("button").forEach((b) => {
+      if (on) { b.dataset.was = b.disabled ? "1" : ""; b.disabled = true; }
+      else if ("was" in b.dataset) { b.disabled = b.dataset.was === "1"; delete b.dataset.was; }
+    });
+  }
+
+  async function load({ quiet = false, at = pager } = {}) {
     const my = ++gen;
     const current = () => alive() && my === gen;
+    setBusy(true);
     const built = Q.buildFilters(entries.map((e) => ({ column: e.column, op: e.op, value: e.input.get() })), cols || []);
     sentRows = built.rows;
     entries.forEach((e) => { e.err.textContent = ""; });
     notice.replaceChildren(h("div", { class: "sk-note", role: "status", text: T.loading }));
     let res;
     try {
-      res = await api("POST", path, Q.buildQuery({ filters: built.filters, sort, cursor: Q.pagerCursor(pager), limit: SIZE, count }));
+      res = await api("POST", path, Q.buildQuery({ filters: built.filters, sort, cursor: Q.pagerCursor(at), limit: SIZE, count }));
     } catch (err) {
       if (!current()) return;
+      setBusy(false);
       const at = err instanceof ApiFail && err.detail === "invalid_filter" ? Q.filterErrorIndex(err.body && err.body.message) : null;
       const entry = at !== null ? entries[sentRows[at]] : null;
       if (entry) {
@@ -112,6 +123,8 @@ export function rowsView({ path, columns: known = null, labels = {}, alive = () 
       return;
     }
     if (!current()) return;
+    pager = at;
+    busy = false;
     if (!cols) { cols = res.columns || []; addBtn.disabled = !cols.length; }
     draw(res, { quiet });
   }
@@ -157,8 +170,8 @@ export function rowsView({ path, columns: known = null, labels = {}, alive = () 
     pagerBox.replaceChildren(...[
       h("span", { text: info }),
       res.total == null && !count ? h("button", { type: "button", class: "btn small", onclick: () => { count = true; load(); } }, D.countRows) : null,
-      h("button", { type: "button", class: "btn small", disabled: Q.pagerIndex(pager) === 0, onclick: () => { pager = Q.pagerPrev(pager); load(); } }, T.prev),
-      h("button", { type: "button", class: "btn small", disabled: !next, onclick: () => { pager = Q.pagerNext(pager, next); load(); } }, T.next),
+      h("button", { type: "button", class: "btn small", disabled: Q.pagerIndex(pager) === 0, onclick: () => { if (!busy) load({ at: Q.pagerPrev(pager) }); } }, T.prev),
+      h("button", { type: "button", class: "btn small", disabled: !next, onclick: () => { if (!busy) load({ at: Q.pagerNext(pager, next) }); } }, T.next),
     ].filter(Boolean));
   }
 

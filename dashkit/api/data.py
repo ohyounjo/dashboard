@@ -128,7 +128,7 @@ def fetch_page(dataset: str, project: Any, limit: int, cursor: str | None) -> di
         version = paging.data_version(row[0] if row else None, batches)
         page = paging.fetch_page(cur, sql.SQL("{}.{}").format(sql.Identifier("dash"), sql.Identifier(dataset)),
                                  columns, q, key_columns=key_columns, version=version, total_rows=None,
-                                 to_json=_value)
+                                 to_json=_value, cut_cells=False)     # 대시보드 데이터는 값을 자르지 않는다(전체 조회와 같게)
     out = page.public()
     return {"columns": out["columns"], "rows": out["rows"], "next_cursor": out["next_cursor"],
             "changed": out["changed"], "truncated": False}

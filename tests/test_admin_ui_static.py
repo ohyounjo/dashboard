@@ -190,6 +190,9 @@ def test_rows_query_screens():
     rows = _without_comments(_read(ADMIN / "rows.js"))
     for needle in ("next_cursor", "res.changed", "truncated_cells", "res.total", "count = true", '"invalid_filter"'):
         assert needle in rows, f"rows.js에 {needle}가 없음"
+    # 페이지 이동은 응답이 온 뒤에만 확정하고(pager = at), 읽는 동안 이동 버튼은 받지 않는다(같은 커서가 두 번 쌓이지 않게)
+    assert "pager = at;" in rows and rows.count("if (!busy) load({ at:") == 2
+    assert "pager = Q.pagerNext" not in rows and "pager = Q.pagerPrev" not in rows
     tables = _without_comments(_read(ADMIN / "menus" / "tables.js"))
     assert "/rows/query`" in tables and "{ key }" in tables, "고치기 폼은 한 행을 key로 따로 읽는다"
     assert 't.on_conflict === "update"' in tables, "이 행 고치기는 update 테이블에만"
