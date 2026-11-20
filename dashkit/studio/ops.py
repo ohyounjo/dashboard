@@ -544,23 +544,38 @@ def _reconcile_layout(old: MutableSequence, new: list) -> None:
             pair[n] = o
             taken.add(o)
 
-    # 옛 항목(객체) 가운데 다시 쓸 수 있는 것: 무엇인지 → 객체. 차트는 대시보드에 한 번만 놓인다
-    pool: dict[tuple[str, Any], Any] = {}
-    for row in old_rows:
+    # 옛 항목(객체) 가운데 다시 쓸 수 있는 것: 무엇인지 → 객체들. 내용이 같은 제목·글이 여러 행에 있을 수 있으므로
+    # 객체를 하나로 합치지 않고, 그대로 두는 행(exact)의 객체는 후보에서 뺀다(다른 행이 가져가 고치면 안 된다).
+    kept_rows = {pair[n] for n in exact}
+    pool: dict[tuple[str, Any], list[Any]] = {}
+    for o, row in enumerate(old_rows):
+        if o in kept_rows:
+            continue
         for placed in row:
             if isinstance(placed, dict):
-                pool.setdefault(_ident(placed), placed)
+                pool.setdefault(_ident(placed), []).append(placed)
     wanted = {ident for idents in new_idents for ident in idents}
 
-    def item_for(placed: Any, old_row_idents: list[tuple[str, Any]]) -> Any:
+    def take(ident: tuple[str, Any], own: list[Any]) -> Any:
+        """ident인 옛 객체 하나를 후보에서 꺼낸다. 짝지은 옛 행(own)에 있던 객체를 먼저 쓴다. 객체는 한 번만 쓰인다."""
+        candidates = pool.get(ident) or []
+        found = next((c for c in candidates if any(c is x for x in own)), None)
+        if found is None and candidates:
+            found = candidates[0]
+        if found is not None:
+            pool[ident] = [c for c in candidates if c is not found]
+        return found
+
+    def item_for(placed: Any, own: list[Any]) -> Any:
         if not isinstance(placed, dict):
             return copy.deepcopy(placed)
         ident = _ident(placed)
-        found = pool.pop(ident, None)
+        found = take(ident, own)
         if found is None and ident[0] in ("header", "markdown"):
             # 글자를 고친 제목·글: 같은 행에 있던 같은 종류의 항목(새 layout에는 없는 것)을 고쳐 쓴다
-            stale = next((i for i in old_row_idents if i[0] == ident[0] and i not in wanted and i in pool), None)
-            found = pool.pop(stale, None) if stale is not None else None
+            stale = next((_ident(x) for x in own if isinstance(x, dict) and _ident(x)[0] == ident[0]
+                          and _ident(x) not in wanted and any(x is c for c in pool.get(_ident(x)) or [])), None)
+            found = take(stale, own) if stale is not None else None
         if found is None:
             return copy.deepcopy(placed)
         _sync_map(found, placed)
@@ -574,7 +589,7 @@ def _reconcile_layout(old: MutableSequence, new: list) -> None:
             return copy.deepcopy(row)
         kept = old_rows[pair[n]]
         if n not in exact:
-            _set_items(kept, [item_for(placed, old_idents[pair[n]]) for placed in row])
+            _set_items(kept, [item_for(placed, list(kept)) for placed in row])
         return kept
 
     def tab_for(tab: Mapping[str, Any], kept: Any) -> Any:

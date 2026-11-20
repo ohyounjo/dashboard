@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import copy
 import difflib
 import random
 
@@ -817,3 +818,50 @@ def test_only_roundtrip_module_imports_ruamel():
                 if line.strip().startswith(("import ruamel", "from ruamel")):
                     hits.append(str(path.relative_to(ROOT)))
     assert set(hits) == {"dashkit/studio/roundtrip.py"}
+
+
+def test_layout_set_keeps_identical_blocks_in_other_rows_apart():
+    """같은 내용의 글 블록이 여러 행에 있을 때 한 곳만 고치면 그곳만 바뀐다(리뷰 지적 회귀).
+
+    예전에는 같은 내용의 항목을 한 객체로 묶어, 다른 행의 객체를 가져와 고치는 바람에 두 행이 함께 바뀌었다.
+    """
+    doc = {"dashboards": {"d": {"title": "t", "charts": [], "layout": [
+        [{"markdown": "same", "width": 6}],
+        [{"markdown": "same", "width": 12}],
+    ]}}}
+    wanted = [[{"markdown": "same", "width": 6}], [{"markdown": "same", "width": 10}]]
+    ops.apply_ops(doc, [{"op": "layout.set", "dashboard": "d", "layout": wanted}])
+    layout = doc["dashboards"]["d"]["layout"]
+    assert layout == wanted
+    assert layout[0][0] is not layout[1][0], "두 행의 항목이 같은 객체를 가리키면 안 됨"
+
+    # 세 곳에 같은 블록이 있고 가운데만 고칠 때, 행을 서로 바꾸면서 하나만 고칠 때도 요청한 값 그대로다
+    doc["dashboards"]["d"]["layout"] = [[{"markdown": "same", "width": 4}], [{"markdown": "same", "width": 4}],
+                                        [{"markdown": "same", "width": 4}]]
+    for wanted in (
+        [[{"markdown": "same", "width": 4}], [{"markdown": "same", "width": 9}], [{"markdown": "same", "width": 4}]],
+        [[{"markdown": "same", "width": 2}], [{"markdown": "same", "width": 4}], [{"markdown": "same", "width": 9}]],
+        [[{"header": "h"}], [{"markdown": "same", "width": 4}, {"markdown": "same", "width": 3}]],
+    ):
+        ops.apply_ops(doc, [{"op": "layout.set", "dashboard": "d", "layout": copy.deepcopy(wanted)}])
+        layout = doc["dashboards"]["d"]["layout"]
+        assert layout == wanted
+        items = [item for row in layout for item in row]
+        assert len({id(item) for item in items}) == len(items)
+
+
+def test_layout_set_with_identical_blocks_changes_only_that_line_in_the_file():
+    text = (
+        "dashboards:\n"
+        "  d:\n"
+        "    title: t\n"
+        "    charts: []\n"
+        "    layout:\n"
+        "      - [{ markdown: same, width: 6 }]    # 첫째\n"
+        "      - [{ markdown: same, width: 12 }]   # 둘째\n"
+    )
+    new, how = edit(text, [{"op": "layout.set", "dashboard": "d",
+                            "layout": [[{"markdown": "same", "width": 6}], [{"markdown": "same", "width": 10}]]}])
+    assert yaml.safe_load(new)["dashboards"]["d"]["layout"] == [[{"markdown": "same", "width": 6}], [{"markdown": "same", "width": 10}]]
+    assert "      - [{ markdown: same, width: 6 }]    # 첫째\n" in new, "건드리지 않은 행은 글자 그대로여야 함"
+    assert "width: 10" in new and "# 둘째" in new and how == "exact"

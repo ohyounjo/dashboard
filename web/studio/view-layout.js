@@ -69,6 +69,19 @@ export function mount(container, ctx) {
     return true;
   }
 
+  /** 대시보드 제목·교차 필터 초안이 저장된 값과 다른지 */
+  function headDirty() {
+    const b = board();
+    return !!(headPending && b) && (headPending.title !== (b.title || "") || headPending.cross_filters !== (b.cross_filters === true));
+  }
+
+  /** 다른 대시보드나 다른 화면으로 떠날 때: 칸 폼과 대시보드 제목·교차 필터 초안을 함께 본다 */
+  function leaveBoard() {
+    if ((dirty || headDirty()) && !window.confirm(S.discardConfirm)) return false;
+    dirty = false; formError = null; headPending = null; headError = null;   // 버린 초안은 다음 render()가 다시 읽는다
+    return true;
+  }
+
   function loadHead() {
     const b = board();
     headPending = b ? { title: b.title || "", cross_filters: b.cross_filters === true } : null;
@@ -710,7 +723,7 @@ export function mount(container, ctx) {
     cross.addEventListener("change", () => { headPending.cross_filters = cross.checked; paint(); });
     paint();
     const form = h("form", { class: "panel head-form", novalidate: true },
-      dashboardSelect(ctx, dash, (key) => { if (!leave()) return false; dash = pickDashboard(ctx, key); sel = null; pending = original = null; listError = null; loadHead(); render(); return true; }),
+      dashboardSelect(ctx, dash, (key) => { if (!leaveBoard()) return false; dash = pickDashboard(ctx, key); sel = null; pending = original = null; listError = null; loadHead(); render(); return true; }),
       field(S.dashboardTitle, title, { required: true, requiredText: S.required }),
       h("div", { class: "field check" }, cross, h("label", { for: cross.id, text: S.dashboardCross }), h("span", { class: "hint", text: S.dashboardCrossHint })),
       h("div", { class: "form-actions" }, btn),
@@ -761,9 +774,9 @@ export function mount(container, ctx) {
   render();
   return {
     /** 화면을 떠나도 되는지(저장하지 않은 폼). 저장 요청이 나가 있는 동안에는 묻지 않는다(그 초안은 이미 보냈다). */
-    canLeave: () => save.busy || leave(),
+    canLeave: () => save.busy || leaveBoard(),
     /** 셸이 설정을 다시 읽었다(적용 뒤: 열 목록이 DB 기준으로 바뀐다). 고치던 폼이 없을 때만 다시 그린다. */
-    refresh: () => { if (!alive || save.busy || dirty) return; resetSelection(); render(); },
+    refresh: () => { if (!alive || save.busy || dirty || headDirty()) return; resetSelection(); render(); },
     destroy: () => { alive = false; },
   };
 }
