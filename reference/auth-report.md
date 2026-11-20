@@ -10,28 +10,24 @@
 | 1. 기반 | 병합됨 | ohyounjo/dashboard#16 |
 | 2. 접근 제어 | 병합됨 | ohyounjo/dashboard#17 |
 | 3. 가입과 메일 | 병합됨 | ohyounjo/dashboard#18 |
-| 4. 운용 화면 | **멈춤**(PR 열어 둠, 병합하지 않음) | ohyounjo/dashboard#19 |
-| 5. 통계와 기록 | **시작 안 함**(PR 없음. 구현은 브랜치 `feat/auth-stats`에 있음, 아래 1-1) | — |
+| 4. 운용 화면 | 병합됨(한 번 멈춘 뒤 이어서 진행, 아래 1-1) | ohyounjo/dashboard#19 |
+| 5. 통계와 기록 | 이 보고서와 함께 PR로 올림(병합은 그 PR의 리뷰·CI 뒤) | 이 보고서가 들어 있는 PR |
 
-### 1-1. 멈춘 이유
+### 1-1. 4단계에서 한 번 멈춘 일
 
-4단계 PR #19에서 리뷰 반복을 프롬프트의 한도(PR당 3번)까지 했다. 세 번째 재리뷰(1f8bd04)가 "사용자 PATCH의 등급·상태·그룹 변경을 한 트랜잭션으로" 지적을 냈다. Codex 등급은 P2지만 권한(operator 제한) 관련이라 규칙대로 P1로 다뤘고, **반복 3번 뒤에도 P1이 남은 상태**라 멈춤 조건에 해당한다. 그래서 #19를 병합하지 않았고 5단계 PR도 올리지 않았다.
-
-- 그 지적은 고쳐서 푸시해 두었다(5f6805d, `store.update_user` 한 트랜잭션, 회귀 테스트 `test_user_patch_is_all_or_nothing`). 이 커밋은 4번째 리뷰를 받지 않았다. 리뷰를 받으려면 PR에 `@codex review`를 남기면 된다.
-- 5단계는 4단계 위에서 이미 구현해 두었다: 브랜치 `feat/auth-stats`(원격에 푸시, PR 없음). 확인용 스택에서 `tests/test_auth_stats.py`를 포함한 인증 통합 테스트가 통과했고 단위 테스트도 통과했지만, **이 브랜치의 전체 `make test`는 끝까지 돌리지 않았다**(4단계가 바뀔 때마다 다시 시작해야 해서 중간에 멈췄다). 4단계를 병합한 뒤 이 브랜치를 main 위로 옮기고 `make test-unit`·`make test`를 돌려 PR을 올리면 된다.
-
+4단계 PR #19에서 리뷰 반복이 프롬프트의 한도(PR당 3번)에 닿았고, 세 번째 재리뷰(1f8bd04)의 지적(사용자 PATCH의 부분 반영)이 권한 관련이라 P1로 다뤄 멈춤 조건에 해당했다. 그 지적을 고친 커밋(5f6805d)과 보고서를 올려 둔 채 멈췄다. 이후 사용자의 지시("재리뷰 받고 이어서")로 재리뷰를 다시 받았다. 그 리뷰의 P2(행위자 행까지 포함한 잠금 순서) 한 건을 고쳤고(9c17bcd), 다음 재리뷰에서 지적이 없어 병합했다. 5단계는 그 뒤에 main 위로 옮겨 PR을 올렸다.
 
 ## 2. 완료 조건 확인(테스트 출력 요약)
 
-병합한 단계(1~3)는 모두 마지막 커밋 기준으로 `make test-unit`(앱 이미지·웹앱 JS·Studio 이미지)과 `make test`(별도 테스트 스택: devtracker 전체 → Studio → sales-sample 전환 → chart-gallery → 새 프로젝트)가 통과한 뒤 병합했다. GitHub Actions(단위 테스트, 화면 캡처 base·head와 head의 `make test`, 비교 댓글)도 모두 성공했다.
+모든 단계에서 마지막 커밋 기준으로 `make test-unit`(앱 이미지·웹앱 JS·Studio 이미지)과 `make test`(별도 테스트 스택: devtracker 전체 → Studio → sales-sample 전환 → chart-gallery → 새 프로젝트)가 통과한 뒤 병합했다. GitHub Actions(단위 테스트, 화면 캡처 base·head와 head의 `make test`, 비교 댓글)도 모두 성공했다.
 
 | 단계 | 완료 조건(13절) | 확인한 테스트 | 마지막 커밋의 결과 |
 |---|---|---|---|
 | 1 | admin으로 로그인해 기존 웹앱을 그대로 본다. 로그인 없이 `/api/app`·`/api/data`·`/api/guest-token`이 401. DB 계정 권한 경계 | `tests/test_auth_login.py`, `tests/test_auth_db.py`, 기존 통합 테스트 전부(로그인 도우미) | 2ca83eb: 단위 364 · JS 4 · Studio 322, 통합 431 passed / 40 skipped(기존 조건부) · Studio 11 · 전환 15 · 갤러리 45 · 새 프로젝트 3 |
 | 2 | user 계정이 허용된 탭만 보고, 다른 탭의 guest token·데이터 요청이 403·404 | `tests/test_auth_access.py`, `tests/test_auth_access_unit.py` | 085f1d5: 단위 370 · JS 4 · Studio 322, 통합 447 / 40 · 11 · 15 · 45 · 3 |
 | 3 | 테스트 메일함의 링크만으로 가입 → 인증 → 로그인 → 찾기 → 재설정 | `tests/test_auth_signup.py`, `tests/test_auth_mail_unit.py` | 8cf6e94: 단위 377 · JS 4 · Studio 322, 통합 471 / 40 · 11 · 15 · 45 · 3 |
-| 4 | 3절의 권한 표가 테스트로 고정된다(operator가 admin을 건드리지 못함, 마지막 admin 보호) | `tests/test_auth_users.py` | 5f6805d(병합 안 함): 단위 377 · JS 4 · Studio 322, 통합 493 passed / 40 skipped · Studio 11 · 전환 15 · 갤러리 45 · 새 프로젝트 3 |
-| 5 | 통계 화면에 탭별·사용자별 수치, 9-2의 모든 동작이 감사 로그에 남는다 | `tests/test_auth_stats.py`(브랜치 `feat/auth-stats`) | 확인용 스택(웹앱·backend·DB만, Superset 없음)에서 `test_auth_stats.py`·`test_auth_users.py`·`test_auth_signup.py`·`test_auth_db.py` 37 passed(조회 동시성 테스트를 더하기 전), 단위 377 passed. 전체 `make test`는 아직 |
+| 4 | 3절의 권한 표가 테스트로 고정된다(operator가 admin을 건드리지 못함, 마지막 admin 보호) | `tests/test_auth_users.py` | 9c17bcd: 단위 377 · JS 4 · Studio 322, 통합 494 passed / 40 skipped · Studio 11 · 전환 15 · 갤러리 45 · 새 프로젝트 3 |
+| 5 | 통계 화면에 탭별·사용자별 수치, 9-2의 모든 동작이 감사 로그에 남는다 | `tests/test_auth_stats.py` | bbcdc1a: 단위 383 · JS 4 · Studio 424, 통합 507 passed / 40 skipped · Studio 13 · 전환 15 · 갤러리 45 · 새 프로젝트 3(main에 다른 PR의 테스트가 더해져 수가 늘었다) |
 
 13절 "반드시 포함할 것":
 
@@ -68,7 +64,8 @@
 | #19 | P2→P1 | 그룹 없는 사용자의 그룹 교체가 직렬화되지 않음 | 고침(6d1c00d): 사용자 행 잠금 |
 | #19 | P2→P1 | 일괄 그룹 지정이 그룹마다 따로 커밋돼 중간 권한 실패 때 일부만 반영 | 고침(1f8bd04): `bulk_change_groups` 한 트랜잭션 |
 | #19 | P2 | 구성원 추가와 사용자 그룹 저장의 잠금 순서가 달라 교착 가능 | 고침(1f8bd04): 어디서나 사용자 행 → 그룹 행 |
-| #19 | P2→P1 | 사용자 PATCH의 등급·상태·그룹 변경이 따로 커밋돼 뒤쪽 권한 실패 때 앞쪽 변경이 남음 | 고침(5f6805d): `store.update_user` 한 트랜잭션. **리뷰 반복 한도 뒤의 지적이라 멈춤**(1-1) |
+| #19 | P2→P1 | 사용자 PATCH의 등급·상태·그룹 변경이 따로 커밋돼 뒤쪽 권한 실패 때 앞쪽 변경이 남음 | 고침(5f6805d): `store.update_user` 한 트랜잭션. 리뷰 반복 한도 뒤의 지적이라 한 번 멈춤(1-1) |
+| #19 | P2 | 그룹 구성원 삽입의 `added_by` 외래 키가 행위자 행을 잠가 두 admin이 서로의 그룹을 저장하면 교착 가능 | 고침(9c17bcd): 대상·행위자·활성 admin 행을 한 문장에서 id 순으로 잠금 |
 
 같은 종류의 지적이 이어져서, 리뷰가 오기 전에 미리 막은 것도 있다: 마지막 활성 admin 판정을 활성 admin 행 잠금 안에서 다시 하기(두 admin이 동시에 서로를 정지해도 0명이 되지 않음), 초대의 계정·그룹·토큰을 한 트랜잭션으로, 조회 기록의 30분 규칙을 사용자·탭별 트랜잭션 잠금으로.
 
@@ -102,14 +99,13 @@
 
 ## 6. 직접 하실 것
 
-0. **4단계 PR #19 결정:** 마지막 커밋(5f6805d)에 `@codex review`로 리뷰를 한 번 더 받거나 직접 검토한 뒤 병합할지 정하세요. 병합하면 `feat/auth-stats`를 main 위로 옮겨 5단계 PR을 올리면 됩니다(위 1-1).
 1. **첫 admin 만들기:** 개발 스택에는 인증 DB가 준비돼 있고(`make auth-init` 완료, 스키마 버전 1) 계정은 없습니다.
    ```bash
    make admin EMAIL=<내 주소@example.com>
    ```
    도메인은 `.env`의 `AUTH_EMAIL_DOMAINS`(지금 `example.com`)에 있어야 합니다. 회사 도메인으로 바꾸면 backend를 다시 띄우세요(`make up`).
 2. **테스트 메일함으로 흐름 확인:** http://localhost:8080/signup.html 에서 가입 → 운용 화면(http://localhost:8080/admin/#outbox) 또는 `make outbox`에서 인증 링크 → 로그인 → 비밀번호 찾기 → 메일함 링크로 재설정.
-3. **화면 확인:** 지금 main(3단계까지)의 운용 화면은 그룹·테스트 메일함 메뉴만 있습니다. 사용자·통계·감사 로그 메뉴와 내 정보(`/account.html`)는 4·5단계 브랜치에 있습니다. 그룹을 하나 만들고 일반사용자에게 탭을 허용해 보세요(그룹이 없는 일반사용자는 아무 탭도 보지 못합니다).
+3. **화면 확인:** 운용 화면(http://localhost:8080/admin/)의 사용자·그룹·통계·감사 로그·테스트 메일함, 내 정보(http://localhost:8080/account.html). 그룹을 하나 만들고 일반사용자에게 탭을 허용해 보세요(그룹이 없는 일반사용자는 아무 탭도 보지 못합니다). 그룹을 하나 만들고 일반사용자에게 탭을 허용해 보세요(그룹이 없는 일반사용자는 아무 탭도 보지 못합니다).
 
 ## 7. 회사에서 정해야 할 것(설계서 14절) 중 남은 항목
 
@@ -122,6 +118,5 @@
 
 ## 8. 작업 중 알게 된 것
 
-- 같은 기계의 다른 Claude 세션이 같은 이름의 테스트 스택(`dashkit-test`)과 같은 이미지 태그(`dashkit-app:local`)로 `make test`를 돌려 서로의 실행이 섞였다. 그 세션과 순서를 맞췄고, 이후 그 세션은 별도 이름의 테스트 스택을 쓴다. 이미지 태그는 여전히 공유되므로 두 작업 폴더에서 동시에 빌드하지 않는 것이 안전하다.
-- 개발 스택(웹앱 8080, Superset 8088, PROJECT=devtracker)은 단계를 병합할 때마다 main으로 `make up && make apply`를 해 두었다(지금 3단계까지의 main). 볼륨과 `.state/`는 지우지 않았다.
-- `dashkit-app:local` 이미지는 테스트 때문에 4단계 브랜치로 빌드된 상태일 수 있다. 개발 스택을 main 코드로 확실히 맞추려면 main에서 `make up`을 한 번 하세요(지금 돌고 있는 컨테이너는 main으로 만든 것이다).
+- 같은 기계의 다른 Claude 세션이 같은 이름의 테스트 스택(`dashkit-test`)과 같은 이미지 태그(`dashkit-app:local`)로 `make test`를 돌려 서로의 실행이 섞였다. 그 세션과 순서를 맞췄고, 그 세션이 올린 PR #20(작업 폴더마다 이미지 태그·테스트 스택·포트를 나눔)이 병합된 뒤로는 섞이지 않는다.
+- 개발 스택(웹앱 8080, Superset 8088, PROJECT=devtracker)은 단계를 병합할 때마다 main으로 `make up && make apply`를 해 두었다. 볼륨과 `.state/`는 지우지 않았다.
