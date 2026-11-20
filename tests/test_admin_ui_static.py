@@ -41,6 +41,7 @@ def _imports(js: str) -> list[str]:
 def test_new_modules_exist():
     assert (ADMIN / "menus" / "tables.js").is_file()
     assert (SHARED / "fields.js").is_file()
+    assert (SHARED / "ingest.js").is_file()
 
 
 def test_html_has_no_inline_code():
@@ -152,3 +153,23 @@ def test_admin_css_uses_tokens_only():
     defined = set(re.findall(r"(--[a-z0-9-]+)\s*:", _read(WEB / "styles.css")))
     used = set(re.findall(r"var\((--[a-z0-9-]+)", css))
     assert used <= defined, f"정의되지 않은 토큰: {sorted(used - defined)}"
+
+
+def test_bulk_screen_uses_backend_paths():
+    # 2b: 여러 파일 한 트랜잭션, 오류 행 빼고 넣기·빠진 행, 빈 양식, 머리글 맞춤 저장, 진행률(progress.step·bytes)
+    code = _without_comments(_read(ADMIN / "menus" / "tables.js"))
+    for needle in ('`${BASE}/batches`', 'form.append("files"', 'form.append("map"', '"skip_invalid"', "skip_invalid: true",
+                   "/rejects`", "/template`", "/aliases`", "upload_id: prev.upload_id"):
+        assert needle in code, f"tables.js에 {needle}가 없음"
+    shared = _read(SHARED / "ingest.js")
+    assert "total_bytes" in shared and "bytes" in shared
+    assert ".step" in code
+    # 짝짓기·진행률 같은 판단은 DOM 없는 shared/ingest.js에 두고 node --test로 시험한다
+    assert not re.search(r"\bdocument\b|\bwindow\b", _without_comments(shared))
+    assert (ROOT / "tests" / "js" / "ingest.test.mjs").is_file()
+
+
+def test_aliases_saving_is_admin_only_in_screen():
+    # "다음에도 이렇게"는 admin에게만 보인다(서버도 require_admin)
+    code = _without_comments(_read(ADMIN / "menus" / "tables.js"))
+    assert re.search(r"isAdmin\(\)\s*\?\s*checkbox\(D\.rememberMatch", code)

@@ -7,21 +7,23 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
 
 import psycopg
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from ... import config, db
 from ...auth import store as auth_store
-from ...auth.routes import Principal, client_ip, require_operator
+from ...auth.routes import Principal, client_ip, require_admin, require_operator
 from ...ingest import Item, IngestError, batches, ingest, ledger
 from ...ingest.batches import REMOVED_DIR
 from ...ingest.remove import NeedsRebuild, remove_batch, restore_batch
-from ...project import upload
+from ...project import store, upload
 from .. import context
 from ..runs_state import runs
 from ..uploads import uploads
@@ -131,7 +133,8 @@ def get_table(table: str, principal: Principal = Depends(require_operator)) -> d
     return {"name": name, "mode": spec.get("mode") or "replace",
             "on_conflict": (spec.get("on_conflict") or "error") if spec.get("mode") == "append" else None,
             "description": spec.get("description"), "primary_key": list(spec["primary_key"]), "columns": columns,
-            "checks": [c["name"] for c in spec.get("checks", [])], "datasets": datasets}
+            "checks": [c["name"] for c in spec.get("checks", [])], "datasets": datasets,
+            "revision": store.revision(project.root)}
 
 
 # ---------------------------------------------------------------- 데이터 더하기
@@ -165,27 +168,40 @@ def _columns(value: Any) -> dict[str, Any] | None:
     return value
 
 
-def _ingest_job(project_name: str, table: str, path: Path, source_name: str, principal: Principal,
-                request: Request, *, dry_run: bool, force: bool, skip_invalid: bool, strict: bool,
-                columns: dict[str, Any] | None, upload_id: str | None) -> JSONResponse:
-    """파일 적재를 작업으로 돌린다(202). 미리보기면 결과에 upload_id를 싣고 파일을 잡아 둔다."""
+def _ingest_job(project_name: str, entries: list[dict[str, Any]], principal: Principal, *, dry_run: bool,
+                force: bool, skip_invalid: bool, strict: bool, upload_id: str | None,
+                folder: Path) -> JSONResponse:
+    """파일 적재(하나 또는 여럿, 한 트랜잭션)를 작업으로 돌린다(202). entries는 [{table, path, name, columns}].
+
+    미리보기면 결과에 upload_id를 싣고 파일을 잡아 둔다. 오류 행을 빼고 넣으면 빠진 행 파일을 작업에 붙인다
+    (GET /jobs/{id}/rejects).
+    """
     limits = context.limits()
+    rejects_dir = Path(tempfile.mkdtemp(prefix="dashkit-rejects-")) if skip_invalid else None
+    one = entries[0]["table"] if len(entries) == 1 else None
 
     def work(ctx) -> dict[str, Any]:
         ctx.progress("read")
-        result = ingest(project_name, [Item(table, {"kind": "csv", "path": path, "name": source_name}, columns)],
-                        dry_run=dry_run, force=force, strict=strict, skip_invalid=skip_invalid,
-                        max_rows=limits.max_rows, progress=lambda step, info: ctx.progress(step, **dict(info)),
-                        wait_ms=limits.lock_wait_ms)
+        items = [Item(e["table"], {"kind": "csv", "path": e["path"], "name": e["name"]}, e.get("columns"))
+                 for e in entries]
+        result = ingest(project_name, items, dry_run=dry_run, force=force, strict=strict, skip_invalid=skip_invalid,
+                        max_rows=limits.max_rows, rejects_dir=rejects_dir,
+                        progress=lambda step, info: ctx.progress(step, **dict(info)), wait_ms=limits.lock_wait_ms)
         if dry_run:
             result["upload_id"] = upload_id
         else:
-            ctx.log(f"✔ {table}: {result['batches'][0]['file']} ({result['batches'][0]['rows']['total']}행)")
+            for b in result["batches"]:
+                ctx.log(f"✔ {b['table']}: {b['file']} ({b['rows']['total']}행)")
+        if rejects_dir is not None and any(b.get("rejected") for b in result["batches"]):
+            ctx.run.rejects = _merge_rejects(rejects_dir, result["batches"], entries)
+            result["rejects"] = True
         return result
 
     def done(run) -> None:
         if upload_id is None:
-            shutil.rmtree(path.parent, ignore_errors=True)   # 미리보기 없이 바로 올린 파일: 원래 파일은 보관하지 않는다
+            shutil.rmtree(folder, ignore_errors=True)        # 미리보기 없이 바로 올린 파일: 원래 파일은 보관하지 않는다
+        if rejects_dir is not None and run.rejects is None:
+            shutil.rmtree(rejects_dir, ignore_errors=True)
         if dry_run:
             if run.status != "succeeded" and upload_id:
                 uploads.drop(upload_id)      # 결과에 upload_id가 없으니 화면은 다시 올린다. 잡아 둘 까닭이 없다
@@ -193,14 +209,53 @@ def _ingest_job(project_name: str, table: str, path: Path, source_name: str, pri
         if upload_id and run.status == "succeeded":
             uploads.drop(upload_id)          # 넣었으면 푼다. 실패하면 1시간 동안 같은 upload_id로 다시 넣을 수 있다
         if run.status == "succeeded":
-            _audit("data.batch.create", principal, None, project=project_name, method="upload",
-                   source_name=source_name, **_summary(run.result)["batches"][0])
+            for e, b in zip(entries, _summary(run.result)["batches"]):
+                _audit("data.batch.create", principal, None, project=project_name, method="upload",
+                       source_name=e["name"], **b)
         else:
-            _audit("data.batch.failed", principal, None, project=project_name, table=table, method="upload",
-                   source_name=source_name, detail_code=(run.error or {}).get("detail"))
+            for e in entries:
+                _audit("data.batch.failed", principal, None, project=project_name, table=e["table"], method="upload",
+                       source_name=e["name"], detail_code=(run.error or {}).get("detail"))
 
-    run = runs.start("ingest", work, table=table, actor_id=principal.id, actor_email=principal.email, on_done=done)
+    run = runs.start("ingest", work, table=one, actor_id=principal.id, actor_email=principal.email, on_done=done)
     return JSONResponse({"job": run.public()}, status_code=202)
+
+
+def _merge_rejects(folder: Path, batches_: list[dict[str, Any]], entries: list[dict[str, Any]]) -> Path:
+    """항목마다의 빠진 행 파일. 파일이 하나면 그대로, 여럿이면 zip 하나로 묶는다."""
+    from ...ingest.add import rejects_file_name
+
+    files = [(e, folder / rejects_file_name(i)) for i, (e, b) in enumerate(zip(entries, batches_))
+             if b.get("rejected") and (folder / rejects_file_name(i)).is_file()]
+    if len(files) == 1:
+        return files[0][1]
+    out = folder / "rejects.zip"
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for e, path in files:
+            z.write(path, f"{Path(e['name']).stem}-빠진행.csv")
+    return out
+
+
+async def _receive(request: Request, field: str, *, single: bool) -> tuple[Path, list[tuple[str, Path]], dict[str, str]]:
+    """multipart를 디스크로 받는다. (요청 폴더, [(파일 이름, 경로)], 글 부분). 실패하면 폴더를 지운다."""
+    limits = context.limits()
+    folder = uploads.folder()
+    try:
+        parts = await upload.stream_multipart(
+            request.headers.get("content-type"), request.stream(), request.headers.get("content-length"),
+            folder=folder, file_limit=limits.max_upload_mb * 1024 * 1024,
+            request_limit=limits.max_request_mb * 1024 * 1024)
+        files = [p for p in parts if p.name == field and p.filename is not None]
+        fields = {p.name: p.value or "" for p in parts if p.filename is None}
+        if not files or (single and len(files) != 1):
+            raise IngestError(400, "bad_request", f"multipart에 `{field}` 파일을 " + ("하나 " if single else "") + "보냅니다")
+        names = [upload.check_filename(p.filename) for p in files]
+        if len(set(names)) != len(names):
+            raise IngestError(400, "invalid_filename", "같은 이름의 파일이 두 번 있습니다")
+        return folder, [(n, p.path) for n, p in zip(names, files)], fields   # type: ignore[misc]
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
 
 
 @router.post("/tables/{table}/batches")
@@ -210,41 +265,24 @@ async def post_batches(table: str, request: Request, principal: Principal = Depe
     ctype = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     limits = context.limits()
     if ctype == "multipart/form-data":
-        folder = uploads.folder()
-        try:
-            parts = await upload.stream_multipart(
-                request.headers.get("content-type"), request.stream(), request.headers.get("content-length"),
-                folder=folder, file_limit=limits.max_upload_mb * 1024 * 1024,
-                request_limit=limits.max_request_mb * 1024 * 1024)
-        except BaseException:
-            shutil.rmtree(folder, ignore_errors=True)
-            raise
-        files = [p for p in parts if p.name == "file" and p.filename is not None]
-        fields = {p.name: p.value for p in parts if p.filename is None}
-        if len(files) != 1:
-            shutil.rmtree(folder, ignore_errors=True)
-            raise IngestError(400, "bad_request", "multipart에 `file` 파일 하나를 보냅니다")
-        try:
-            source_name = upload.check_filename(files[0].filename)
-        except upload.UploadError:
-            shutil.rmtree(folder, ignore_errors=True)
-            raise
+        folder, files, fields = await _receive(request, "file", single=True)
+        source_name, path = files[0]
         dry_run = _flag(fields.get("dry_run"))
-        path = files[0].path
-        assert path is not None
-        upload_id = uploads.hold(name, [(source_name, path)], principal.id) if dry_run else None
-        return _ingest_job(project.name, name, path, source_name, principal, request, dry_run=dry_run,
-                           force=_flag(fields.get("force")), skip_invalid=_flag(fields.get("skip_invalid")),
-                           strict=_flag(fields.get("strict")), columns=_columns(fields.get("columns")),
-                           upload_id=upload_id)
+        columns = _columns(fields.get("columns"))
+        upload_id = uploads.hold(name, files, principal.id, columns={source_name: columns}) if dry_run else None
+        return _ingest_job(project.name, [{"table": name, "path": path, "name": source_name, "columns": columns}],
+                           principal, dry_run=dry_run, force=_flag(fields.get("force")),
+                           skip_invalid=_flag(fields.get("skip_invalid")), strict=_flag(fields.get("strict")),
+                           upload_id=upload_id, folder=folder)
     body = await _json(request)
     if "upload_id" in body:
         held = uploads.get(body.get("upload_id"), name, principal.id)
         source_name, path = held.files[0]
-        return _ingest_job(project.name, name, path, source_name, principal, request, dry_run=False,
-                           force=_flag(body.get("force")), skip_invalid=_flag(body.get("skip_invalid")),
-                           strict=_flag(body.get("strict")), columns=_columns(body.get("columns")),
-                           upload_id=held.id)
+        columns = _columns(body.get("columns")) if "columns" in body else (held.columns or {}).get(source_name)
+        return _ingest_job(project.name, [{"table": name, "path": path, "name": source_name, "columns": columns}],
+                           principal, dry_run=False, force=_flag(body.get("force")),
+                           skip_invalid=_flag(body.get("skip_invalid")), strict=_flag(body.get("strict")),
+                           upload_id=held.id, folder=path.parent)
     rows = body.get("rows")
     if isinstance(rows, list) and len(rows) > limits.inline_max_rows:
         raise IngestError(413, "too_many_rows",
@@ -385,3 +423,154 @@ async def post_restore(table: str, file: str, request: Request, principal: Princ
 
     run = runs.start("restore", work, table=name, actor_id=principal.id, actor_email=principal.email, on_done=done)
     return JSONResponse({"job": run.public()}, status_code=202)
+
+
+# ---------------------------------------------------------------- 여러 파일 한꺼번에(한 트랜잭션)
+
+MAX_FILES = 50
+
+
+def _map_files(project: config.Project, names: list[str], mapping: Any) -> dict[str, str]:
+    """파일 이름 → 테이블. map이 없으면 파일 이름(확장자 제외)이 테이블 이름이어야 한다. 테이블은 목록과 대조한다."""
+    if mapping in (None, ""):
+        mapping = {}
+    if isinstance(mapping, str):
+        try:
+            mapping = json.loads(mapping)
+        except ValueError:
+            raise IngestError(400, "invalid_request", "map은 JSON 객체({파일 이름: 테이블})입니다") from None
+    if not isinstance(mapping, dict):
+        raise IngestError(400, "invalid_request", "map은 {파일 이름: 테이블}입니다")
+    out: dict[str, str] = {}
+    errors: list[str] = []
+    for n in names:
+        wanted = mapping.get(n, Path(n).stem)
+        found = next((t for t in project.schema["tables"] if t == wanted), None)
+        if found is None:
+            errors.append(f"{n}: 맞는 테이블이 없음('{wanted}')")
+        else:
+            out[n] = found
+    if errors:
+        raise IngestError(422, "unknown_table", "파일과 테이블을 짝지을 수 없습니다(map으로 정해 주세요)", errors)
+    return out
+
+
+@router.post("/batches")
+async def post_many(request: Request, principal: Principal = Depends(require_operator)):
+    """여러 파일을 한 트랜잭션으로(설계서 5-2, D12): 전부 들어가거나 하나도 들어가지 않는다. 참조 순서대로 넣는다."""
+    project = _project()
+    ctype = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if ctype == "multipart/form-data":
+        folder, files, fields = await _receive(request, "files", single=False)
+        try:
+            if len(files) > MAX_FILES:
+                raise IngestError(400, "too_many_files", f"한 번에 {MAX_FILES}개까지 올릴 수 있습니다")
+            mapping = _map_files(project, [n for n, _p in files], fields.get("map"))
+            columns = _columns_map(fields.get("columns"))
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
+        dry_run = _flag(fields.get("dry_run"))
+        entries = [{"table": mapping[n], "path": p, "name": n, "columns": columns.get(n)} for n, p in files]
+        upload_id = uploads.hold("*", files, principal.id, map=mapping, columns=columns) if dry_run else None
+        return _ingest_job(project.name, entries, principal, dry_run=dry_run, force=_flag(fields.get("force")),
+                           skip_invalid=_flag(fields.get("skip_invalid")), strict=_flag(fields.get("strict")),
+                           upload_id=upload_id, folder=folder)
+    body = await _json(request)
+    held = uploads.get(body.get("upload_id"), "*", principal.id)
+    mapping = _map_files(project, [n for n, _p in held.files], body.get("map", held.map))
+    columns = _columns_map(body["columns"]) if "columns" in body else held.columns
+    entries = [{"table": mapping[n], "path": p, "name": n, "columns": columns.get(n)} for n, p in held.files]
+    return _ingest_job(project.name, entries, principal, dry_run=False, force=_flag(body.get("force")),
+                       skip_invalid=_flag(body.get("skip_invalid")), strict=_flag(body.get("strict")),
+                       upload_id=held.id, folder=held.files[0][1].parent)
+
+
+def _columns_map(value: Any) -> dict[str, Any]:
+    """여러 파일의 머리글 맞춤: {파일 이름: {머리글: 열 또는 null}}."""
+    if value in (None, ""):
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            raise IngestError(400, "invalid_request", "columns는 {파일 이름: {머리글: 열 또는 null}}입니다") from None
+    if not isinstance(value, dict):
+        raise IngestError(400, "invalid_request", "columns는 {파일 이름: {머리글: 열 또는 null}}입니다")
+    return {str(k): _columns(v) for k, v in value.items()}
+
+
+# ---------------------------------------------------------------- 빈 양식, 머리글 맞춤 저장
+
+_EXAMPLES = {"text": "", "integer": "0", "number": "0", "boolean": "true", "timestamp": "2026-01-01T00:00:00+09:00"}
+
+
+@router.get("/tables/{table}/template")
+def get_template(table: str, principal: Principal = Depends(require_operator)):
+    """빈 양식(설계서 9-2): 머리글(열 이름)과 예시 한 줄. 엑셀에서 열리도록 UTF-8 BOM. 데이터 값은 싣지 않는다."""
+    import csv
+    import io
+
+    project = _project()
+    name = _table(project, table)
+    spec = project.schema["tables"][name]
+    example = []
+    for col, c in spec["columns"].items():
+        if "default" in c and c["default"] is not None:
+            raw = c["default"]
+            example.append(("true" if raw else "false") if isinstance(raw, bool) else str(raw))
+        elif c["type"] == "enum":
+            example.append(c["values"][0])
+        elif c["type"] == "date":
+            example.append(str(c.get("min") or "2026-01-01"))
+        elif c["type"] in ("integer", "number") and "min" in c:
+            example.append(str(c["min"]))
+        else:
+            example.append(_EXAMPLES.get(c["type"], ""))
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\r\n")
+    w.writerow(list(spec["columns"]))
+    w.writerow(example)
+    return Response(("﻿" + buf.getvalue()).encode("utf-8"), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}-template.csv"'})
+
+
+@router.post("/tables/{table}/aliases")
+async def post_aliases(table: str, request: Request, principal: Principal = Depends(require_admin)):
+    """머리글 맞춤을 다음에도 쓰도록 aliases에 저장한다(admin. 설계서 5-3, 9-2 "다음에도 이렇게").
+
+    {"aliases": {"<머리글>": "<열>"}, "revision": "<GET /tables/{t}의 revision>"} → 200 {"revision", "changed"}.
+    schema.yaml의 column.update 연산으로 고친 곳만 다시 쓴다(Studio와 같은 저장). aliases는 DB와 상관없어 적용이 필요 없다.
+    """
+    body = await _json(request)
+    project = _project()
+    name = _table(project, table)
+    aliases = body.get("aliases")
+    if not isinstance(aliases, dict) or not aliases:
+        raise IngestError(400, "invalid_request", "aliases는 {머리글: 열}입니다")
+    if not isinstance(body.get("revision"), str):
+        raise IngestError(400, "invalid_request", "revision이 필요합니다(설정을 읽을 때 받은 값)")
+    cols = project.schema["tables"][name]["columns"]
+    adds: dict[str, list[str]] = {}
+    for header, col in aliases.items():
+        if not isinstance(header, str) or not header.strip() or col not in cols:
+            raise IngestError(422, "invalid_op", f"머리글 '{header}' → 열 '{col}'은 저장할 수 없습니다")
+        if header == col or header in (cols[col].get("aliases") or []):
+            continue
+        adds.setdefault(col, list(cols[col].get("aliases") or [])).append(header.strip())
+    ops = [{"op": "column.update", "table": name, "column": col, "set": {"aliases": values}}
+           for col, values in adds.items()]
+
+    def work() -> dict[str, Any]:
+        if not ops:
+            return {"revision": store.revision(project.root), "changed": []}
+        try:
+            with store.project_lock(project.name):
+                out = store.save_ops(project.name, ops, body["revision"])
+        except store.StoreError as exc:
+            raise IngestError(exc.status, exc.detail, exc.message, exc.errors) from None
+        _audit("data.table.alter", principal, request, project=project.name, table=name,
+               aliases={c: v[-1:] for c, v in adds.items()})
+        return {"revision": out["revision"], "changed": out["changed"]}
+
+    return await run_in_threadpool(work)

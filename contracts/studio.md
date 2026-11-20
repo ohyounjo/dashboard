@@ -120,6 +120,14 @@ Studio에서 적용(apply)하면 그 프로젝트가 웹앱에 보인다. backen
 
 연산은 `dashkit/project/ops.py`의 등록 표(`@op("이름")`)에 있다. 함수 하나를 더하면 연산 하나가 는다.
 
+`schema.yaml`을 고치는 연산(데이터 운용. 관리 서비스와 함께 쓴다, [manage.md](manage.md)):
+
+| 연산 | 필드 | 결과 |
+|---|---|---|
+| `column.update` | `table`, `column`, `set: {aliases?, description?}` | 그 열의 키를 바꾼다(`null`은 지움). 지금은 DB의 내용과 상관없는 `aliases`·`description`만 받는다(유형·규칙은 구조 변경 단계에서 더한다) |
+
+저장 로직(고친 곳만 다시 쓰기 → 사본 검증 → 원자적 교체, `revision` 확인)은 `dashkit/project/store.py`의 `save_ops` 하나이고 Studio의 `PATCH …/config`와 관리 서비스가 함께 쓴다.
+
 5b단계(대시보드 배치, 필터):
 
 | 연산 | 필드 | 결과 |

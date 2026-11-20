@@ -299,6 +299,35 @@ def commit(name: str, files: Mapping[str, bytes]) -> list[str]:
     return changed
 
 
+# ---------------------------------------------------------------- 설정 변경 연산 저장(Studio·관리 서비스가 함께 쓴다)
+
+def save_ops(name: str, op_list: list[Mapping[str, Any]], base_revision: str | None) -> dict[str, Any]:
+    """연산을 적용해 저장한다(고친 곳만 다시 쓰기 → 사본 검증 → 원자적 교체). 부른 쪽이 프로젝트 잠금을 잡는다.
+
+    base_revision이 있으면 지금 파일의 revision과 같아야 한다(아니면 409 stale_config). 관리 서비스는 반드시 보낸다.
+    결과: {"changed", "dashboard", "schema", "revision", "written"}
+    """
+    from . import ops
+
+    root = project_root(name)
+    if base_revision is not None and base_revision != revision(root):
+        raise StoreError(409, "stale_config", "설정 파일이 그 사이에 바뀌었습니다. 다시 불러온 뒤 시도하세요")
+    files: dict[str, bytes] = {}
+    how: dict[str, str] = {}
+    for file in ops.files_of(op_list):
+        try:
+            text = (root / file).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            raise StoreError(422, "invalid_config", "설정 파일을 읽을 수 없습니다",
+                             [f"{file}:(최상위): 파일을 읽을 수 없음"]) from None
+        new_text, how[file] = edit_yaml(text, lambda doc, file=file: ops.apply_ops(doc, op_list, file))
+        files[file] = new_text.encode("utf-8")
+    prepare(name, files, with_csv=False)
+    changed = commit(name, files)
+    return {"changed": changed, "dashboard": read_raw(root, config.DASHBOARD_FILE),
+            "schema": read_raw(root, config.SCHEMA_FILE), "revision": revision(root), "written": how}
+
+
 # ---------------------------------------------------------------- YAML 고쳐 쓰기
 
 def edit_yaml(text: str, mutate: Callable[[MutableMapping], None]) -> tuple[str, str]:

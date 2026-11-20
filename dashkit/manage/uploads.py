@@ -24,11 +24,12 @@ MAX_KEEP = 20
 @dataclass
 class Held:
     id: str
-    table: str                       # 여러 파일이면 ""
+    table: str                       # 여러 파일이면 "*"
     files: list[tuple[str, Path]]    # (원래 파일 이름, 디스크 경로)
     actor_id: str | None
     at: float = field(default_factory=time.monotonic)
-    map: dict[str, str] = field(default_factory=dict)
+    map: dict[str, str] = field(default_factory=dict)          # 여러 파일: {파일 이름: 테이블}
+    columns: dict[str, Any] = field(default_factory=dict)      # {파일 이름: 머리글 맞춤}(미리보기 때 보낸 것)
 
 
 class Uploads:

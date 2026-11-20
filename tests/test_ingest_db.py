@@ -667,3 +667,67 @@ def test_crash_then_restart_applies_the_batch(tmp_path, scratch_db, fault):
     assert [o.result for o in outcomes] == ["applied"]
     assert "E130" in {x[0] for x in rows(scratch_db, "entries")} and leftovers(root) == []
     rebuilt_equals_current(root, scratch_db)
+
+
+def test_skip_invalid_drops_reference_errors_and_keeps_only_inserted_rows_in_the_file(tmp_path, scratch_db):
+    """오류 행 빼고 넣기: 값 오류와 참조 오류가 난 행을 빼고, 배치 파일에는 들어간 행만 쓰고, 빠진 행 파일을 남긴다.
+    다시 만들어도 같다(설계서 5-4, 14절)."""
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    rejects = tmp_path / "rejects"
+    rejects.mkdir()
+    csv = tmp_path / "ev.csv"
+    csv.write_text("id,entry_id,seen_at\n10,E1,\n11,E404,\n12,E2,nope\n13,E3,\n", encoding="utf-8")
+    r = ingest("ledger", [Item("events", {"kind": "csv", "path": csv, "name": "ev.csv"})], projects_dir=root,
+               dbname=scratch_db, skip_invalid=True, rejects_dir=rejects)
+    b = r["batches"][0]
+    assert b["rows"]["inserted"] == 2 and b["rejected"] == 2, b
+    assert any("ev.csv:3:entry_id" in e for e in b["errors"]) and any("ev.csv:4:seen_at" in e for e in b["errors"])
+    stored = gzip.decompress((root / "ledger" / "data" / "events" / b["file"]).read_bytes()).decode()
+    assert stored == "id,entry_id,seen_at\n10,E1,\n13,E3,\n"
+    lines = (rejects / "000.csv").read_text(encoding="utf-8-sig").splitlines()
+    assert lines[0] == "id,entry_id,seen_at,오류" and len(lines) == 3
+    assert any(l.startswith("11,E404,") and "entry_id" in l for l in lines[1:])
+    assert any(l.startswith("12,E2,nope") for l in lines[1:])
+    rebuilt_equals_current(root, scratch_db)
+
+
+def test_ingest_and_apply_from_other_processes_keep_order(tmp_path, scratch_db):
+    """서로 다른 프로세스의 적재와 apply(load)가 쓰기 잠금으로 순서를 지킨다(2b 완료 조건): 동시에 돌려도 하나씩 차례로
+    되고, 끝난 뒤 DB는 폴더의 파일로 다시 만든 것과 같다."""
+    import os
+    import subprocess
+    import sys
+
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    env = {**os.environ, "PROJECTS_DIR": str(root), "PROJECT": "ledger", "DATA_DB_NAME": scratch_db}
+    csvs = []
+    for i in range(4):
+        p = tmp_path / f"p{i}.csv"
+        p.write_text("id,memo\n" + "".join(f"E{1000 + i * 100 + k},p{i}\n" for k in range(50)), encoding="utf-8")
+        csvs.append(p)
+    procs = [subprocess.Popen([sys.executable, "-m", "dashkit", "ingest", "--table", "entries", "--file", str(p)],
+                              env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) for p in csvs]
+    procs += [subprocess.Popen([sys.executable, "-m", "dashkit", "load"], env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT) for _ in range(2)]
+    outs = [(p.wait(timeout=120), p.stdout.read().decode()) for p in procs]
+    assert all(code == 0 for code, _o in outs), outs
+    assert len({x[0] for x in rows(scratch_db, "entries")} & {f"E{1000 + i * 100}" for i in range(4)}) == 4
+    assert len(folder(root, "entries")) == 2 + 4
+    rebuilt_equals_current(root, scratch_db)
+
+
+def test_preview_with_row_errors_also_reports_reference_errors(tmp_path, scratch_db):
+    """행 검증 오류가 있는 미리보기도 참조 대조까지 해, 모든 오류와 빼고 넣을 때 들어갈 행 수를 보인다(화면 확인 지적)."""
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    csv = tmp_path / "ev.csv"
+    csv.write_text("id,entry_id,seen_at\n20,E1,\n21,E404,\n22,E2,nope\n", encoding="utf-8")
+    item = [Item("events", {"kind": "csv", "path": csv, "name": "ev.csv"})]
+    r = ingest("ledger", item, projects_dir=root, dbname=scratch_db, dry_run=True)
+    b = r["batches"][0]
+    assert r["ok"] is False and b["rows"]["inserted"] == 1 and b["rejected"] == 2 and not b["skip_invalid"]
+    assert any("ev.csv:3:entry_id" in e for e in b["errors"]) and any("ev.csv:4:seen_at" in e for e in b["errors"])
+    assert 20 not in {x[0] for x in rows(scratch_db, "events")}
+    expect_error("invalid_rows", ingest, "ledger", item, projects_dir=root, dbname=scratch_db)
