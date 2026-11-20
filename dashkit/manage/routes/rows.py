@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 import psycopg
@@ -36,7 +37,19 @@ def _connect() -> psycopg.Connection:
         raise IngestError(503, "db_unavailable", "조회용 DB 계정으로 접속하지 못했습니다(make data-init)") from None
 
 
+SAFE_INT = 2**53 - 1
+
+
 def _to_json(v: Any, kind: str) -> Any:
+    """운용 화면의 행 조회 값. 브라우저의 수(배정밀도)로 정확히 나타나지 않는 정수·숫자는 문자열로 보낸다
+    (고치기 폼이 그 값을 한 행 읽기의 키와 update 배치로 다시 보낸다. 반올림되면 다른 행을 가리킨다)."""
+    if kind == "integer" and isinstance(v, int) and not isinstance(v, bool) and abs(v) > SAFE_INT:
+        return str(v)
+    if kind == "number" and isinstance(v, Decimal) and v.is_finite():
+        if v == v.to_integral_value():
+            return int(v) if abs(v) <= SAFE_INT else format(v, "f")
+        f = float(v)
+        return f if Decimal(repr(f)) == v.normalize() else format(v, "f")
     return _value(v, kind)
 
 
