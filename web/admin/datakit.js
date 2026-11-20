@@ -63,6 +63,7 @@ export async function runJob(send, out, alive) {
 }
 
 /** 지금 설정 판(revision). 구조 변경 요청이 함께 보낸다. table을 주면 GET /tables/{t}, 아니면 GET /history(admin) */
+/** 설정 판(revision). 폼을 **열 때** 읽어 두고 보낼 때 그 값을 쓴다(보내기 직전에 읽으면 충돌 검사를 지나친다) */
 export async function currentRevision(table) {
   const r = table ? await api("GET", `/api/manage/tables/${encodeURIComponent(table)}`) : await api("GET", "/api/manage/history");
   return r.revision;

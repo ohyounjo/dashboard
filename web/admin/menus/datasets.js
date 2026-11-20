@@ -42,6 +42,7 @@ function createCard(existing, alive, { onClose, onDone }) {
   api("GET", `${BASE}/tables`).then((r) => {
     for (const t of r.items || []) table.append(h("option", { value: t.name, text: t.name }));
   }).catch((err) => { if (alive()) out.replaceChildren(box("bad", dataFailText(err))); });
+  const revAtOpen = currentRevision().catch(() => null);      // 폼을 연 때의 설정 판(그 사이 바뀌면 409 stale_config)
   const submit = h("button", { type: "submit", class: "btn primary" }, D.createDatasetSubmit);
   const form = h("form", { class: "d-form", novalidate: true },
     h("div", { class: "d-fields" }, rows.key.el, rows.kind.el, rows.table.el, rows.description.el), rows.sql.el,
@@ -60,7 +61,7 @@ function createCard(existing, alive, { onClose, onDone }) {
     }
     submit.disabled = true;
     try {
-      const result = await runJob(async () => api("PATCH", `${BASE}/config`, { ops: [made.op], revision: await currentRevision() }), out, alive);
+      const result = await runJob(async () => api("PATCH", `${BASE}/config`, { ops: [made.op], revision: await revAtOpen }), out, alive);
       if (!result || !alive()) return;
       onDone(configResult(result, D.datasetCreated(made.op.key)));
     } catch (err) {

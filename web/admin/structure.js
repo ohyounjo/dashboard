@@ -121,7 +121,7 @@ export function addColumnCard(t, { alive, onClose, onDone }) {
     busy = true;
     submit.disabled = true;
     try {
-      const result = await runJob(async () => api("PATCH", `${BASE}/config`, { ops: [made.op], revision: await currentRevision(t.name) }), out, alive);
+      const result = await runJob(async () => api("PATCH", `${BASE}/config`, { ops: [made.op], revision: t.revision }), out, alive);
       if (!result || !alive()) return;
       onDone(configResult(result, D.columnAdded(made.op.column)));
     } catch (err) {
@@ -196,7 +196,7 @@ export function columnRuleCard(t, col, { alive, onClose, onDone }) {
     if (made.typeChanged && !confirm.input.checked) { out.replaceChildren(box("warn", D.typeChangeNeedsConfirm)); confirm.input.focus(); return; }
     submit.disabled = true;
     try {
-      const result = await runJob(async () => api("PATCH", `${BASE}/config`, { ops: [made.op], revision: await currentRevision(t.name) }), out, alive);
+      const result = await runJob(async () => api("PATCH", `${BASE}/config`, { ops: [made.op], revision: t.revision }), out, alive);
       if (!result || !alive()) return;
       onDone(configResult(result, D.columnUpdated(col.name)));
     } catch (err) {
@@ -259,7 +259,7 @@ export function dropTableCard(t, { alive, onClose, onDone }) {
     row.setErr(null);
     submit.disabled = true;
     try {
-      const result = await runJob(async () => api("PATCH", `${BASE}/config`, { ops: [{ op: "table.remove", table: t.name }], revision: await currentRevision(t.name) }), out, alive);
+      const result = await runJob(async () => api("PATCH", `${BASE}/config`, { ops: [{ op: "table.remove", table: t.name }], revision: t.revision }), out, alive);
       if (!result || !alive()) return;
       onDone(configResult(result, D.tableDropped(t.name)));
     } catch (err) {
@@ -292,6 +292,8 @@ export async function compactTable(t, out, alive) {
 
 /** 새 테이블(admin): CSV 하나 놓기 → POST /tables/infer → 추론 표 고치기 → POST /tables → 작업 → 결과(만든 것·sync) */
 export function newTableWizard({ alive, onClose, onCreated }) {
+  // 마법사를 연 때의 설정 판. 그 사이 다른 사람이 설정을 바꿨으면 서버가 409 stale_config로 알린다
+  const revAtOpen = currentRevision().catch(() => null);
   const out = h("div", { class: "d-out" });
   const stepBox = h("div");
   let busy = false;
@@ -391,7 +393,7 @@ export function newTableWizard({ alive, onClose, onCreated }) {
       submit.disabled = true;
       const send = async () => api("POST", `${BASE}/tables`, {
         upload_id: inf.upload_id, table: made.table, mode: mode.value, on_conflict: mode.value === "append" ? conflict.value : null,
-        dataset: dataset.input.checked, suggest: suggest.input.checked, revision: await currentRevision(),
+        dataset: dataset.input.checked, suggest: suggest.input.checked, revision: await revAtOpen,
       });
       try {
         const result = await runJob(send, out, alive);
