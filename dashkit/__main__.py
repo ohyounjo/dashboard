@@ -1,6 +1,7 @@
-"""python -m dashkit {check|plan|load|sync|migrate|api|gen|new|studio}
+"""python -m dashkit {check|plan|load|sync|migrate|api|gen|new|studio|auth}
 
 `new <이름> --from <CSV 폴더>`는 CSV에서 프로젝트 초안을 만든다(PROJECT를 쓰지 않는다).
+`auth {init|create-admin}`은 인증 DB를 다룬다(dashkit/auth/cli.py, PROJECT를 쓰지 않는다).
 PROJECT(필수), PROJECTS_DIR(선택) 환경변수를 쓴다. 오류는 한 줄에 하나씩 출력하고 종료 코드 1로 끝낸다.
 """
 from __future__ import annotations
@@ -173,6 +174,9 @@ def main(argv: list[str] | None = None) -> int:
     studio.add_argument("--host", default="0.0.0.0")
     studio.add_argument("--port", type=int, default=8090)
     studio.set_defaults(fn=cmd_studio)
+    from .auth import cli as auth_cli
+
+    auth_cli.register(sub)
     args = parser.parse_args(argv)
     try:
         return args.fn(args)

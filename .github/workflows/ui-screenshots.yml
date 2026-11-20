@@ -136,6 +136,21 @@ jobs:
           make up
           make apply
 
+      # 웹앱이 로그인을 요구하는 버전(make admin이 있음)이면 캡처용 admin을 만든다. 비밀번호는 실행마다 새로 만든다
+      - name: 캡처용 계정 만들기 (로그인 기능이 있는 버전만)
+        if: env.UI == 'true'
+        working-directory: app
+        run: |
+          if grep -q '^admin:' Makefile; then
+            pw=$(openssl rand -hex 18)
+            echo "::add-mask::$pw"
+            domain=$(sed -n 's/^AUTH_EMAIL_DOMAINS=//p' .env | tail -1 | cut -d, -f1 | tr -d ' @')
+            printf '%s\n' "$pw" | make admin EMAIL="e2e-admin@$domain" PASSWORD_STDIN=1
+            { echo "E2E_EMAIL=e2e-admin@$domain"; echo "E2E_PASSWORD=$pw"; } >> "$GITHUB_ENV"
+          else
+            echo "로그인 기능이 없는 버전: 계정 없이 캡처"
+          fi
+
       - name: 화면 캡처
         if: env.UI == 'true'
         working-directory: tools/e2e

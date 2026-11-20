@@ -1,0 +1,28 @@
+/* 로그인 전 화면(login.html 등). 토큰은 styles.css의 것을 그대로 쓴다. */
+.auth-page { min-height: 100vh; min-height: 100dvh }
+/* styles.css의 main(레일 자리 여백·최대 너비)을 쓰지 않는다 */
+.auth { margin: 0; max-width: none; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  padding: max(24px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(24px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)) }
+.auth-card { width: 100%; max-width: 400px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 28px 28px 22px;
+  display: flex; flex-direction: column; gap: 14px }
+.auth-mark { width: 44px; height: 44px; border-radius: 12px; background: var(--primary); color: var(--on-primary); display: grid; place-items: center }
+.auth-mark .icon { width: 22px; height: 22px }
+.auth-card h1 { margin: 0; font-size: 21px }
+.auth-intro { margin: -6px 0 0; color: var(--muted); font-size: 13.5px; word-break: keep-all }
+.auth-card form { display: flex; flex-direction: column; gap: 12px }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500 }
+.field input { border: 1px solid var(--line); background: var(--surface); color: var(--fg); border-radius: 8px; padding: 9px 11px; font-size: 14px; min-height: 40px }
+.field input:focus-visible { outline: 2px solid var(--primary); outline-offset: 0; border-color: var(--primary) }
+.field input[aria-invalid="true"] { border-color: var(--bad) }
+.field .hint { color: var(--muted); font-weight: 400; font-size: 12.5px; word-break: keep-all }
+.btn.block { width: 100%; justify-content: center; min-height: 40px; font-size: 14px; font-weight: 600 }
+.btn[disabled] { opacity: .6; cursor: progress }
+.auth-msg { border-radius: 8px; padding: 10px 12px; font-size: 13px; color: var(--tone, var(--fg)); background: var(--tone-bg, var(--surface-2)); word-break: keep-all; overflow-wrap: anywhere }
+.auth-links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px }
+.auth-links:empty { display: none }
+.auth-links a { color: var(--primary); text-decoration: none; font-weight: 500 }
+.auth-links a:hover { text-decoration: underline }
+@media (max-width: 600px) {
+  .auth { justify-content: flex-start; padding-top: max(32px, env(safe-area-inset-top, 0px)) }
+  .auth-card { padding: 22px 18px 18px; border-radius: 10px }
+}

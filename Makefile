@@ -12,7 +12,7 @@ HOST_GID := $(shell id -g)
 TOOLS    := $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) tools
 
 .NOTPARALLEL:
-.PHONY: help env up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down unit-image golden gen reset down logs dirs _test _test_run
+.PHONY: help env env-secrets auth-init admin up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down unit-image golden gen reset down logs dirs _test _test_run
 
 # ---- 테스트 스택(보강설계서 3-2, 7절 D5): 개발 스택과 이름·포트·볼륨·상태 디렉터리가 모두 다르다.
 # 상태·빌드 디렉터리는 .test/ 고정이다(아래 정리 단계가 이 경로를 그대로 쓴다).
@@ -29,6 +29,8 @@ TEST_ENV := COMPOSE_PROJECT_NAME=$(TEST_NAME) \
 # 단위 테스트는 compose 없이 tools 이미지만으로 돈다(.env도 필요 없다)
 APP_IMAGE := dashkit-app:local
 STUDIO_IMAGE := dashkit-studio:local
+# 웹앱 JS의 순수 함수 테스트(tests/js/, node --test). 호스트에 node가 없어도 된다
+NODE_IMAGE := node:22.21.1-alpine3.22
 # Studio가 projects/에 쓰는 파일이 호스트 사용자 소유가 되게 한다(compose의 studio.user)
 export HOST_UID HOST_GID
 # Studio 포트: 환경 > .env > .env.example
@@ -37,6 +39,8 @@ UNIT_RUN  := docker run --rm --user $(HOST_UID):$(HOST_GID) -v "$(CURDIR)":/app 
 
 help:
 	@echo "make env     .env 생성(없을 때만, 비밀값 자동 생성)"
+	@echo "make auth-init   인증 DB(dashkit_auth 스키마, dash_auth 계정) 만들기·올리기(여러 번 실행해도 됨)"
+	@echo "make admin EMAIL=<주소>   첫 admin 계정 만들기(비밀번호는 프롬프트)"
 	@echo "make up      전체 빌드·기동 후 superset/backend/web healthy 대기"
 	@echo "make check   설정 검사"
 	@echo "make load    CSV 적재"
@@ -46,7 +50,7 @@ help:
 	@echo "make new NAME=<이름> FROM=<CSV 폴더>   CSV에서 프로젝트 초안 생성"
 	@echo "make migrate [CHECK=1]   설정 파일을 최신 설정 버전으로"
 	@echo "make studio / make studio-down   구성 화면(http://localhost:8090, 127.0.0.1 전용)"
-	@echo "make test-unit  단위 테스트(스택 불필요: 설정 검증, 번들 스냅샷, CSV 검증, 도메인 단어)"
+	@echo "make test-unit  단위 테스트(스택 불필요: 설정 검증, 번들 스냅샷, CSV 검증, 도메인 단어, 웹앱 JS)"
 	@echo "make test    통합 테스트(별도 테스트 스택을 띄우고 끝나면 내림. KEEP=1이면 남김)"
 	@echo "make golden  번들 스냅샷(tests/golden/) 갱신"
 	@echo "make gen     레지스트리에서 계약 문서의 생성 구간 갱신"
@@ -72,6 +76,25 @@ env:
 	  echo "✔ .env 생성(비밀값 $$(grep -c '=__GENERATE__$$' .env.example)개 생성)"; \
 	fi
 
+# 예전에 만든 .env에 없는 비밀값(.env.example의 __GENERATE__ 자리)을 임의 값으로 덧붙인다. 있는 값은 건드리지 않는다.
+# 예: 로그인 기능과 함께 생긴 DATA_DB_AUTH_PASSWORD. make up·make auth-init이 먼저 부른다.
+env-secrets:
+	@[ -f .env ] || { echo "✖ .env가 없음. make env를 먼저 실행하세요"; exit 1; }
+	@umask 077; \
+	if [ -n "$$(tail -c1 .env)" ]; then echo >> .env; fi; \
+	while IFS= read -r line || [ -n "$$line" ]; do \
+	  case "$$line" in \
+	    [A-Z_]*=__GENERATE__) \
+	      k=$${line%%=*}; \
+	      if ! grep -q "^$$k=" .env; then \
+	        v=$$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n'); \
+	        [ $${#v} -eq 48 ] || { echo "✖ 임의 값 생성 실패"; exit 1; }; \
+	        printf '%s=%s\n' "$$k" "$$v" >> .env; \
+	        echo "• .env에 $$k 추가(임의 값)"; \
+	      fi;; \
+	  esac; \
+	done < .env.example
+
 dirs:
 	@mkdir -p .state .build
 
@@ -93,7 +116,7 @@ define wait_healthy
 	done
 endef
 
-up: dirs
+up: dirs env-secrets
 	$(COMPOSE) up -d --build
 	$(call wait_healthy,superset backend web)
 
@@ -102,6 +125,22 @@ down:
 
 logs:
 	$(COMPOSE) logs -f --tail=200
+
+# ---------------------------------------------------------------- 로그인(contracts/auth.md)
+# 인증 DB를 만들거나 최신으로 올린다. 역할 생성에는 superuser가 필요하므로 data-db 컨테이너 안에서 postgres 계정으로
+# data-db/init/02-auth.sh를 실행한다(새 볼륨은 initdb 때 같은 스크립트가 돈다). 볼륨을 다시 만들지 않는다.
+# data-db 컨테이너는 마운트·환경변수가 바뀌었으면 다시 만들어진다(데이터는 볼륨에 그대로 있다).
+auth-init: env-secrets
+	$(COMPOSE) up -d --wait data-db
+	$(COMPOSE) exec -T data-db sh /docker-entrypoint-initdb.d/02-auth.sh
+	$(TOOLS) python -m dashkit auth init
+
+# 첫 admin 계정. 비밀번호는 프롬프트로 두 번 받는다(코드·.env에 넣지 않는다).
+# 자동화(CI 화면 캡처)에서는 PASSWORD_STDIN=1로 표준 입력의 첫 줄을 읽는다.
+admin: dirs
+	@test -n "$(EMAIL)" || { echo "사용법: make admin EMAIL=<주소>" >&2; exit 2; }
+	$(COMPOSE) run --rm $(if $(PASSWORD_STDIN),-T) --user $(HOST_UID):$(HOST_GID) tools \
+	  python -m dashkit auth create-admin --email "$(EMAIL)" $(if $(PASSWORD_STDIN),--password-stdin)
 
 # ---------------------------------------------------------------- 설정 반영
 check: dirs
@@ -158,6 +197,8 @@ studio-image:
 # Studio 테스트(tests/test_studio*.py)는 ruamel.yaml이 있는 studio 이미지에서 따로 돈다. app 이미지에서는 그 파일들을 빼고 돈다.
 test-unit: unit-image studio-image
 	$(UNIT_RUN) python -m pytest -q -p no:cacheprovider -m "not integration" --ignore-glob='tests/test_studio*.py' tests/
+	@echo "== 웹앱 JS 테스트(node)"
+	docker run --rm --user $(HOST_UID):$(HOST_GID) -v "$(CURDIR)":/app -w /app $(NODE_IMAGE) sh -c 'node --test tests/js/*.test.mjs'
 	@if ls tests/test_studio*.py > /dev/null 2>&1; then \
 	  echo "== Studio 테스트(studio 이미지)"; \
 	  docker run --rm --user $(HOST_UID):$(HOST_GID) -v "$(CURDIR)":/app -w /app $(STUDIO_IMAGE) \

@@ -29,12 +29,19 @@ make apply
 ```
 check(설정 검사) → load(CSV 검증·적재) → sync(Superset 반영) 순서로 실행합니다. backend는 `projects/`의 설정 파일이 바뀌면 스스로 다시 읽으므로 재시작하지 않습니다.
 
-브라우저에서 http://localhost:8080 을 엽니다. Superset 관리 화면은 http://localhost:8088 이고, 계정은 `.env`의 `SUPERSET_ADMIN_USER`/`SUPERSET_ADMIN_PASSWORD`입니다.
+```bash
+make admin EMAIL=<내 사내 메일 주소>
+```
+웹앱은 로그인해야 볼 수 있습니다. 첫 admin 계정을 만들고 비밀번호는 프롬프트로 정합니다(코드·`.env`에 넣지 않습니다). 주소의 도메인은 `.env`의 `AUTH_EMAIL_DOMAINS`(기본 `example.com`, 회사 도메인으로 바꿉니다)에 있어야 합니다. 로그인 이전에 만든 스택이라면 먼저 `make auth-init`으로 인증 DB(`dashkit_auth` 스키마와 `dash_auth` 계정)를 더합니다(볼륨은 그대로 둡니다). 규칙은 [contracts/auth.md](contracts/auth.md)에 있습니다.
+
+브라우저에서 http://localhost:8080 을 열고 로그인합니다. Superset 관리 화면은 http://localhost:8088 이고, 계정은 `.env`의 `SUPERSET_ADMIN_USER`/`SUPERSET_ADMIN_PASSWORD`입니다.
 
 | 명령 | 하는 일 |
 |---|---|
 | `make env` | `.env` 생성 |
 | `make up` | 기동 후 healthy 대기 |
+| `make auth-init` | 인증 DB 만들기·최신으로 올리기(여러 번 실행해도 됨) |
+| `make admin EMAIL=<주소>` | 첫 admin 계정 만들기(비밀번호는 프롬프트) |
 | `make check` | 설정만 검사(DB 불필요) |
 | `make plan` | 적용하면 무엇이 바뀌는지 미리 보기(아무것도 바꾸지 않음. 선택) |
 | `make apply` | 검사 → 적재 → Superset 반영. **`projects/`에서 무엇을 바꿨든 이것 하나** |

@@ -3,18 +3,24 @@
 - DB가 필요한 테스트는 dashkit.db의 접속 정보(환경변수)를 쓴다.
 - Superset이 필요한 테스트는 dashkit.sync.client.SupersetClient(관리자)를 쓴다.
 - 현재 적용된 프로젝트는 env PROJECT(기본 devtracker)다.
+- 웹앱 API(/api/app 등)는 로그인이 필요하다. api()는 테스트용 admin 계정(처음 부를 때 만들고 세션이 끝나면 지운다)으로
+  로그인한 세션 쿠키를 붙여 부른다. 로그인 없이 부르려면 api(..., auth=False).
+- 엔드포인트 함수를 직접 부르는 단위 테스트는 ADMIN(로그인한 admin)을 user 인자로 넘긴다.
 """
 from __future__ import annotations
 
 import csv
 import json
 import os
+import secrets
 import shutil
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 import pytest
+
+from dashkit.auth.routes import Principal
 
 ROOT = Path(__file__).resolve().parent.parent
 PROJECTS = ROOT / "projects"
@@ -103,5 +109,97 @@ def http(method: str, url: str, body=None, headers=None) -> tuple[int, dict | st
         return code, raw.decode(errors="replace")
 
 
-def api(method: str, path: str, body=None) -> tuple[int, dict | str]:
-    return http(method, f"{WEB_URL}{path}", body)
+# ---------------------------------------------------------------- 로그인 도우미(contracts/auth.md)
+
+# 단위 테스트에서 엔드포인트 함수를 직접 부를 때 넘기는 로그인 사용자
+ADMIN = Principal(id="00000000-0000-4000-8000-000000000001", email="admin@example.com", role="admin")
+
+SESSION_COOKIE = "dashkit_session"
+
+
+def random_email(prefix: str) -> str:
+    """허용 도메인(AUTH_EMAIL_DOMAINS의 첫 항목)의 테스트용 임의 주소."""
+    domain = (os.environ.get("AUTH_EMAIL_DOMAINS") or "example.com").split(",")[0].strip().lstrip("@").lower()
+    return f"{prefix}-{secrets.token_hex(4)}@{domain}"
+
+
+def make_user(email: str, password: str | None, *, role: str = "user", status: str = "active", **kw):
+    """인증 DB에 계정을 바로 만든다(dash_auth 계정). 테스트가 끝나면 delete_user로 지운다."""
+    from dashkit.auth import passwords, store
+
+    return store.create_user(email, role=role, status=status, source=kw.pop("source", "invite"),
+                             password_hash=passwords.hash_password(password) if password else None,
+                             email_verified=status == "active", **kw)
+
+
+def delete_user(user_id: str) -> None:
+    from dashkit.auth import store
+
+    store.delete_user(user_id)
+
+
+def http_full(method: str, url: str, body=None, headers=None, raw: bytes | None = None):
+    """(상태, 본문(JSON이면 dict), 응답 헤더). raw를 주면 그 바이트를 본문으로 보낸다(Content-Type은 headers로)."""
+    data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
+    hdrs = {} if raw is not None else {"Content-Type": "application/json"}
+    req = urllib.request.Request(url, data=data, method=method, headers={**hdrs, **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            content, code, rh = r.read(), r.status, r.headers
+    except urllib.error.HTTPError as e:
+        content, code, rh = e.read(), e.code, e.headers
+    try:
+        parsed = json.loads(content) if content else None
+    except ValueError:
+        parsed = content.decode(errors="replace")
+    return code, parsed, rh
+
+
+def session_cookie(headers) -> str | None:
+    """응답 헤더의 Set-Cookie에서 세션 쿠키 값."""
+    for raw in headers.get_all("Set-Cookie") or []:
+        name, _, rest = raw.partition("=")
+        if name.strip() == SESSION_COOKIE:
+            value = rest.split(";", 1)[0].strip()
+            return value or None
+    return None
+
+
+def login(email: str, password: str, base: str | None = None) -> str:
+    code, body, headers = http_full("POST", f"{base or WEB_URL}/api/auth/login", {"email": email, "password": password})
+    assert code == 200, (code, body)
+    cookie = session_cookie(headers)
+    assert cookie
+    return cookie
+
+
+class _AdminSession:
+    user_id: str | None = None
+    cookie: str | None = None
+
+
+_admin = _AdminSession()
+
+
+def admin_cookie() -> str:
+    """테스트용 admin으로 로그인한 세션 쿠키(세션 하나에 한 번 만든다)."""
+    if _admin.cookie is None:
+        email, password = random_email("test-admin"), secrets.token_urlsafe(18)
+        _admin.user_id = make_user(email, password, role="admin").id
+        _admin.cookie = login(email, password)
+    return _admin.cookie
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_test_admin():
+    yield
+    if _admin.user_id:
+        delete_user(_admin.user_id)
+        _admin.user_id = _admin.cookie = None
+
+
+def api(method: str, path: str, body=None, *, auth: bool = True, cookie: str | None = None) -> tuple[int, dict | str]:
+    headers = {}
+    if cookie or auth:
+        headers["Cookie"] = f"{SESSION_COOKIE}={cookie or admin_cookie()}"
+    return http(method, f"{WEB_URL}{path}", body, headers)

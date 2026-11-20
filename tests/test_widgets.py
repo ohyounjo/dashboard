@@ -15,6 +15,7 @@ import pytest
 from dashkit import config, widgets
 from dashkit.config import ConfigError, load_project
 
+from conftest import ADMIN
 from test_config import errors_of, make_project
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -240,7 +241,7 @@ def test_new_widget_is_listed_by_api_app(tmp_path, widgets_dir, monkeypatch):
     # backend는 현재 프로젝트를 CurrentState로 읽는다(embed.json이 없으면 env PROJECT 자리의 이름)
     monkeypatch.setattr(api_app.ctx, "state", CurrentState(project.name, tmp_path / "embed.json", root), raising=False)
 
-    body = api_app.get_app()
+    body = api_app.get_app(user=ADMIN)
     builtin = [{"type": t.type, "label": t.label} for t in widgets.load_registry(WIDGETS).values()]
     assert body["widgets"] == sorted([*builtin, {"type": "sample_list", "label": "견본 목록"}], key=lambda w: w["type"])
     sec = body["tabs"][2]["sections"][0]
@@ -249,7 +250,7 @@ def test_new_widget_is_listed_by_api_app(tmp_path, widgets_dir, monkeypatch):
     # /api/data 허용 목록에도 들어간다(허용하지 않는 데이터셋은 404, DB에 닿기 전에 걸러진다)
     assert "owners" in config.widget_datasets(project)
     with pytest.raises(api_app.ApiError) as exc:
-        api_app.get_data("not_referenced")
+        api_app.get_data("not_referenced", user=ADMIN)
     assert (exc.value.status, exc.value.detail) == (404, "unknown_dataset")
 
 

@@ -18,6 +18,8 @@ from dashkit import config
 from dashkit.api.state import CurrentState, ProjectState, file_signature
 from dashkit.config import ConfigError
 
+from conftest import ADMIN
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -220,7 +222,7 @@ def health(app_module) -> dict:
 
 
 def test_api_serves_changed_config_without_restart(api, root):
-    assert api.get_app()["app"]["title"] == "테스트"
+    assert api.get_app(user=ADMIN)["app"]["title"] == "테스트"
     assert health(api)["config"] == {"valid": True, "errors": 0}
 
     def edit(doc):
@@ -232,23 +234,23 @@ def test_api_serves_changed_config_without_restart(api, root):
     edit(doc)
     path.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
-    body = api.get_app()
+    body = api.get_app(user=ADMIN)
     assert body["app"]["title"] == "다시 읽은 제목"
     assert [t["key"] for t in body["tabs"]] == ["main"]
     # 위젯 섹션이 없어졌으므로 /api/data 허용 목록도 새 설정을 따른다
     with pytest.raises(api.ApiError) as exc:
-        api.get_data("things")
+        api.get_data("things", user=ADMIN)
     assert exc.value.detail == "unknown_dataset"
 
 
 def test_api_keeps_serving_last_valid_config_and_health_says_so(api, root, records):
     break_config(root)
-    assert api.get_app()["app"]["title"] == "테스트"
+    assert api.get_app(user=ADMIN)["app"]["title"] == "테스트"
     body = health(api)
     assert body["status"] == "ok" and body["config"] == {"valid": False, "errors": 1}
     assert api.get_health().status_code == 200
     for _ in range(5):
-        api.get_app()
+        api.get_app(user=ADMIN)
     assert len([m for m in errors_logged(records) if "마지막으로 유효했던 설정" in m]) == 1
 
 
@@ -405,21 +407,21 @@ def test_all_endpoints_use_the_same_current_project(api, root, state_dir, monkey
     path.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     # 처음: embed.json이 없으므로 env PROJECT, 미적용
-    body = api.get_app()
+    body = api.get_app(user=ADMIN)
     assert body["project"] == "basic" and body["applied"] is False
     with pytest.raises(api.ApiError) as exc:
-        api.post_guest_token(api.GuestTokenRequest(dashboard="main"))
+        api.post_guest_token(api.GuestTokenRequest(dashboard="main"), user=ADMIN)
     assert (exc.value.status, exc.value.detail) == (409, "not_applied")
 
     write_embed(state_dir, "other", dashboards=("second",))
-    body = api.get_app()
+    body = api.get_app(user=ADMIN)
     assert body["project"] == "other" and body["app"]["title"] == "다른 프로젝트" and body["applied"] is True
     assert [s["embed_id"] for t in body["tabs"] for s in t["sections"] if s["type"] == "superset"] == ["e-other-second"]
     assert health(api)["project"] == "other" and health(api)["applied"] is True
-    assert api.post_guest_token(api.GuestTokenRequest(dashboard="second"))["token"]
+    assert api.post_guest_token(api.GuestTokenRequest(dashboard="second"), user=ADMIN)["token"]
     with pytest.raises(api.ApiError) as exc:        # 이전 프로젝트의 대시보드 키는 이제 설정에 없다
-        api.post_guest_token(api.GuestTokenRequest(dashboard="main"))
+        api.post_guest_token(api.GuestTokenRequest(dashboard="main"), user=ADMIN)
     assert (exc.value.status, exc.value.detail) == (404, "unknown_dashboard")
     with pytest.raises(api.ApiError) as exc:        # 위젯 탭을 뺐으므로 허용 데이터셋도 없다
-        api.get_data("things")
+        api.get_data("things", user=ADMIN)
     assert exc.value.detail == "unknown_dataset"
