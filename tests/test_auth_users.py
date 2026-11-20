@@ -447,6 +447,40 @@ def test_user_patch_is_all_or_nothing(accounts):
         api("DELETE", f"/api/admin/groups/{g['id']}")
 
 
+def test_admins_saving_each_others_groups_do_not_deadlock(accounts):
+    """두 admin이 서로의 그룹을 동시에 저장해도 교착이 없다(행위자 행도 대상과 함께 한 문장·id 순으로 잠근다)."""
+    import threading
+
+    from dashkit.auth import store
+
+    code, g = api("POST", "/api/admin/groups", {"name": f"dl2-{secrets.token_hex(3)}"})
+    errors: list[str] = []
+    try:
+        for i in range(15):
+            a, b = accounts("admin", log_in=False), accounts("admin", log_in=False)
+            barrier = threading.Barrier(4)
+
+            def run(fn):
+                barrier.wait()
+                try:
+                    fn()
+                except Exception as exc:  # 교착이면 Unavailable
+                    errors.append(type(exc).__name__)
+
+            jobs = [lambda: store.update_user(b["id"], group_ids=[g["id"]], added_by=a["id"]),
+                    lambda: store.update_user(a["id"], group_ids=[g["id"]], added_by=b["id"]),
+                    lambda: store.change_group_members(g["id"], [a["id"]], [], b["id"]),
+                    lambda: store.set_status(b["id"], "active", guard_admin=True)]
+            ts = [threading.Thread(target=run, args=(j,)) for j in jobs]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(20)
+        assert errors == []
+    finally:
+        api("DELETE", f"/api/admin/groups/{g['id']}")
+
+
 def test_user_group_replacement_waits_for_the_user_row(accounts):
     """그룹이 없는 사용자의 그룹 전체 교체도 사용자 행을 먼저 잠가 동시 교체가 합쳐지지 않는다."""
     import threading
