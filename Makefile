@@ -12,14 +12,16 @@ HOST_GID := $(shell id -g)
 TOOLS    := $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) tools
 
 .NOTPARALLEL:
-.PHONY: help info env env-secrets auth-init admin outbox up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down test-logs unit-image golden gen reset down logs dirs _test _test_run _guard_project
+.PHONY: help info env env-secrets auth-init admin outbox up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down test-logs unit-image golden gen reset down logs dirs _test _test_run _guard_project _guard_test
 
 # ---- 작업 폴더 식별자
 # 같은 컴퓨터에서 이 저장소의 복제본이나 git worktree 여러 개가 동시에 빌드·테스트할 수 있다. 브랜치는 소스 파일만
 # 나눠 주고 Docker 이미지 태그, compose 프로젝트 이름, 포트는 컴퓨터 전체가 함께 쓰므로, 폴더마다 달라지게 한다.
-# WT_ID는 이 폴더 경로의 체크섬에서 나온 숫자 5자리다(같은 폴더는 늘 같은 값). `make info`로 볼 수 있다.
+# WT_ID는 이 폴더 경로의 체크섬(32비트, 숫자 최대 10자리)이다. 같은 폴더는 늘 같은 값이고, 서로 다른 폴더가 같은 값을
+# 받을 확률은 약 40억분의 1이다. `make info`로 볼 수 있다. 그래도 겹쳤을 때를 위해 테스트 스택에도 소유 확인을 둔다
+# (아래 _guard_test).
 WT_SUM := $(firstword $(shell printf '%s' "$(CURDIR)" | cksum))
-WT_ID  ?= $(shell expr $(WT_SUM) % 90000 + 10000)
+WT_ID  ?= $(WT_SUM)
 # 이미지 태그의 접미사. compose 파일이 ${IMAGE_SUFFIX:-}로 읽는다(make 없이 compose를 직접 부르면 접미사 없는 이름)
 IMAGE_SUFFIX ?= -$(WT_ID)
 export IMAGE_SUFFIX
@@ -153,18 +155,32 @@ endef
 # GUARDED 목표들이 맨 먼저 거치는 확인(위 "GUARDED" 참고).
 # 스택의 주인은 그 스택을 띄운 compose 파일의 경로로 판정한다. 이 폴더의 docker-compose.yml과 정확히 같을 때만 내 것이다
 # (폴더 경로로 시작하는지만 보면, 이 폴더 아래에 둔 다른 worktree의 스택까지 내 것으로 잘못 본다).
-_guard_project:
-	@name=$$($(COMPOSE) config 2>/dev/null | sed -n 's/^name: //p' | head -1); \
-	[ -n "$$name" ] || name="$(DEV_NAME)"; \
+# 셸 변수 name에 든 compose 프로젝트가 다른 폴더의 것이면 멈춘다(앞에서 name을 정해 둔 뒤 이어 붙여 쓴다).
+define stop_if_foreign
 	owner=$$(docker compose ls -a --format json 2>/dev/null | tr '{' '\n' | grep "\"Name\":\"$$name\"" | sed 's/.*"ConfigFiles":"//; s/".*//'); \
 	first=$${owner%%,*}; \
 	[ -z "$$first" ] || first=$$(readlink -f "$$first" 2>/dev/null || echo "$$first"); \
 	case "$$first" in \
 	  ""|"$(realpath docker-compose.yml)") ;; \
 	  *) echo "✖ compose 프로젝트 '$$name'은 다른 폴더의 스택입니다: $$owner"; \
-	     echo "  이 폴더에서 따로 띄우려면 이름과 포트를 주세요: COMPOSE_PROJECT_NAME=<이름> WEB_PORT=<포트> SUPERSET_PORT=<포트> make up"; \
+	     echo "  개발 스택이면 이름과 포트를 따로 주세요: COMPOSE_PROJECT_NAME=<이름> WEB_PORT=<포트> SUPERSET_PORT=<포트> make up"; \
+	     echo "  테스트 스택이면 식별자를 따로 주세요: WT_ID=<다른 값> make test"; \
 	     exit 1;; \
 	esac
+endef
+
+_guard_project:
+	@name=$$($(COMPOSE) config 2>/dev/null | sed -n 's/^name: //p' | head -1); \
+	[ -n "$$name" ] || name="$(DEV_NAME)"; \
+	$(stop_if_foreign)
+
+# 테스트 스택(TEST_NAME)에도 같은 확인을 한다. 식별자가 다른 폴더와 겹쳤을 때 그 폴더의 테스트 스택을 올리거나 내리거나
+# 볼륨을 지우지 않게 한다. make test의 실행부와 정리(test-down)가 모두 이 확인 뒤에만 돈다.
+_guard_test:
+	@name="$(TEST_NAME)"; \
+	$(stop_if_foreign)
+
+_test test-down test-logs: _guard_test
 
 up: dirs env-secrets
 	$(COMPOSE) up -d --build
