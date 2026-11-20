@@ -11,7 +11,7 @@
 | 2a. 더하기 | 병합됨 | [ohyounjo/dashboard#25](https://github.com/ohyounjo/dashboard/pull/25) | 5번 |
 | 2b. 대량 | 병합됨 | [ohyounjo/dashboard#26](https://github.com/ohyounjo/dashboard/pull/26) | 3번 |
 | 3. 조회 | 병합됨 | [ohyounjo/dashboard#27](https://github.com/ohyounjo/dashboard/pull/27) | 3번 |
-| 4. 구조 변경 | 병합됨(이 보고서가 든 PR) | [ohyounjo/dashboard#28](https://github.com/ohyounjo/dashboard/pull/28) | 8번(7번 지적, 마지막은 아래 "4단계 리뷰") |
+| 4. 구조 변경 | 병합됨(이 보고서가 든 PR) | [ohyounjo/dashboard#28](https://github.com/ohyounjo/dashboard/pull/28) | 8번(상한). 8번째에 P2 하나가 남아 고쳤고, 상한이라 다시 리뷰를 요청하지 않았다 |
 | 5. 선택 기능 · 6. 후순위 | 시작 안 함(범위 밖, 설계서 D7) | | |
 
 모든 PR은 마지막 커밋에서 별도 git worktree로 `make test-unit`과 `make test`를 통과시킨 뒤, GitHub Actions(단위 테스트, 화면 캡처) 통과를 확인하고 `gh pr merge --merge`로 병합했다. 병합 뒤마다 main을 받아 개발 스택에서 `make up && make apply`(devtracker)가 되고 기존 화면이 응답하는 것을 확인했다. 1단계 병합 뒤 개발 스택에 `make data-init`을 실행했다(볼륨은 다시 만들지 않음).
@@ -49,7 +49,7 @@ CP949·탭·세미콜론·표시 이름 머리글을 손대지 않고 받음, �
 | 같은 연산을 Studio와 manager로 실행한 파일이 같다 | `test_studio_api.py::test_structure_ops_write_the_same_bytes_in_studio_and_the_manager` |
 | 합친 뒤 다시 만든 결과가 합치기 전과 같다 | `test_compact_equals_rebuild_and_merged_folder_goes_after_next_load`, `test_compact_crash_is_finished_or_rolled_back[끝까지/되돌림]`, HTTP `test_compact_keeps_rows_and_leaves_one_batch` |
 
-끊김 복구(파일을 바꾼 뒤·커밋 전·커밋 뒤), load 실패 시 전체 되돌림(지문에 들지 않는 변경 포함), 잠금 안의 재검사(전환·이력 해시·검증 사이 바뀐 파일), plan은 복구하지 않음, 다음 폴더 작업이 먼저 정리함도 `tests/test_ingest_structure.py`가 고정한다. 마지막 코드 커밋(`8dcb867`)의 `make test-unit`: 파이썬 단위 446 passed·JS 35 pass·Studio 431 passed, `make test`: 1단계 662 passed·55 skipped, Studio 13, sales-sample 15, chart-gallery 45, 초안 3, 5단계(관리 서비스 데이터·구조 경로) 15 passed — `✔ make test 통과`.
+끊김 복구(파일을 바꾼 뒤·커밋 전·커밋 뒤), load 실패 시 전체 되돌림(지문에 들지 않는 변경 포함), 잠금 안의 재검사(전환·이력 해시·검증 사이 바뀐 파일), plan은 복구하지 않음, 다음 폴더 작업이 먼저 정리함도 `tests/test_ingest_structure.py`가 고정한다. 마지막 코드 커밋(`0df3604`)의 `make test-unit`: 파이썬 단위 446 passed·JS 35 pass·Studio 431 passed, `make test`: 1단계 662 passed·55 skipped, Studio 13, sales-sample 15, chart-gallery 45, 초안 3, 5단계(관리 서비스 데이터·구조 경로) 15 passed — `✔ make test 통과`.
 
 ## 실측
 
@@ -75,7 +75,7 @@ CP949·탭·세미콜론·표시 이름 머리글을 손대지 않고 받음, �
 - **#25(2a, 5번)**: [P1] 미리보기 응답을 그 입력 스냅샷에 묶기, [P2] 업로드 검증 오류의 HTTP 상태, [P2] 미리보기 없이 넣은 업로드 임시 파일 정리, [P2] 진행률 갱신에도 요청 세대 검사, [P2] 반영 안 된 배치 삭제의 커밋 여부를 별도 표식(`loaded_at`)으로, [P2] 입력 초기화 때 진행 중 미리보기 무효화.
 - **#26(2b, 3번)**: [P2] 형식 오류로 뺀 행의 원래 값 보존, [P2] 행을 뺀 최종 내용으로 중복 확인, [P2] 빠진 행 파일 폴더의 수명, [P2] 필수 열 오류 행을 뺀 뒤 total 갱신, [P2] 머리글 조회 뒤 요청 세대 확인.
 - **#27(3단계, 3번)**: [P1] 큰 정수 기본 키를 정밀도 손실 없이(문자열), [P2] 다음 커서도 첫 페이지의 판 유지, [P2] `/api/data` 페이지는 값을 자르지 않음, [P2] 페이지 요청 중 중복 이동 막기.
-- **#28(4단계, 8번)**: [P1] 합친 배치를 일반 되돌리기에서 제외(이름의 `-merged` 표식, 409 `merged_batch`), [P2] 겹치지 않는 이름의 접미사가 63자에서 잘려 무한 반복, [P1] append→replace 전환 검사를 잠금 안에서, [P2] 구조 변경의 커밋 판정에 작업별 표식(작업 전 `loaded_at`), [P2] enum을 text로 넓힐 때 `values` 지우기, [P1] 이력 되돌리기에도 전환 검사(새 설정과 견주기), [P1] 복구는 잠금을 잡은 뒤 기록을 다시 읽기, [P2] text로 넓힐 때 `min`·`max` 지우기, [P2] 폼을 연 때의 revision 보내기, [P1] 이력 해시 검사를 잠금 안에서(+ 파일을 바꾸기 직전 재확인), [P1] plan은 구조 변경을 복구하지 않음, [P2] 정확히 저장할 수 없는 경계 값 거절, [P2] 관리 서비스 시작·폴더 작업이 구조 변경을 먼저 정리.
+- **#28(4단계, 8번)**: [P1] 합친 배치를 일반 되돌리기에서 제외(이름의 `-merged` 표식, 409 `merged_batch`), [P2] 겹치지 않는 이름의 접미사가 63자에서 잘려 무한 반복, [P1] append→replace 전환 검사를 잠금 안에서, [P2] 구조 변경의 커밋 판정에 작업별 표식(작업 전 `loaded_at`), [P2] enum을 text로 넓힐 때 `values` 지우기, [P1] 이력 되돌리기에도 전환 검사(새 설정과 견주기), [P1] 복구는 잠금을 잡은 뒤 기록을 다시 읽기, [P2] text로 넓힐 때 `min`·`max` 지우기, [P2] 폼을 연 때의 revision 보내기, [P1] 이력 해시 검사를 잠금 안에서(+ 파일을 바꾸기 직전 재확인), [P1] plan은 구조 변경을 복구하지 않음, [P2] 정확히 저장할 수 없는 경계 값 거절, [P2] 관리 서비스 시작·폴더 작업이 구조 변경을 먼저 정리, [P2](8번째) 지운 테이블의 데이터 파일이 남은 이름으로 새 테이블을 만들지 않음 — 고쳤으나 리뷰 상한(8번)이라 재리뷰는 받지 않음. 남은 P0·P1 없음.
 
 ## 설계서와 달라진 점
 
