@@ -50,3 +50,16 @@ def test_stack_targets_are_guarded_against_another_folders_stack():
     # 테스트 스택을 지우는 목표는 프로젝트 이름을 직접 지정한다(개발 스택에 닿지 않는다)
     down = re.search(r"^test-down:\n\t(.+)$", MAKEFILE, flags=re.M)
     assert down and "-p $(TEST_NAME)" in down.group(1) and "--profile studio" in down.group(1)
+
+
+def test_guard_uses_the_project_name_compose_resolves():
+    """프로젝트 이름은 .env의 COMPOSE_PROJECT_NAME으로도 정해진다. 확인은 compose가 실제로 쓰는 이름을 봐야 한다(리뷰 지적 회귀)."""
+    guard = MAKEFILE[MAKEFILE.index("\n_guard_project:\n"):]
+    guard = guard[:guard.index("\n\n")]
+    assert "$(COMPOSE) config" in guard and "s/^name: //p" in guard, "compose가 해석한 이름을 먼저 물어야 함"
+    assert '"$(DEV_NAME)"' in guard, "물을 수 없을 때의 대체 값이 있어야 함"
+    # 대체 값도 compose와 같은 우선순위로 읽는다: 환경변수 > .env > .env.example > 폴더 이름
+    dev = re.search(r"^DEV_NAME := (.+)$", MAKEFILE, flags=re.M).group(1)
+    order = [dev.index("$(COMPOSE_PROJECT_NAME)"), dev.index("COMPOSE_PROJECT_NAME,.env)"),
+             dev.index("COMPOSE_PROJECT_NAME,.env.example)"), dev.index("basename")]
+    assert order == sorted(order), dev

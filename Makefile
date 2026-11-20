@@ -50,8 +50,11 @@ export HOST_UID HOST_GID
 STUDIO_PORT ?= $(or $(shell sed -n 's/^STUDIO_PORT=//p' .env 2>/dev/null | tail -1),$(shell sed -n 's/^STUDIO_PORT=//p' .env.example | tail -1),8090)
 UNIT_RUN  := docker run --rm --user $(HOST_UID):$(HOST_GID) -v "$(CURDIR)":/app -w /app $(APP_IMAGE)
 
-# 개발 스택의 compose 프로젝트 이름은 폴더 이름에서 온다(바꾸면 지금 쓰는 스택·볼륨과 끊어지므로 그대로 둔다)
-DEV_NAME := $(or $(COMPOSE_PROJECT_NAME),$(shell basename "$(CURDIR)" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9_-'))
+# 개발 스택의 compose 프로젝트 이름. 따로 정하지 않으면 폴더 이름이다(바꾸면 지금 쓰는 스택·볼륨과 끊어지므로 그대로 둔다).
+# compose와 같은 우선순위로 읽는다: 환경변수 > .env > .env.example > 폴더 이름. 아래 확인(_guard_project)은 compose가
+# 실제로 해석한 이름을 먼저 묻고, 물을 수 없을 때(.env가 아직 없을 때 등)만 이 값을 쓴다.
+env_value = $(shell sed -n 's/^$(1)=//p' $(2) 2>/dev/null | tail -1 | tr -d "\"'")
+DEV_NAME := $(or $(COMPOSE_PROJECT_NAME),$(call env_value,COMPOSE_PROJECT_NAME,.env),$(call env_value,COMPOSE_PROJECT_NAME,.env.example),$(shell basename "$(CURDIR)" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9_-'))
 
 # 폴더 이름이 같은 다른 복제본·worktree가 이미 같은 compose 프로젝트 이름으로 스택을 띄웠으면, 그 스택에 닿는 목표를
 # 모두 멈춘다(그대로 두면 그쪽 컨테이너를 이 폴더의 코드와 마운트로 다시 만들거나, 그쪽 DB에 적재하거나, 내려 버린다).
@@ -149,10 +152,12 @@ endef
 
 # GUARDED 목표들이 맨 먼저 거치는 확인(위 "GUARDED" 참고)
 _guard_project:
-	@owner=$$(docker compose ls -a --format json 2>/dev/null | tr '{' '\n' | grep '"Name":"$(DEV_NAME)"' | sed 's/.*"ConfigFiles":"//; s/".*//'); \
+	@name=$$($(COMPOSE) config 2>/dev/null | sed -n 's/^name: //p' | head -1); \
+	[ -n "$$name" ] || name="$(DEV_NAME)"; \
+	owner=$$(docker compose ls -a --format json 2>/dev/null | tr '{' '\n' | grep "\"Name\":\"$$name\"" | sed 's/.*"ConfigFiles":"//; s/".*//'); \
 	case "$$owner" in \
 	  ""|"$(CURDIR)"/*) ;; \
-	  *) echo "✖ compose 프로젝트 '$(DEV_NAME)'은 다른 폴더의 스택입니다: $$owner"; \
+	  *) echo "✖ compose 프로젝트 '$$name'은 다른 폴더의 스택입니다: $$owner"; \
 	     echo "  이 폴더에서 따로 띄우려면 이름과 포트를 주세요: COMPOSE_PROJECT_NAME=<이름> WEB_PORT=<포트> SUPERSET_PORT=<포트> make up"; \
 	     exit 1;; \
 	esac
