@@ -419,6 +419,34 @@ def test_member_and_user_group_saves_do_not_deadlock(accounts):
         api("DELETE", f"/api/admin/groups/{g['id']}")
 
 
+def test_user_patch_is_all_or_nothing(accounts):
+    """사용자 PATCH(상태·그룹)는 한 트랜잭션이다. 저장에서 기다리는 사이 대상이 승급되면 operator의 요청은 403이고
+    정지도 그룹 변경도 반영되지 않는다."""
+    import threading
+
+    op = accounts("operator")
+    target = accounts("user")
+    code, g = api("POST", "/api/admin/groups", {"name": f"patch-tx-{secrets.token_hex(3)}"})
+    try:
+        result: dict = {}
+        with db.auth_conn() as conn:
+            conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (target["id"],))
+            t = threading.Thread(target=lambda: result.setdefault("r", as_(op, "PATCH", f"/api/admin/users/{target['id']}",
+                                                                            {"status": "suspended", "group_ids": [g["id"]]})))
+            t.start()
+            t.join(1.5)
+            assert t.is_alive()
+            conn.execute("UPDATE dashkit_auth.users SET role = 'admin' WHERE id = %s", (target["id"],))
+            conn.commit()
+        t.join(10)
+        assert (result["r"][0], result["r"][1]["detail"]) == (403, "forbidden")
+        (status,), = sql("SELECT status FROM dashkit_auth.users WHERE id = %s", (target["id"],))
+        assert status == "active" and app_status(target["cookie"]) == 200     # 정지·세션 삭제도 되돌려졌다
+        assert api("GET", f"/api/admin/groups/{g['id']}")[1]["members"] == []
+    finally:
+        api("DELETE", f"/api/admin/groups/{g['id']}")
+
+
 def test_user_group_replacement_waits_for_the_user_row(accounts):
     """그룹이 없는 사용자의 그룹 전체 교체도 사용자 행을 먼저 잠가 동시 교체가 합쳐지지 않는다."""
     import threading

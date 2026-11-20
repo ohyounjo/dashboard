@@ -527,25 +527,28 @@ def patch_user(user_id: str, body: UserPatch, request: Request, actor: Principal
             _protect_admins(actor, target, removes_admin=True)
     groups = _check_groups(body.group_ids) if body.group_ids is not None else None
 
-    if body.role is not None and body.role != target["role"]:
-        with store_checks():   # 마지막 활성 admin인지는 같은 트랜잭션에서 활성 admin 행을 잠그고 다시 본다
-            store.set_role(user_id, body.role, guard_admin=target["role"] == "admin")
+    role_change = body.role is not None and body.role != target["role"]
+    status_change = body.status is not None and body.status != target["status"]
+    # 등급·상태·그룹을 한 트랜잭션으로 바꾼다. 대상 행을 잠근 뒤 지금 등급·상태로 권한을 다시 보고,
+    # 어느 단계든 실패하면 아무것도 바뀌지 않는다(마지막 활성 admin도 같은 트랜잭션에서 다시 본다)
+    with store_checks():
+        changed = store.update_user(
+            user_id, role=body.role if role_change else None, status=body.status if status_change else None,
+            group_ids=[g["id"] for g in groups] if groups is not None else None, added_by=actor.id,
+            roles=manage_roles(actor),
+            guard_admin=target["role"] == "admin" and (role_change or (status_change and body.status == "suspended")),
+        )
+    if "role_from" in changed:
         audit(request, actor, "user.role", target_type="user", target_id=user_id, target_label=target["email"],
-              detail={"from": target["role"], "to": body.role})
-    if body.status is not None and body.status != target["status"]:
-        with store_checks():
-            store.set_status(user_id, body.status, guard_admin=body.status == "suspended" and target["role"] == "admin",
-                             roles=manage_roles(actor))
+              detail={"from": changed["role_from"], "to": body.role})
+    if "status_from" in changed:
         audit(request, actor, "user.suspend" if body.status == "suspended" else "user.unsuspend",
               target_type="user", target_id=user_id, target_label=target["email"])
-    if groups is not None:
-        with store_checks():
-            added, removed = store.set_user_groups(user_id, [g["id"] for g in groups], actor.id,
-                                                   roles=manage_roles(actor))
-        if added or removed:
-            names = {g["id"]: g["name"] for g in groups + target["groups"]}
-            audit(request, actor, "user.groups", target_type="user", target_id=user_id, target_label=target["email"],
-                  detail={"added": [names.get(i, i) for i in added], "removed": [names.get(i, i) for i in removed]})
+    if changed.get("groups_added") or changed.get("groups_removed"):
+        names = {g["id"]: g["name"] for g in (groups or []) + target["groups"]}
+        audit(request, actor, "user.groups", target_type="user", target_id=user_id, target_label=target["email"],
+              detail={"added": [names.get(i, i) for i in changed["groups_added"]],
+                      "removed": [names.get(i, i) for i in changed["groups_removed"]]})
     return _detail(_load_target(user_id))
 
 

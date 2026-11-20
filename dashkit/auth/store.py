@@ -872,17 +872,6 @@ def groups_by_ids(ids: list[str]) -> list[dict[str, Any]]:
     return [{"id": str(r["id"]), "name": r["name"]} for r in rows]
 
 
-def set_role(user_id: str, role: str, *, guard_admin: bool = False) -> None:
-    """등급 변경. 그 사용자의 세션과 쓰지 않은 일회용 토큰을 함께 지운다(user일 때 발급돼 operator가 볼 수 있었던 링크가
-    승급 뒤에 쓰이지 않게). guard_admin이면 같은 트랜잭션에서 마지막 활성 admin인지 다시 본다."""
-    with connection() as conn, conn.transaction():
-        if guard_admin:
-            _guard_last_admin(conn, user_id)
-        conn.execute("UPDATE dashkit_auth.users SET role = %s WHERE id = %s", (role, user_id))
-        conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s", (user_id,))
-        conn.execute("DELETE FROM dashkit_auth.tokens WHERE user_id = %s", (user_id,))
-
-
 def set_status(user_id: str, status: str, *, guard_admin: bool = False, roles: Roles = None) -> None:
     """active ↔ suspended. 정지하면 세션을 지운다(그룹 구성·접속 기록·비밀번호는 그대로).
     guard_admin이면 마지막 활성 admin인지, roles면 지금 등급을, 그리고 지금 상태가 active·suspended인지 잠근 뒤 다시 본다."""
@@ -916,6 +905,43 @@ def set_user_groups(user_id: str, group_ids: list[str], added_by: str | None, *,
             conn.execute("INSERT INTO dashkit_auth.group_members (group_id, user_id, added_by) VALUES (%s, %s, %s)",
                          (gid, user_id, added_by))
     return sorted(after - before), sorted(before - after)
+
+
+def update_user(user_id: str, *, role: str | None = None, status: str | None = None,
+                group_ids: list[str] | None = None, added_by: str | None = None, roles: Roles = None,
+                guard_admin: bool = False) -> dict[str, Any]:
+    """사용자 PATCH를 한 트랜잭션으로: (guard_admin이면 활성 admin 행 →) 대상 사용자 행을 잠그고 지금 등급·상태로 권한을
+    다시 본 뒤 등급·상태·그룹을 모두 바꾼다. 어느 단계든 실패하면 아무것도 바뀌지 않는다.
+    등급 변경은 세션과 쓰지 않은 토큰을, 정지는 세션을 함께 지운다. 바뀐 것 {role_from, status_from, groups_added, groups_removed}."""
+    out: dict[str, Any] = {}
+    with connection() as conn, conn.transaction():
+        if guard_admin:
+            _guard_last_admin(conn, user_id)
+        statuses = ("active", "suspended") if status is not None else None
+        (row,) = _lock_targets(conn, [user_id], roles, statuses)
+        if role is not None and role != row["role"]:
+            conn.execute("UPDATE dashkit_auth.users SET role = %s WHERE id = %s", (role, user_id))
+            conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s", (user_id,))
+            conn.execute("DELETE FROM dashkit_auth.tokens WHERE user_id = %s", (user_id,))
+            out["role_from"] = row["role"]
+        if status is not None and status != row["status"]:
+            conn.execute("UPDATE dashkit_auth.users SET status = %s WHERE id = %s", (status, user_id))
+            if status == "suspended":
+                conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s", (user_id,))
+            out["status_from"] = row["status"]
+        if group_ids is not None:
+            before = {str(r["group_id"]) for r in conn.execute(
+                "SELECT group_id FROM dashkit_auth.group_members WHERE user_id = %s", (user_id,)).fetchall()}
+            after = set(group_ids)
+            for gid in sorted(before - after):
+                conn.execute("DELETE FROM dashkit_auth.group_members WHERE user_id = %s AND group_id = %s", (user_id, gid))
+            for gid in sorted(after - before):
+                if not conn.execute("""INSERT INTO dashkit_auth.group_members (group_id, user_id, added_by)
+                                       SELECT id, %s, %s FROM dashkit_auth.groups WHERE id = %s""",
+                                    (user_id, added_by, gid)).rowcount:
+                    raise GroupNotFound()
+            out["groups_added"], out["groups_removed"] = sorted(after - before), sorted(before - after)
+    return out
 
 
 def create_invited_user(email: str, role: str, created_by: str, group_ids: list[str],
