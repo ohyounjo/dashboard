@@ -10,7 +10,7 @@
 
 ## 프로젝트 규칙
 - 비밀번호·토큰은 코드나 커밋에 넣지 않고 환경 변수로만 받는다.
-- DB 접속은 `dashkit/db.py`의 owner/reader 구분을 지킨다. 읽기 경로에서는 reader 계정만 쓴다.
+- DB 접속은 `dashkit/db.py`의 계정 구분을 지킨다. 읽기 경로에서는 읽기 전용 계정만 쓴다(대시보드는 `dash_reader`, 운용자 조회는 `dash_inspect`). owner 계정은 쓰기 작업(로더, 데이터 추가 적재)에서만 연다.
 - 타입 힌트를 유지한다.
 
 ## Review guidelines
@@ -20,7 +20,7 @@
   2. 보안: 비밀값 하드코딩, SQL 인젝션, guest token·권한 검증 누락
   3. `contracts/` 문서(API·스키마 계약)와 구현이 어긋나는 부분
   4. 동작 변경에 대한 테스트 누락
-- 읽기 경로에서 owner DB 계정을 쓰면 P1로 지적한다.
+- 읽기 경로에서 읽기 전용 계정(`dash_reader`, `dash_inspect`)이 아닌 계정(owner 등)을 쓰면 P1로 지적한다.
 - 따옴표 종류, 줄바꿈 같은 취향 수준의 스타일 지적은 남기지 않는다.
 - `contracts/superset-6.1.0-export/`는 Superset에서 내보낸 원본이므로 리뷰하지 않는다.
 

@@ -267,7 +267,10 @@ def _check_schema_refs(project: Project) -> list[str]:
         base = ["tables", tname]
         if is_reserved(tname):
             errors.append(f"{f}:{fmt_path(base)}: 테이블 이름 '{tname}'은 SQL 예약어")
+        if "on_conflict" in table and table.get("mode") != "append":
+            errors.append(f"{f}:{fmt_path(base + ['on_conflict'])}: on_conflict는 mode: append인 테이블에만 씀")
         cols = table["columns"]
+        errors += _check_aliases(f, base, cols)
         for pk in table["primary_key"]:
             if pk not in cols:
                 errors.append(f"{f}:{fmt_path(base + ['primary_key'])}: 열 '{pk}'가 columns에 없음")
@@ -276,6 +279,8 @@ def _check_schema_refs(project: Project) -> list[str]:
             if is_reserved(cname):
                 errors.append(f"{f}:{fmt_path(cpath)}: 열 이름 '{cname}'은 SQL 예약어")
             errors += _check_bounds(f, cpath, col)
+            if "default" in col:
+                errors += _check_default(f, cpath, cname, col, table["primary_key"])
             if "pattern" in col:
                 try:
                     re.compile(col["pattern"])
@@ -299,6 +304,41 @@ def _check_schema_refs(project: Project) -> list[str]:
         except ConfigError as exc:
             errors += exc.errors
     return errors
+
+
+def _check_aliases(f: str, base: list, cols: dict) -> list[str]:
+    """aliases는 같은 테이블의 다른 열 이름이나 다른 열의 aliases와 겹칠 수 없다(머리글 하나가 두 열에 맞으면 안 된다)."""
+    errors: list[str] = []
+    owner: dict[str, str] = {}
+    for cname, col in cols.items():
+        for i, alias in enumerate(col.get("aliases") or []):
+            where = f"{f}:{fmt_path(base + ['columns', cname, 'aliases', i])}"
+            if alias in cols and alias != cname:
+                errors.append(f"{where}: '{alias}'는 같은 테이블의 열 이름")
+            elif alias in owner and owner[alias] != cname:
+                errors.append(f"{where}: '{alias}'가 열 '{owner[alias]}'의 aliases와 겹침")
+            owner.setdefault(alias, cname)
+    return errors
+
+
+def _check_default(f: str, cpath: list, cname: str, col: dict, primary_key: list) -> list[str]:
+    """default는 그 열의 type·규칙을 통과하는 값이어야 한다. 기본 키 열에는 쓸 수 없다."""
+    from .loader.validate import _check_value, _parse
+
+    where = f"{f}:{fmt_path(cpath + ['default'])}"
+    if cname in primary_key:
+        return [f"{where}: 기본 키 열에는 default를 쓸 수 없음"]
+    raw = col["default"]
+    text = ("true" if raw else "false") if isinstance(raw, bool) else str(raw)
+    try:
+        value = _parse(text, col)
+    except ValueError as exc:
+        return [f"{where}: {exc}"]
+    try:
+        reasons = _check_value(value, text, col)
+    except (TypeError, ValueError):
+        reasons = []
+    return [f"{where}: {r}" for r in reasons]
 
 
 def _check_bounds(f: str, cpath: list, col: dict) -> list[str]:

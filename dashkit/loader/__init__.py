@@ -1,9 +1,13 @@
-"""CSV → raw 테이블 → dash 뷰 (reference/plan.md 6-2절 2번).
+"""CSV → raw 테이블 → dash 뷰 (reference/plan.md 6-2절 2번, 누적 테이블은 reference/data-design.md 4·5절).
 
-1단계(DB 접속 전): CSV를 schema.yaml 규칙으로 검증한다. 오류가 하나라도 있으면 DB를 건드리지 않는다.
-2단계: 트랜잭션 하나에서 raw·dash 스키마를 통째로 다시 만든다. 어느 단계든 실패하면 롤백한다.
-        같은 트랜잭션에서 적재 기록(dashkit_meta: 행 지문과 적재 스냅샷, loader/record.py)도 다시 만든다.
-        `dashkit plan`이 dash_reader 계정만으로 CSV와 지난 적재를 비교하는 데 쓴다.
+1단계(DB 접속 전): replace 테이블의 CSV를 schema.yaml 규칙으로 검증한다. 오류가 하나라도 있으면 DB를 건드리지 않는다.
+2단계: 데이터 DB의 쓰기 잠금(dashkit/project/locks.py)을 잡고, 이 프로젝트 폴더의 끊긴 폴더 작업을 정리한다
+        (dashkit/ingest/recover.py, load 방식). 누적(append) 테이블의 배치 파일 이름을 확인한다.
+3단계: 트랜잭션 하나에서 raw·dash 스키마를 통째로 다시 만든다. 어느 단계든 실패하면 롤백한다.
+        replace 테이블은 지금처럼 CSV를 그대로 넣고, append 테이블은 빈 테이블에 배치를 번호순으로 하나씩
+        추가 적재와 같은 함수(dashkit/ingest/apply.py의 stage_batch → apply_batch)로 넣는다(5-7).
+        같은 트랜잭션에서 적재 기록(dashkit_meta: 행 지문, 배치 기록, 적재 스냅샷, loader/record.py)도 다시 만든다.
+        `dashkit plan`이 dash_reader 계정만으로 원본 파일과 지난 적재를 비교하는 데 쓴다.
 """
 from __future__ import annotations
 
@@ -21,7 +25,17 @@ from .validate import TableData, validate_csv
 RAW = "raw"
 DASH = "dash"
 LOCK_TIMEOUT = "10s"
+LOCK_WAIT_MS = 10_000          # 쓰기 잠금을 기다리는 시간(CLI·Studio의 apply). 관리 서비스는 MANAGE_LOCK_WAIT_MS
 MAX_KEYS_SHOWN = 20
+
+
+def table_mode(table: dict) -> str:
+    return table.get("mode") or "replace"
+
+
+def inspect_role() -> str:
+    """운용자 조회용 읽기 계정(dash_inspect). 로더가 적재 때마다 raw·dash·dashkit_meta의 SELECT를 준다."""
+    return os.environ.get("DATA_DB_INSPECT_USER") or "dash_inspect"
 
 _PG_TYPES = {
     "text": "text",
@@ -47,10 +61,15 @@ def _pg_message(exc: BaseException) -> str:
     return f"{msg} ({detail})" if detail else msg
 
 
-def load(project: Project, *, dbname: str | None = None) -> dict[str, int]:
-    """CSV를 검증하고 적재한다. 테이블 → 적재 행 수(적재 순서). 실패하면 LoadError."""
+def load(project: Project, *, dbname: str | None = None, lock_wait_ms: int = LOCK_WAIT_MS) -> dict[str, int]:
+    """원본 파일을 검증하고 적재한다. 테이블 → 적재 행 수(적재 순서). 실패하면 LoadError."""
+    from ..ingest import recover as ingest_recover
+    from ..project import locks
+
     order = table_order(project)
-    data, errors = validate_csv(project.schema, project.data_dir, order)
+    tables = project.schema["tables"]
+    replace_order = [t for t in order if table_mode(tables[t]) != "append"]
+    data, errors = validate_csv(project.schema, project.data_dir, replace_order)
     if errors:
         raise LoadError(errors)
 
@@ -61,16 +80,46 @@ def load(project: Project, *, dbname: str | None = None) -> dict[str, int]:
     except (psycopg.Error, RuntimeError) as exc:
         raise LoadError([f"DB 접속 실패: {_pg_message(exc)}"]) from None
     try:
+        try:
+            locks.acquire(conn, lock_wait_ms)
+        except locks.LockBusy:
+            raise LoadError(["다른 쓰기 작업(데이터 추가·적재)이 진행 중이라 쓰기 잠금을 잡지 못함. 끝난 뒤 다시 실행하세요"]) from None
+        except psycopg.Error as exc:
+            raise LoadError([f"DB 오류: {_pg_message(exc)}"]) from None
+        try:
+            ingest_recover.recover(project, mode="load")
+        except ingest_recover.RecoverError as exc:
+            raise LoadError(exc.errors) from None
+        sources, errors = _sources(project, order)
+        if errors:
+            raise LoadError(errors)
         with conn.transaction():
             with conn.cursor() as cur:
-                _rebuild(project, cur, order, data, as_of_sql)
+                counts = _rebuild(project, cur, order, data, sources, as_of_sql)
     except _StepError as exc:
         raise LoadError(exc.errors) from None
     except psycopg.Error as exc:
         raise LoadError([f"DB 오류: {_pg_message(exc)}"]) from None
     finally:
+        locks.release(conn)
         conn.close()
-    return {t: len(data[t].rows) for t in order}
+    return counts
+
+
+def _sources(project: Project, order: list[str]) -> tuple[dict[str, list], list[str]]:
+    """append 테이블의 원본 파일(읽는 순서)과 이름 오류. replace 테이블은 넣지 않는다."""
+    from ..ingest import batches
+
+    out: dict[str, list] = {}
+    errors: list[str] = []
+    for tname in order:
+        table = project.schema["tables"][tname]
+        if table_mode(table) != "append":
+            continue
+        files, errs = batches.sources(project.data_dir, tname, "append")
+        out[tname] = files
+        errors += errs
+    return out, errors
 
 
 class _StepError(Exception):
@@ -101,7 +150,10 @@ def _step(cur: psycopg.Cursor, label: str, query) -> None:
 
 
 def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
-             data: dict[str, TableData], as_of_sql: str) -> None:
+             data: dict[str, TableData], sources: dict[str, list], as_of_sql: str) -> dict[str, int]:
+    from ..ingest import apply as ingest_apply
+    from ..ingest import batches, ledger
+
     tables = project.schema["tables"]
     raw, dash = sql.Identifier(RAW), sql.Identifier(DASH)
 
@@ -114,17 +166,53 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
     for tname in order:
         _step(cur, f"schema.yaml:tables.{tname}: 테이블 생성", _create_table_sql(tname, tables[tname]))
 
-    # 데이터
+    # 데이터. replace 테이블은 CSV 그대로, append 테이블은 배치를 번호순으로 apply_batch로(추가 적재와 같은 길)
+    counts: dict[str, int] = {}
+    batch_rows: list[tuple] = []
+    errors: list[str] = []
     for tname in order:
-        td = data[tname]
-        stmt = sql.SQL("COPY {}.{} ({}) FROM STDIN").format(
-            raw, sql.Identifier(tname), sql.SQL(", ").join(map(sql.Identifier, td.columns)))
-        try:
-            with cur.copy(stmt) as copy:
-                for row in td.rows:
-                    copy.write_row(row)
-        except psycopg.Error as exc:
-            raise _StepError([f"data/{tname}.csv: 적재 실패: {_pg_message(exc)}"]) from None
+        if tname in data:
+            td = data[tname]
+            stmt = sql.SQL("COPY {}.{} ({}) FROM STDIN").format(
+                raw, sql.Identifier(tname), sql.SQL(", ").join(map(sql.Identifier, td.columns)))
+            try:
+                with cur.copy(stmt) as copy:
+                    for row in td.rows:
+                        copy.write_row(row)
+            except psycopg.Error as exc:
+                raise _StepError([f"data/{tname}.csv: 적재 실패: {_pg_message(exc)}"]) from None
+            counts[tname] = len(td.rows)
+            n = len(td.rows)
+            batch_rows.append(ledger.row(tname, f"{tname}.csv",
+                                         batches.content_hash(batches.first_file(project.data_dir, tname)),
+                                         {"total": n, "inserted": n, "updated": 0, "skipped": 0, "unchanged": 0}))
+            continue
+        counts[tname] = 0
+        failed = False
+        for src in sources.get(tname, []):
+            label = ingest_apply.source_label(src)
+            try:
+                staged = ingest_apply.stage_source(cur, project.schema, src)
+                try:
+                    if not staged.ok:
+                        errors += staged.errors
+                        failed = True
+                        continue
+                    if failed or errors:
+                        continue        # 앞 배치가 실패했으면 넣지 않고 나머지 파일의 검증 오류만 모은다
+                    result = ingest_apply.apply_batch(cur, project.schema, staged)
+                finally:
+                    ingest_apply.drop_stage(cur, staged)
+            except ingest_apply.BatchError as exc:
+                errors += [e if e.startswith(("data/", label)) else f"{label}: {e}" for e in (exc.errors or [exc.message])]
+                failed = True
+                continue
+            except psycopg.Error as exc:
+                raise _StepError([f"{label}: 적재 실패: {_pg_message(exc)}"]) from None
+            counts[tname] += result["inserted"]
+            batch_rows.append(ledger.row(tname, src.name, staged.sha256 or "", result))
+    if errors:
+        raise _StepError(errors)
 
     # dash 스키마, 기준일 함수
     _step(cur, "스키마 생성", sql.SQL("CREATE SCHEMA {}").format(dash))
@@ -133,7 +221,6 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
     ).format(dash, sql.Literal(as_of_sql)))
 
     # 데이터셋 뷰(설정 순서. 뒤 뷰가 앞 뷰를 쓸 수 있다)
-    errors: list[str] = []
     for key, ds in project.dashboard["datasets"].items():
         if "table" in ds:
             body = sql.SQL("SELECT * FROM {}.{}").format(raw, sql.Identifier(ds["table"]))
@@ -148,20 +235,8 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
     if errors:
         raise _StepError(errors)
 
-    # checks(위반 행이 하나라도 있으면 실패). 모든 규칙을 실행해 결과를 모은다.
-    for tname in order:
-        for i, check in enumerate(tables[tname]["checks"]):
-            try:
-                with cur.connection.transaction():
-                    cur.execute(sql.SQL(check["sql"].strip().rstrip(";").strip()))
-                    rows = cur.fetchall() if cur.description else []
-            except psycopg.Error as exc:
-                errors.append(f"schema.yaml:tables.{tname}.checks[{i}] ({check['name']}): SQL 오류: {_pg_message(exc)}")
-                continue
-            if rows:
-                keys = [str(r[0]) for r in rows[:MAX_KEYS_SHOWN]]
-                more = f" 외 {len(rows) - MAX_KEYS_SHOWN}건" if len(rows) > MAX_KEYS_SHOWN else ""
-                errors.append(f"{check['name']}: 위반 키 {', '.join(keys)}{more}")
+    # checks(위반 행이 하나라도 있으면 실패). 모든 규칙을 실행해 결과를 모은다. 추가 적재와 같은 함수다
+    errors = ingest_apply.run_checks(cur, project.schema, order)
     if errors:
         raise _StepError(errors)
 
@@ -177,7 +252,7 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
     if errors:
         raise _StepError(errors)
 
-    # 읽기 전용 계정 권한
+    # 읽기 전용 계정 권한. 대시보드용 dash_reader는 dash만, 운용자 조회용 dash_inspect(있으면)는 raw·dash 읽기만
     reader = sql.Identifier(os.environ.get("DATA_DB_READER_USER") or "dash_reader")
     label = "읽기 계정 권한 부여"
     _step(cur, label, sql.SQL("REVOKE ALL ON SCHEMA {} FROM PUBLIC").format(raw))
@@ -185,14 +260,25 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
     _step(cur, label, sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(dash, reader))
     _step(cur, label, sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}").format(dash, reader))
     _step(cur, label, sql.SQL("GRANT EXECUTE ON FUNCTION {}.as_of() TO {}").format(dash, reader))
+    readers: list[str] = []
+    cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (inspect_role(),))
+    if cur.fetchone():
+        inspect = sql.Identifier(inspect_role())
+        readers.append(inspect_role())
+        for schema in (raw, dash):
+            _step(cur, label, sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(schema, inspect))
+            _step(cur, label, sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}").format(schema, inspect))
+        _step(cur, label, sql.SQL("GRANT EXECUTE ON FUNCTION {}.as_of() TO {}").format(dash, inspect))
 
-    # 적재 기록(plan이 dash_reader로 읽는다). 원본 값은 넣지 않는다(기본 키의 해시와 행 해시뿐)
-    prints = {t: record.fingerprints(tables[t], data[t].rows) for t in order}
-    snap = record.snapshot(project.name, project.schema, project.dashboard, {t: len(data[t].rows) for t in order})
+    # 적재 기록(plan이 dash_reader로 읽는다). 원본 값은 넣지 않는다(기본 키의 해시와 행 해시, 파일 이름·해시·행 수뿐).
+    # 누적 테이블은 행 지문을 남기지 않는다(배치 단위로 비교한다)
+    prints = {t: record.fingerprints(tables[t], data[t].rows) for t in order if t in data}
+    snap = record.snapshot(project.name, project.schema, project.dashboard, counts)
     try:
-        record.write(cur, snap, prints, os.environ.get("DATA_DB_READER_USER") or "dash_reader")
+        record.write(cur, snap, prints, os.environ.get("DATA_DB_READER_USER") or "dash_reader", batch_rows, readers)
     except psycopg.Error as exc:
         raise _StepError([f"적재 기록({record.META}) 쓰기: {_pg_message(exc)}"]) from None
+    return {t: counts[t] for t in order}
 
 
 def _create_table_sql(tname: str, table: dict) -> sql.Composed:
@@ -213,4 +299,4 @@ def _create_table_sql(tname: str, table: dict) -> sql.Composed:
         sql.Identifier(RAW), sql.Identifier(tname), sql.SQL(", ").join(parts))
 
 
-__all__ = ["LoadError", "load"]
+__all__ = ["LoadError", "load", "table_mode"]

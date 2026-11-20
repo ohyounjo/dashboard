@@ -1,4 +1,4 @@
-"""python -m dashkit {check|plan|load|sync|migrate|api|gen|new|studio|auth}
+"""python -m dashkit {check|plan|load|sync|migrate|api|gen|new|studio|manage|auth}
 
 `new <이름> --from <CSV 폴더>`는 CSV에서 프로젝트 초안을 만든다(PROJECT를 쓰지 않는다).
 `auth {init|create-admin}`은 인증 DB를 다룬다(dashkit/auth/cli.py, PROJECT를 쓰지 않는다).
@@ -26,7 +26,16 @@ def _fail(title: str, errors: list[str]) -> int:
 
 
 def cmd_check(_args) -> int:
+    from .ingest.batches import list_batches
+
     project = _project()
+    # 누적 테이블의 배치 파일 이름 규칙(contracts/ingest.md "배치 폴더"). 어기면 load가 그 테이블을 읽지 않는다
+    errors: list[str] = []
+    for tname, table in project.schema["tables"].items():
+        if table.get("mode") == "append":
+            errors += list_batches(project.data_dir, tname)[1]
+    if errors:
+        return _fail("설정 오류", errors)
     print(f"✔ check: {project.name} 설정이 유효함")
     return 0
 
@@ -146,6 +155,14 @@ def cmd_studio(args) -> int:
     return 0
 
 
+def cmd_manage(args) -> int:
+    """관리 서비스(contracts/manage.md). 로그인한 운용자만 쓴다. 포트는 밖에 열지 않는다(nginx의 /api/manage/로만)."""
+    import uvicorn
+
+    uvicorn.run("dashkit.manage.app:app", host=args.host, port=args.port, proxy_headers=True)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="dashkit")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -174,6 +191,10 @@ def main(argv: list[str] | None = None) -> int:
     studio.add_argument("--host", default="0.0.0.0")
     studio.add_argument("--port", type=int, default=8090)
     studio.set_defaults(fn=cmd_studio)
+    manage = sub.add_parser("manage", help="관리 서비스(운용자의 데이터 운용 API, /api/manage)")
+    manage.add_argument("--host", default="0.0.0.0")
+    manage.add_argument("--port", type=int, default=8100)
+    manage.set_defaults(fn=cmd_manage)
     from .auth import cli as auth_cli
 
     auth_cli.register(sub)

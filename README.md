@@ -42,6 +42,8 @@ make admin EMAIL=<내 사내 메일 주소>
 | `make up` | 기동 후 healthy 대기 |
 | `make auth-init` | 인증 DB 만들기·최신으로 올리기(여러 번 실행해도 됨) |
 | `make admin EMAIL=<주소>` | 첫 admin 계정 만들기(비밀번호는 프롬프트) |
+| `make data-init` | 운용자 조회 계정(`dash_inspect`) 만들기(이미 있는 볼륨. 여러 번 실행해도 됨) |
+| `make manage` / `make manage-down` | 관리 서비스(운용 화면의 데이터 메뉴, `/api/manage`) 띄우기·내리기(선택) |
 | `make check` | 설정만 검사(DB 불필요) |
 | `make plan` | 적용하면 무엇이 바뀌는지 미리 보기(아무것도 바꾸지 않음. 선택) |
 | `make apply` | 검사 → 적재 → Superset 반영. **`projects/`에서 무엇을 바꿨든 이것 하나** |
@@ -98,6 +100,23 @@ data/tasks.csv:18:id: 기본 키 중복 (T1, 처음 나온 줄 2)
 - 테이블 규칙: `checks`. 위반 행을 돌려주는 SQL을 씁니다. 한 행이라도 나오면 적재 전체가 롤백됩니다.
 - 열 이름은 snake_case로 쓰고 SQL 예약어(`end`, `start`, `order` 등)는 쓸 수 없습니다.
 - 형식의 기준은 [contracts/schema.schema.json](contracts/schema.schema.json)입니다.
+
+### 계속 쌓이는 데이터: 누적(append) 테이블
+
+기록이 계속 쌓이는 테이블은 `mode: append`로 두면 파일을 통째로 바꾸지 않고 **배치를 더합니다**.
+
+```yaml
+tables:
+  records:
+    mode: append          # replace(기본) | append
+    on_conflict: update   # 같은 키가 다시 오면: error(기본) | skip | update
+    primary_key: id
+    columns: { … }        # 열마다 default(새 행에 빠진 열의 값), aliases(올린 파일의 다른 머리글 이름)를 쓸 수 있다
+```
+
+- 원본은 `data/<테이블>.csv`(있으면 첫 배치)와 `data/<테이블>/`의 배치 파일(`<번호>-….csv` 또는 `.csv.gz`)이고, 로더는 번호순으로 차례로 넣습니다. 배치는 머리글에 일부 열만 있어도 됩니다(기본 키 열은 반드시).
+- DB는 여전히 이 파일들의 결과물입니다. 새 머신에서 `make apply`하면 같은 행이 나옵니다. 운영 프로젝트의 배치 폴더는 저장소에 넣지 않고 폴더째 백업합니다.
+- 형식과 규칙은 [contracts/ingest.md](contracts/ingest.md)에 있습니다.
 
 ## 2. 차트 바꾸기
 

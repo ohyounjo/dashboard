@@ -28,6 +28,7 @@
 | 1단계(`26b69c9`) | 형식 변화 없음. 축약 6종의 정의가 차트 유형 레지스트리(`dashkit/charts/<viz>.yaml`)로 옮겨졌다 | [contracts/chart-shorthand.md](contracts/chart-shorthand.md) |
 | 2단계(`cb55abf`) | 축약 유형 16종 추가, 모두 **22종**: `area`, `mixed`, `scatter`, `bubble`, `histogram`, `box_plot`, `heatmap`, `pivot_table`, `funnel`, `gauge`, `radar`, `treemap`, `sunburst`, `sankey`, `waterfall`, `word_cloud`. 유형 목록과 필드는 레지스트리에서 생성한다 | [contracts/chart-shorthand.md](contracts/chart-shorthand.md), [reference/chart-catalog.md](reference/chart-catalog.md) |
 | 3단계(`8570523`) | `layout`에 제목 `{ header }`, 글 `{ markdown }`, 대시보드 안 탭 `{ tabs: [{ label, rows }] }` | [contracts/dashboard.schema.json](contracts/dashboard.schema.json), [contracts/README.md](contracts/README.md) "참조 검사" |
+| 데이터 추가 적재 1단계 | `schema.yaml` 테이블의 `mode`(`replace` 기본 · `append`)와 `on_conflict`(`error` 기본 · `skip` · `update`), 열의 `default`·`aliases`. `append` 테이블은 `data/<테이블>/`의 배치 파일도 원본이다. 지정하지 않으면 지금과 똑같다 | [contracts/schema.schema.json](contracts/schema.schema.json), [contracts/ingest.md](contracts/ingest.md) |
 | 3단계 | 필터 유형 `type`에 `time_range`, `number_range`, `time_grain` 추가(`select`는 그대로다. 처음에는 `type`을 꼭 써야 했고 이때부터 생략하면 `select`다). 필터의 `default`(초기값), `parent`(상위 필터), `charts`(적용할 차트) | 위와 같음 |
 | 3단계 | 대시보드의 `cross_filters`(차트를 눌러 다른 차트를 거르기. 기본 `false`) | 위와 같음 |
 | 3단계 | 위젯 매니페스트: 탭 섹션 유형과 그 옵션을 `web/widgets/<유형>/widget.json`이 정한다. 기존 `gantt`·`kanban` 섹션의 형식은 그대로이고, 폴더 하나를 더하면 새 섹션 유형이 생긴다 | [contracts/widgets.md](contracts/widgets.md) |

@@ -1,0 +1,4 @@
+id,group_id,state,amount,on_day,flag,qty,memo
+E1,g1,open,10,2026-11-01,true,1,첫
+E2,g1,done,20.5,2026-11-02,false,2,
+E3,g2,open,,2026-11-03,,3,셋

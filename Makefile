@@ -12,7 +12,7 @@ HOST_GID := $(shell id -g)
 TOOLS    := $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) tools
 
 .NOTPARALLEL:
-.PHONY: help info env env-secrets auth-init admin outbox up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down test-logs unit-image golden gen reset down logs dirs _test _test_run _guard_project _guard_test
+.PHONY: help info env env-secrets auth-init data-init manage manage-down admin outbox up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down test-logs unit-image golden gen reset down logs dirs _test _test_run _guard_project _guard_test
 
 # ---- 작업 폴더 식별자
 # 같은 컴퓨터에서 이 저장소의 복제본이나 git worktree 여러 개가 동시에 빌드·테스트할 수 있다. 브랜치는 소스 파일만
@@ -61,7 +61,7 @@ DEV_NAME := $(or $(COMPOSE_PROJECT_NAME),$(call env_value,COMPOSE_PROJECT_NAME,.
 # 폴더 이름이 같은 다른 복제본·worktree가 이미 같은 compose 프로젝트 이름으로 스택을 띄웠으면, 그 스택에 닿는 목표를
 # 모두 멈춘다(그대로 두면 그쪽 컨테이너를 이 폴더의 코드와 마운트로 다시 만들거나, 그쪽 DB에 적재하거나, 내려 버린다).
 # 각 목표의 실행부는 이 확인이 통과한 뒤에만 돈다(.env를 보충하는 env-secrets도 포함. 그 전에 도는 것은 폴더 만들기뿐이다).
-GUARDED := env-secrets up down reset logs check load sync apply plan migrate studio studio-down auth-init admin outbox
+GUARDED := env-secrets up down reset logs check load sync apply plan migrate studio studio-down auth-init data-init manage manage-down admin outbox
 $(GUARDED): _guard_project
 
 info:
@@ -75,6 +75,8 @@ help:
 	@echo "make info    이 작업 폴더의 이미지 태그, 테스트 스택 이름·포트"
 	@echo "make env     .env 생성(없을 때만, 비밀값 자동 생성)"
 	@echo "make auth-init   인증 DB(dashkit_auth 스키마, dash_auth 계정) 만들기·올리기(여러 번 실행해도 됨)"
+	@echo "make data-init   운용자 조회 계정(dash_inspect) 만들기·고치기(이미 있는 볼륨, 여러 번 실행해도 됨)"
+	@echo "make manage / make manage-down   관리 서비스(운용 화면의 데이터 메뉴, /api/manage) 띄우기·내리기"
 	@echo "make admin EMAIL=<주소>   첫 admin 계정 만들기(비밀번호는 프롬프트)"
 	@echo "make outbox  테스트 메일함의 최근 메일과 링크(메일 테스트 모드, 등급 제한 없음)"
 	@echo "make up      전체 빌드·기동 후 superset/backend/web healthy 대기"
@@ -201,6 +203,22 @@ auth-init: env-secrets
 	$(COMPOSE) exec -T data-db sh /docker-entrypoint-initdb.d/02-auth.sh
 	$(TOOLS) python -m dashkit auth init
 
+# 운용자 조회용 읽기 계정(dash_inspect)을 만들거나 비밀번호를 맞춘다(contracts/ingest.md "DB 계정").
+# 역할 생성에는 superuser가 필요하므로 data-db 컨테이너 안에서 postgres 계정으로 data-db/init/03-inspect.sh를 실행한다
+# (새 볼륨은 initdb 때 같은 스크립트가 돈다). 볼륨을 다시 만들지 않는다. raw·dash 권한은 다음 load부터 생긴다.
+data-init: env-secrets
+	$(COMPOSE) up -d --wait data-db
+	$(COMPOSE) exec -T data-db sh /docker-entrypoint-initdb.d/03-inspect.sh
+
+# 관리 서비스(contracts/manage.md). 포트를 밖에 열지 않는다(웹앱의 /api/manage/로만 닿는다). make manage-down이 내린다
+manage: dirs env-secrets
+	$(COMPOSE) --profile manage up -d --build manager
+	$(call wait_healthy,manager)
+	@echo "✔ 관리 서비스: 운용 화면(http://localhost:$(or $(WEB_PORT),8080)/admin/)의 데이터 메뉴  (끄기: make manage-down)"
+
+manage-down:
+	$(COMPOSE) --profile manage rm -sf manager
+
 # 첫 admin 계정. 비밀번호는 프롬프트로 두 번 받는다(코드·.env에 넣지 않는다).
 # 자동화(CI 화면 캡처)에서는 PASSWORD_STDIN=1로 표준 입력의 첫 줄을 읽는다.
 admin: dirs
@@ -319,20 +337,20 @@ _test:
 
 # 테스트 스택의 로그(실패했을 때 CI가 쓴다)
 test-logs:
-	$(COMPOSE) --profile studio --profile tools -p $(TEST_NAME) logs --tail=200
+	$(COMPOSE) --profile studio --profile manage --profile tools -p $(TEST_NAME) logs --tail=200
 
 # 테스트 스택과 그 볼륨만 지운다(프로젝트 이름을 직접 지정하므로 개발 스택에는 닿지 않는다)
 # studio·tools는 프로필에 속해 있어서 프로필을 함께 줘야 그 컨테이너까지 지워진다. 남으면 다음 실행이 지워진
 # .test/ 폴더를 붙잡은 옛 Studio 컨테이너를 그대로 써서 적용이 실패한다.
 test-down:
-	$(COMPOSE) --profile studio --profile tools -p $(TEST_NAME) down -v --remove-orphans
+	$(COMPOSE) --profile studio --profile manage --profile tools -p $(TEST_NAME) down -v --remove-orphans
 	rm -rf ./.test
 
 _test_run:
 	@[ "$$COMPOSE_PROJECT_NAME" = "$(TEST_NAME)" ] || { echo "✖ _test_run은 make test가 부른다"; exit 1; }
 	@a=devtracker; b=sales-sample; rc=0; \
-	echo "== 테스트 스택 기동($(TEST_NAME)), PROJECT=$$a apply"; \
-	PROJECT=$$a $(MAKE) --no-print-directory up apply || exit 1; \
+	echo "== 테스트 스택 기동($(TEST_NAME)), PROJECT=$$a apply, 관리 서비스"; \
+	PROJECT=$$a $(MAKE) --no-print-directory up apply manage || exit 1; \
 	echo "== 1단계: PROJECT=$$a 전체 테스트"; \
 	PROJECT=$$a $(TOOLS) python -m pytest -q -p no:cacheprovider --ignore-glob='tests/test_studio*.py' tests/ || rc=1; \
 	echo "== Studio 단계: Studio API만으로 CSV → 프로젝트 → 적용 → 탭 변경 → 데이터 교체"; \

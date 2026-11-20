@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dashkit.invalid/contracts/schema.schema.json",
   "title": "projects/<이름>/schema.yaml",
-  "description": "CSV 테이블과 검증 규칙. 테이블 키 = data/<키>.csv = raw.<키>. 키 참조(ref 대상, 예약어, 순환)는 JSON Schema로 표현할 수 없어 dashkit/config.py가 추가로 검사한다.",
+  "description": "CSV 테이블과 검증 규칙. 테이블 키 = data/<키>.csv = raw.<키>. 누적(append) 테이블은 data/<키>/ 폴더의 배치 파일도 원본이다(contracts/ingest.md). 키 참조(ref 대상, 예약어, 순환)와 mode·on_conflict·default·aliases의 조합은 JSON Schema로 표현할 수 없어 dashkit/config.py가 추가로 검사한다.",
   "type": "object",
   "additionalProperties": false,
   "required": ["tables"],
@@ -32,6 +32,14 @@
       "required": ["primary_key", "columns"],
       "properties": {
         "description": { "type": "string" },
+        "mode": {
+          "description": "원본 파일의 방식(contracts/ingest.md \"테이블 방식\"). replace(기본): data/<키>.csv 하나가 테이블의 내용. append: data/<키>.csv(있으면 첫 배치)와 data/<키>/의 배치 파일을 번호순으로 차례로 넣은 결과.",
+          "enum": ["replace", "append"]
+        },
+        "on_conflict": {
+          "description": "append 테이블에서 같은 기본 키가 이미 있을 때(contracts/ingest.md \"충돌 정책\"). error(기본): 전체 거절. skip: 먼저 들어온 행을 둔다. update: 배치의 머리글에 있는 열만 바꾼다. mode: append일 때만 쓴다.",
+          "enum": ["error", "skip", "update"]
+        },
         "primary_key": {
           "description": "열 하나 또는 복합 키. PK 열은 자동으로 required다.",
           "oneOf": [
@@ -40,7 +48,7 @@
           ]
         },
         "columns": {
-          "description": "CSV 머리글은 이 열들과 정확히 같은 집합이어야 한다(순서 무관).",
+          "description": "replace 테이블의 CSV 머리글은 이 열들과 정확히 같은 집합이어야 한다(순서 무관). append 테이블의 배치는 이 열들의 부분집합을 머리글로 가질 수 있다(기본 키 열은 반드시 있다).",
           "type": "object",
           "minProperties": 1,
           "propertyNames": { "$ref": "#/$defs/ident" },
@@ -72,7 +80,16 @@
         "min": { "description": "integer, number, date(\"YYYY-MM-DD\")에서만", "type": ["number", "string"] },
         "max": { "description": "integer, number, date(\"YYYY-MM-DD\")에서만", "type": ["number", "string"] },
         "pattern": { "description": "text, enum에서만. 값 전체에 대해 검사한다(Python re.fullmatch).", "type": "string", "format": "regex" },
-        "description": { "type": "string" }
+        "description": { "type": "string" },
+        "default": {
+          "description": "새로 들어가는 행에서 배치에 이 열이 없을 때 쓰는 값(없으면 NULL). 이미 있는 행을 고칠 때는 쓰지 않는다. 열의 type·규칙에 맞는 값이어야 하고 기본 키 열에는 쓸 수 없다(config.py가 검사). 입력 폼에 미리 채워진다.",
+          "type": ["string", "number", "boolean"]
+        },
+        "aliases": {
+          "description": "올린 파일의 머리글이 이 이름이면 이 열로 본다(contracts/ingest.md \"머리글 맞추기\"). 같은 테이블의 다른 열 이름이나 다른 열의 aliases와 겹칠 수 없다.",
+          "type": "array", "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
       },
       "allOf": [
         {

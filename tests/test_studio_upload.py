@@ -211,3 +211,37 @@ def test_api_works_without_screen_files(client, tmp_path, monkeypatch):
     r = client.get("/")
     assert r.status == 404 and r.json["detail"] == "not_found"
     assert client.get("/studio/api/health").json == {"status": "ok"}
+
+# ---------------------------------------------------------------- 함께 쓰는 화면 모듈(/studio/shared/)
+
+def test_shared_serves_repo_web_shared_by_default(client, monkeypatch):
+    monkeypatch.delenv("STUDIO_SHARED_DIR", raising=False)
+    for name in ("dom.js", "icons.js"):
+        r = client.get(f"/studio/shared/{name}")
+        assert r.status == 200, name
+        assert r.headers["content-type"].startswith("text/javascript"), r.headers
+    # Studio 쪽 다시 내보내기도 그대로 나온다
+    assert 'export * from "../shared/dom.js"' in client.get("/studio/static/dom.js").text
+
+
+def test_shared_cannot_escape(client, tmp_path, monkeypatch):
+    shared = tmp_path / "shared"
+    (shared / "sub").mkdir(parents=True)
+    (shared / "sub" / "a.js").write_text("1", encoding="utf-8")
+    (shared / ".secret").write_text("x", encoding="utf-8")
+    (tmp_path / "outside.txt").write_text("밖", encoding="utf-8")
+    (shared / "link.txt").symlink_to(tmp_path / "outside.txt")
+    monkeypatch.setenv("STUDIO_SHARED_DIR", str(shared))
+    assert client.get("/studio/shared/sub/a.js").status == 200
+    for path in ("/studio/shared/../outside.txt", "/studio/shared/%2e%2e/outside.txt", "/studio/shared/..%2Foutside.txt",
+                 "/studio/shared/sub/../../outside.txt", "/studio/shared/.secret", "/studio/shared/link.txt",
+                 "/studio/shared/sub", "/studio/shared/", "/studio/shared/sub%5Ca.js", "/studio/shared//etc/passwd",
+                 "/studio/shared/dom.js"):   # 기본 폴더의 파일은 바꾼 폴더에서 보이지 않는다
+        r = client.request("GET", path, raw_path=True)
+        assert r.status == 404, path
+
+
+def test_missing_shared_dir_is_404(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("STUDIO_SHARED_DIR", str(tmp_path / "none"))
+    assert client.get("/studio/shared/dom.js").status == 404
+    assert client.get("/studio/api/health").json == {"status": "ok"}
