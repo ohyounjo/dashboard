@@ -95,7 +95,10 @@ export function mount(container, ctx) {
 
   function removeFilter(key) {
     const f = byKey(key);
-    if (!f || !window.confirm(S.filterRemoveConfirm(f.label))) return;
+    if (!f) return;
+    // 지우는 대상이 지금 고치는 것이 아니면, 고치던 초안을 버릴지 먼저 묻는다(삭제 뒤 초안을 서버 값으로 다시 읽으므로)
+    if (!(sel && sel.key === key) && !leave()) return;
+    if (!window.confirm(S.filterRemoveConfirm(f.label))) return;
     dirty = false;
     send([{ op: "filter.remove", dashboard: dash, key }], { message: S.filterRemoved(f.label), onDone: () => { if (sel && sel.key === key) sel = null; resetSelection(); } });
   }

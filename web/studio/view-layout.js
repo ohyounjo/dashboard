@@ -235,6 +235,9 @@ export function mount(container, ctx) {
     const item = itemAt(layout(), addr);
     const key = chartOf(item);
     const probe = removeItem(clone(layout()), addr);
+    // 지우는 대상이 지금 고치는 것이 아니면, 고치던 초안을 버릴지 먼저 묻는다(삭제 뒤 초안을 서버 값으로 다시 읽으므로)
+    const editingThis = !!sel && sel.kind === "item" && (key && sel.key ? sel.key === key : JSON.stringify(sel.addr) === JSON.stringify(addr));
+    if (!editingThis && !leave()) return;
     if (key && chartByKey(key)) {
       // 차트는 chart.remove 하나로 지운다. 탭의 마지막 칸이었으면 서버가 그 탭(과 빈 탭 묶음)도 지운다(계약 5b 표)
       const title = chartByKey(key).title || key;
@@ -368,6 +371,7 @@ export function mount(container, ctx) {
   }
   function dropTab(b, t) {
     const tab = layout()[b].tabs[t];
+    if (!leave()) return;   // 고치던 초안이 있으면 먼저 묻는다
     if (!window.confirm(S.innerTabRemoveConfirm(tab.label))) return;
     mutate((next) => { removeTab(next, b, t); return {}; }, { message: S.innerTabRemoved(tab.label) });
   }
