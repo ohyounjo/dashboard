@@ -176,7 +176,8 @@ class CsvParser(Parser):
             if not record or (len(record) == 1 and record[0].strip() == ""):
                 continue      # 빈 줄
             if len(record) != width:
-                yield line, RowError(self.where(line, "-"), f"값 개수 {len(record)}개가 머리글 {width}개와 다름")
+                yield line, RowError(self.where(line, "-"), f"값 개수 {len(record)}개가 머리글 {width}개와 다름",
+                                     raw=record)
                 continue
             yield line, record
 
@@ -248,7 +249,8 @@ class RowsParser(Parser):
             for k in self._keys:
                 cell = _cell(row[k])
                 if cell is None:
-                    bad = RowError(self.where(i, k), "값은 문자열·숫자·참거짓·null만 받음")
+                    bad = RowError(self.where(i, k), "값은 문자열·숫자·참거짓·null만 받음",
+                                   raw=[_cell(row[x]) or "" for x in self._keys])
                     break
                 values.append(cell)
             yield i, (bad if bad is not None else values)
@@ -264,12 +266,14 @@ PARSERS: dict[str, Callable[..., Parser]] = {
 
 
 class RowError:
-    """행 하나의 형식 오류(파서가 값 대신 내놓는다). fatal이면 그 뒤를 읽을 수 없다(CSV 문법 오류)."""
+    """행 하나의 형식 오류(파서가 값 대신 내놓는다). fatal이면 그 뒤를 읽을 수 없다(CSV 문법 오류).
+    raw는 읽을 수 있었던 원래 칸들(빠진 행 파일에 남겨 고쳐 다시 올릴 수 있게)."""
 
-    def __init__(self, where: str, reason: str, *, fatal: bool = False):
+    def __init__(self, where: str, reason: str, *, fatal: bool = False, raw: list[str] | None = None):
         self.where = where
         self.reason = reason
         self.fatal = fatal
+        self.raw = list(raw) if raw is not None else None
 
 
 # ---------------------------------------------------------------- 머리글 맞추기
@@ -472,7 +476,12 @@ class Intake:
                     if record.fatal:
                         report.fatal = True
                         return
-                    yield at, [], None
+                    values = []
+                    if record.raw is not None:
+                        # 칸을 정규형 머리글 자리에 놓고, 개수가 달라 놓지 못한 칸은 원래 줄 그대로 이유에 덧붙인다
+                        values = [record.raw[i] if i < len(record.raw) else "" for i in self._take]
+                        self.last_problems = [record.reason, "원래 칸: " + " | ".join(record.raw)]
+                    yield at, values, None
                     continue
                 values = [record[i] for i in self._take]
                 long = [c for c, v in zip(self.header, values) if len(v) > MAX_CELL_CHARS]

@@ -731,3 +731,39 @@ def test_preview_with_row_errors_also_reports_reference_errors(tmp_path, scratch
     assert any("ev.csv:3:entry_id" in e for e in b["errors"]) and any("ev.csv:4:seen_at" in e for e in b["errors"])
     assert 20 not in {x[0] for x in rows(scratch_db, "events")}
     expect_error("invalid_rows", ingest, "ledger", item, projects_dir=root, dbname=scratch_db)
+
+
+def test_skip_invalid_keeps_raw_cells_of_bad_rows_and_rechecks_duplicates(tmp_path, scratch_db):
+    """리뷰 지적 회귀(PR 26): 값 개수가 틀린 행도 빠진 행 파일에 원래 칸을 남기고, 행을 뺀 뒤의 최종 내용으로 중복을 다시 본다
+    (update 정책에서 같은 파일을 다시 보내 그 사이 고친 값을 되돌리지 않게)."""
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    csv = tmp_path / "en.csv"
+    csv.write_text("id,group_id\nE30,g1\nE31,g404\nE32,g2,extra\n", encoding="utf-8")
+    rejects = tmp_path / "r1"
+    rejects.mkdir()
+    item = [Item("entries", {"kind": "csv", "path": csv, "name": "en.csv"})]
+    r = ingest("ledger", item, projects_dir=root, dbname=scratch_db, skip_invalid=True, rejects_dir=rejects)
+    assert r["batches"][0]["rows"]["inserted"] == 1
+    text = (rejects / "000.csv").read_text(encoding="utf-8-sig")
+    assert "E32,g2," in text and "원래 칸: E32 | g2 | extra" in text
+    # 같은 파일을 다시: 행을 뺀 뒤의 내용(E30,g1)이 이미 있는 배치와 같다
+    e = expect_error("duplicate_file", ingest, "ledger", item, projects_dir=root, dbname=scratch_db, skip_invalid=True)
+    assert e.extra["duplicates"][0]["file"] == r["batches"][0]["file"]
+    rebuilt_equals_current(root, scratch_db)
+
+
+def test_rows_recorded_match_the_file_after_dropping_new_rows_without_required_columns(tmp_path, scratch_db):
+    """리뷰 지적 회귀(PR 26): 필수 열이 빠진 새 행을 빼고 넣으면 배치 기록의 rows도 배치 파일의 행 수와 같다."""
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    # events.entry_id는 필수이고 default가 없다. 머리글에 없으므로 새 행(id 40, 41)은 모두 빠진다
+    r = ingest("ledger", [Item("events", {"kind": "rows", "rows": [{"id": 40}, {"id": 41}]})], projects_dir=root,
+               dbname=scratch_db, skip_invalid=True)
+    b = r["batches"][0]
+    assert b["rows"]["inserted"] == 0 and b["rejected"] == 2
+    with db.owner_conn(scratch_db) as conn:
+        recorded = conn.execute("SELECT rows FROM dashkit_meta.batch WHERE file = %s", (b["file"],)).fetchone()[0]
+    stored = gzip.decompress((root / "ledger" / "data" / "events" / b["file"]).read_bytes()).decode().splitlines()
+    assert recorded == len(stored) - 1 == 0
+    rebuilt_equals_current(root, scratch_db)
