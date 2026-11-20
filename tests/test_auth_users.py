@@ -354,6 +354,71 @@ def test_operator_actions_recheck_the_target_under_lock(accounts):
     assert not sql("SELECT 1 FROM dashkit_auth.tokens WHERE user_id = %s", (target["id"],))
 
 
+def test_bulk_groups_is_all_or_nothing(accounts):
+    """일괄 그룹 지정은 한 트랜잭션이다. 저장에서 기다리는 사이 대상 하나가 승급되면 operator의 요청은 403이고
+    어느 그룹에도 반영되지 않는다."""
+    import threading
+
+    op = accounts("operator")
+    a, b = accounts("user", log_in=False), accounts("user", log_in=False)
+    gs = [api("POST", "/api/admin/groups", {"name": f"bulk-tx-{i}-{secrets.token_hex(3)}"})[1] for i in range(2)]
+    try:
+        result: dict = {}
+        with db.auth_conn() as conn:
+            conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (b["id"],))
+            t = threading.Thread(target=lambda: result.setdefault("r", as_(op, "POST", "/api/admin/users/bulk-groups",
+                                                                            {"user_ids": [a["id"], b["id"]], "add": [g["id"] for g in gs]})))
+            t.start()
+            t.join(1.5)
+            assert t.is_alive()
+            conn.execute("UPDATE dashkit_auth.users SET role = 'admin' WHERE id = %s", (b["id"],))
+            conn.commit()
+        t.join(10)
+        assert (result["r"][0], result["r"][1]["detail"]) == (403, "forbidden")
+        for g in gs:
+            assert api("GET", f"/api/admin/groups/{g['id']}")[1]["members"] == []
+    finally:
+        for g in gs:
+            api("DELETE", f"/api/admin/groups/{g['id']}")
+
+
+def test_member_and_user_group_saves_do_not_deadlock(accounts):
+    """그룹 화면의 구성원 추가와 사용자 상세의 그룹 저장이 겹쳐도 교착이 나지 않는다(잠금 순서: 사용자 → 그룹)."""
+    import threading
+
+    from dashkit.auth import store
+
+    code, g = api("POST", "/api/admin/groups", {"name": f"dl-{secrets.token_hex(3)}"})
+    errors: list[str] = []
+    try:
+        for _ in range(15):
+            u = accounts("user", log_in=False)
+            barrier = threading.Barrier(2)
+
+            def via_user():
+                barrier.wait()
+                try:
+                    store.set_user_groups(u["id"], [g["id"]], None)
+                except Exception as exc:  # 교착이면 Unavailable
+                    errors.append(type(exc).__name__)
+
+            def via_group():
+                barrier.wait()
+                try:
+                    store.change_group_members(g["id"], [u["id"]], [], None)
+                except Exception as exc:
+                    errors.append(type(exc).__name__)
+
+            ts = [threading.Thread(target=via_user), threading.Thread(target=via_group)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(20)
+        assert errors == []
+    finally:
+        api("DELETE", f"/api/admin/groups/{g['id']}")
+
+
 def test_user_group_replacement_waits_for_the_user_row(accounts):
     """그룹이 없는 사용자의 그룹 전체 교체도 사용자 행을 먼저 잠가 동시 교체가 합쳐지지 않는다."""
     import threading

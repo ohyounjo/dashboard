@@ -82,6 +82,8 @@ def store_checks():
         raise ApiError(409, "invalid_status", "지금 계정 상태에서는 할 수 없습니다") from None
     except store.NotFound:
         raise ApiError(404, "unknown_user", "없는 사용자입니다") from None
+    except store.GroupNotFound:
+        raise ApiError(404, "unknown_group", "없는 그룹입니다") from None
     except store.LastAdmin:
         raise ApiError(409, "last_admin", "마지막 활성 admin입니다") from None
 
@@ -656,20 +658,14 @@ def bulk_groups(body: BulkGroups, request: Request, actor: Principal = Depends(r
     remove = _check_groups(body.remove)
     if {g["id"] for g in add} & {g["id"] for g in remove}:
         raise ApiError(422, "invalid_request", "같은 그룹을 더하고 뺄 수 없습니다")
-    for g in add:
-        with store_checks():
-            added, _ = store.change_group_members(g["id"], [t["id"] for t in targets], [], actor.id,
-                                                  roles=manage_roles(actor))
-        if added:
-            emails_of = {t["id"]: t["email"] for t in targets}
+    # 모든 대상 사용자와 그룹을 한 트랜잭션에서 잠그고 권한을 다시 본 뒤 한꺼번에 바꾼다(실패하면 아무것도 바뀌지 않는다)
+    with store_checks():
+        changes = store.bulk_change_groups([t["id"] for t in targets], [g["id"] for g in add], [g["id"] for g in remove],
+                                           actor.id, roles=manage_roles(actor))
+    emails_of = {t["id"]: t["email"] for t in targets}
+    for g in add + remove:
+        added, removed = changes.get(g["id"], ([], []))
+        if added or removed:
             audit(request, actor, "group.members", target_type="group", target_id=g["id"], target_label=g["name"],
-                  detail={"added": [emails_of[i] for i in added], "removed": [], "bulk": True})
-    for g in remove:
-        with store_checks():
-            _, removed = store.change_group_members(g["id"], [], [t["id"] for t in targets], actor.id,
-                                                    roles=manage_roles(actor))
-        if removed:
-            emails_of = {t["id"]: t["email"] for t in targets}
-            audit(request, actor, "group.members", target_type="group", target_id=g["id"], target_label=g["name"],
-                  detail={"added": [], "removed": [emails_of[i] for i in removed], "bulk": True})
+                  detail={"added": [emails_of[i] for i in added], "removed": [emails_of[i] for i in removed], "bulk": True})
     return Response(status_code=204)

@@ -54,6 +54,10 @@ class NotFound(Exception):
     """대상 계정이 없다(그 사이 지워졌다)."""
 
 
+class GroupNotFound(Exception):
+    """대상 그룹이 없다(그 사이 지워졌다)."""
+
+
 Roles = tuple[str, ...] | None   # 행위자가 다룰 수 있는 대상 등급. None이면 검사하지 않는다(admin)
 
 
@@ -528,26 +532,49 @@ def users_by_refs(emails: list[str], ids: list[str]) -> list[dict[str, Any]]:
     return [{**r, "id": str(r["id"])} for r in rows]
 
 
-def change_group_members(group_id: str, add_ids: list[str], remove_ids: list[str],
-                         added_by: str | None, *, roles: Roles = None) -> tuple[list[str], list[str]]:
-    """(실제로 더한 id, 실제로 뺀 id). 그룹 행과 대상 사용자 행을 잠그고, roles면 대상의 지금 등급을 다시 본다."""
+def _apply_memberships(conn: psycopg.Connection, group_id: str, add_ids: list[str], remove_ids: list[str],
+                       added_by: str | None) -> tuple[list[str], list[str]]:
     added: list[str] = []
     removed: list[str] = []
-    with connection() as conn, conn.transaction():
-        conn.execute("SELECT 1 FROM dashkit_auth.groups WHERE id = %s FOR UPDATE", (group_id,))
-        _lock_targets(conn, add_ids + remove_ids, roles)
-        for uid in remove_ids:
-            if conn.execute("DELETE FROM dashkit_auth.group_members WHERE group_id = %s AND user_id = %s",
-                            (group_id, uid)).rowcount:
-                removed.append(uid)
-        for uid in add_ids:
-            if conn.execute(
-                    """INSERT INTO dashkit_auth.group_members (group_id, user_id, added_by) VALUES (%s, %s, %s)
-                       ON CONFLICT DO NOTHING""", (group_id, uid, added_by)).rowcount:
-                added.append(uid)
-        if added or removed:
-            conn.execute("UPDATE dashkit_auth.groups SET updated_at = now() WHERE id = %s", (group_id,))
+    for uid in remove_ids:
+        if conn.execute("DELETE FROM dashkit_auth.group_members WHERE group_id = %s AND user_id = %s",
+                        (group_id, uid)).rowcount:
+            removed.append(uid)
+    for uid in add_ids:
+        if conn.execute(
+                """INSERT INTO dashkit_auth.group_members (group_id, user_id, added_by) VALUES (%s, %s, %s)
+                   ON CONFLICT DO NOTHING""", (group_id, uid, added_by)).rowcount:
+            added.append(uid)
+    if added or removed:
+        conn.execute("UPDATE dashkit_auth.groups SET updated_at = now() WHERE id = %s", (group_id,))
     return added, removed
+
+
+def change_group_members(group_id: str, add_ids: list[str], remove_ids: list[str],
+                         added_by: str | None, *, roles: Roles = None) -> tuple[list[str], list[str]]:
+    """(실제로 더한 id, 실제로 뺀 id). 잠금 순서는 어디서나 **사용자 행(id 순) → 그룹 행**이다(set_user_groups와 같아
+    교착이 없다). roles면 대상의 지금 등급을 잠금 안에서 다시 본다."""
+    with connection() as conn, conn.transaction():
+        _lock_targets(conn, add_ids + remove_ids, roles)
+        conn.execute("SELECT 1 FROM dashkit_auth.groups WHERE id = %s FOR UPDATE", (group_id,))
+        return _apply_memberships(conn, group_id, add_ids, remove_ids, added_by)
+
+
+def bulk_change_groups(user_ids: list[str], add_group_ids: list[str], remove_group_ids: list[str],
+                       added_by: str | None, *, roles: Roles = None) -> dict[str, tuple[list[str], list[str]]]:
+    """일괄 그룹 지정을 한 트랜잭션으로: 사용자 행(id 순) → 그룹 행(id 순)을 잠그고 권한을 다시 본 뒤 모든 그룹에 적용한다.
+    어느 단계에서든 실패하면 아무것도 바뀌지 않는다. 그룹 id → (더한 사용자 id, 뺀 사용자 id)."""
+    out: dict[str, tuple[list[str], list[str]]] = {}
+    with connection() as conn, conn.transaction():
+        _lock_targets(conn, user_ids, roles)
+        for gid in sorted(set(add_group_ids) | set(remove_group_ids)):
+            if not conn.execute("SELECT 1 FROM dashkit_auth.groups WHERE id = %s FOR UPDATE", (gid,)).fetchone():
+                raise GroupNotFound()
+        for gid in add_group_ids:
+            out[gid] = _apply_memberships(conn, gid, user_ids, [], added_by)
+        for gid in remove_group_ids:
+            out[gid] = _apply_memberships(conn, gid, [], user_ids, added_by)
+    return out
 
 
 # ---------------------------------------------------------------- 감사 로그
