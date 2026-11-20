@@ -52,11 +52,14 @@ def _recover_on_start() -> None:
     """시작할 때 이 프로젝트의 끊긴 폴더 작업을 처리한다(contracts/ingest.md "묶음 기록과 끊김 복구"). 실패해도 뜬다."""
     from .. import config
     from ..ingest.operation import recover_on_start
+    from ..ingest.structure import recover_before_read
     from .context import current_project
 
     name = current_project()
     try:
-        outcomes = recover_on_start(config.load_project(name))
+        # 끝나지 않은 구조 변경을 설정을 읽기 전에 먼저 정리하고, 정리된 설정으로 나머지 기록을 복구한다
+        outcomes = recover_before_read(name)
+        outcomes += recover_on_start(config.load_project(name))
     except Exception as exc:     # DB가 아직 없거나 설정이 깨졌어도 서비스는 뜬다. 다음 작업이 다시 시도한다
         log.warning("시작 때 복구를 건너뜀(%s): %s", name, type(exc).__name__)
         return

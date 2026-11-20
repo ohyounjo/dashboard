@@ -222,6 +222,23 @@ def test_crash_during_structure_change_is_recovered_before_reading(root, scratch
     rebuilt_equals_current(root, scratch_db)                         # 파일과 DB가 같은 판이다
 
 
+def test_next_folder_operation_recovers_an_unfinished_structure_change_first(root, scratch_db, fault):
+    """파일을 바꾼 뒤 load 전에 끊긴 구조 변경이 남아 있어도, 다음 더하기가 설정을 읽기 전에 먼저 정리한다
+    (새 YAML이 남아 데이터 설정 지문이 어긋난 채 rebuild_required로 막히지 않는다)."""
+    load(load_project("ledger", root), dbname=scratch_db)
+    before = files(root)
+    fault("after_move", SimulatedCrash())
+    with pytest.raises(SimulatedCrash):
+        change(root, scratch_db, [{"op": "column.add", "table": "entries", "column": "tier", "value": {"type": "integer"}}])
+    from dashkit.ingest import operation
+
+    operation.FAULTS.clear()
+    assert files(root) != before
+    add(root, scratch_db, "entries", [{"id": "E700"}])
+    assert files(root) == before and leftovers(root) == []
+    rebuilt_equals_current(root, scratch_db)
+
+
 # ---------------------------------------------------------------- 새 테이블
 
 CSV = "Item Code,Group,Count,Seen On\nA1,g1,3,2026-11-01\nA2,g2,4,2026-11-02\n".encode()

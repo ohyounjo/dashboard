@@ -65,10 +65,15 @@ def _load(name: str, projects_dir: Path | None) -> Project:
         raise IngestError(422, "invalid_config", "설정 검사를 통과하지 못했습니다", exc.errors) from None
 
 
-def load_stable(name: str, projects_dir: Path | None) -> tuple[Project, str]:
-    """설정과 그 설정 파일의 revision을 한 쌍으로 읽는다. 읽는 사이 파일이 바뀌었으면 다시 읽는다."""
-    from ..project import store
+def load_stable(name: str, projects_dir: Path | None, *, dbname: str | None = None) -> tuple[Project, str]:
+    """설정과 그 설정 파일의 revision을 한 쌍으로 읽는다. 읽는 사이 파일이 바뀌었으면 다시 읽는다.
 
+    읽기 전에 끝나지 않은 구조 변경(묶음 기록 config)을 먼저 정리한다: 새 YAML이 반쯤 남은 채로 읽으면 데이터 설정
+    지문이 DB와 달라 모든 폴더 작업이 rebuild_required로 막힌다(기록이 없으면 DB에 닿지 않는다)."""
+    from ..project import store
+    from .structure import recover_before_read
+
+    recover_before_read(name, projects_dir, dbname=dbname)
     root = Path(projects_dir) / name if projects_dir else config.default_projects_dir() / name
     for _ in range(5):
         before = store.revision(root)
@@ -101,7 +106,7 @@ def ingest(project_name: str, items: list[Item], *, dry_run: bool = False, force
     if not items:
         raise IngestError(400, "bad_request", "더할 입력이 없습니다")
     for attempt in (1, 2):
-        project, revision = load_stable(project_name, projects_dir)
+        project, revision = load_stable(project_name, projects_dir, dbname=dbname)
         tables = [check_table(project, it.table) for it in items]
         try:
             conn = db.owner_conn(dbname)

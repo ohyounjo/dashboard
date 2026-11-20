@@ -36,7 +36,7 @@ from .operation import IngestError, Session, _resolve_or_raise, locked
 
 def compact(project_name: str, table: str, *, projects_dir: Path | None = None, dbname: str | None = None,
             wait_ms: int | None = None) -> dict[str, Any]:
-    project, revision = load_stable(project_name, projects_dir)
+    project, revision = load_stable(project_name, projects_dir, dbname=dbname)
     tname = check_table(project, table)
     try:
         conn = db.owner_conn(dbname)

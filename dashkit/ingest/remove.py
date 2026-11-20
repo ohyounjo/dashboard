@@ -76,7 +76,7 @@ def remove_batch(project_name: str, table: str, name: str, *, fast_only: bool = 
                  projects_dir: Path | None = None, dbname: str | None = None, wait_ms: int | None = None
                  ) -> dict[str, Any]:
     """배치를 되돌린다. 빠른 길이면 {"fast": true, …}, 아니면 다시 만든다(fast_only면 NeedsRebuild)."""
-    project, revision = load_stable(project_name, projects_dir)
+    project, revision = load_stable(project_name, projects_dir, dbname=dbname)
     tname = check_table(project, table)
     conn = _connect(dbname)
     try:
@@ -99,7 +99,7 @@ def remove_batch(project_name: str, table: str, name: str, *, fast_only: bool = 
 def restore_batch(project_name: str, table: str, name: str, *, projects_dir: Path | None = None,
                   dbname: str | None = None, wait_ms: int | None = None) -> dict[str, Any]:
     """`_removed/`의 배치를 되살린다(다시 만든다)."""
-    project, revision = load_stable(project_name, projects_dir)
+    project, revision = load_stable(project_name, projects_dir, dbname=dbname)
     tname = check_table(project, table)
     conn = _connect(dbname)
     try:
