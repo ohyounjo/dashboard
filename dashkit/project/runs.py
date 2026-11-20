@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import secrets
+import shutil
 import threading
 import traceback
 from collections import OrderedDict
@@ -85,10 +86,8 @@ class Runs:
                     break
                 dropped = self._items.pop(old)
                 if dropped.rejects is not None:
-                    try:
-                        dropped.rejects.unlink()
-                    except OSError:
-                        pass
+                    # 빠진 행 파일은 그 작업 전용 임시 폴더에 있다. 작업을 잊을 때 폴더째 지운다
+                    shutil.rmtree(dropped.rejects.parent, ignore_errors=True)
         threading.Thread(target=self._run, args=(run, work, on_done), name=f"manage-{kind}-{run.id}",
                          daemon=True).start()
         return run

@@ -277,6 +277,16 @@ def _commit(session: Session, prepared: list[_Prepared], *, force: bool, dry_run
                 p.writer_path.unlink()
                 p.writer_path = new_path
                 moves_by[i].source, moves_by[i].sha256 = new_path, p.sha256
+                if not force:
+                    # 행을 뺀 뒤의 최종 내용으로 같은 내용 다시 올리기를 다시 확인한다(배치 기록과, 같은 요청의 다른 항목과)
+                    same = [n for n, rec in session.recorded.get(p.staged.table, {}).items() if rec.sha256 == p.sha256]
+                    same += [names[j] for j in ordered if j != i and prepared[j].staged.table == p.staged.table
+                             and prepared[j].sha256 == p.sha256]
+                    if same:
+                        raise IngestError(409, "duplicate_file", "오류 행을 뺀 내용이 이미 있는 배치와 같습니다"
+                                          "(force=true면 그래도 넣습니다)",
+                                          [f"data/{p.staged.table}/{same[0]}"],
+                                          duplicates=[{"table": p.staged.table, "file": same[0]}])
 
     def add_records(cur: psycopg.Cursor) -> None:    # 파일을 옮긴 뒤 배치 기록을 더한다(5-4의 확정 순서)
         for i in ordered:

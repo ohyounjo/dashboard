@@ -233,6 +233,9 @@ def _merge_rejects(folder: Path, batches_: list[dict[str, Any]], entries: list[d
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for e, path in files:
             z.write(path, f"{Path(e['name']).stem}-빠진행.csv")
+    for p in folder.iterdir():          # zip에 담은 파일은 지운다(폴더에는 내려받을 파일 하나만)
+        if p != out:
+            p.unlink()
     return out
 
 
