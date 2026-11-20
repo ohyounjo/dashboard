@@ -21,6 +21,7 @@ from ..auth import settings as auth_settings
 from ..auth import store as auth_store
 from ..auth.guard import Guard, check, send_rejection
 from ..ingest.operation import IngestError
+from ..project import upload
 from .routes import MODULES
 
 log = logging.getLogger("dashkit.manage")
@@ -93,6 +94,11 @@ async def _ingest_error(_req: Request, exc: IngestError):
     if exc.errors is not None:
         extra["errors"] = exc.errors
     return _error(exc.status, exc.detail, exc.message, **extra)
+
+
+@api.exception_handler(upload.UploadError)
+async def _upload_error(_req: Request, exc: upload.UploadError):
+    return _error(exc.status, exc.detail, exc.message)
 
 
 @api.exception_handler(auth_store.Unavailable)

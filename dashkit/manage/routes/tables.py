@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -183,6 +184,8 @@ def _ingest_job(project_name: str, table: str, path: Path, source_name: str, pri
         return result
 
     def done(run) -> None:
+        if upload_id is None:
+            shutil.rmtree(path.parent, ignore_errors=True)   # 미리보기 없이 바로 올린 파일: 원래 파일은 보관하지 않는다
         if dry_run:
             if run.status != "succeeded" and upload_id:
                 uploads.drop(upload_id)      # 결과에 upload_id가 없으니 화면은 다시 올린다. 잡아 둘 까닭이 없다
@@ -208,19 +211,23 @@ async def post_batches(table: str, request: Request, principal: Principal = Depe
     limits = context.limits()
     if ctype == "multipart/form-data":
         folder = uploads.folder()
-        parts = await upload.stream_multipart(
-            request.headers.get("content-type"), request.stream(), request.headers.get("content-length"),
-            folder=folder, file_limit=limits.max_upload_mb * 1024 * 1024,
-            request_limit=limits.max_request_mb * 1024 * 1024)
+        try:
+            parts = await upload.stream_multipart(
+                request.headers.get("content-type"), request.stream(), request.headers.get("content-length"),
+                folder=folder, file_limit=limits.max_upload_mb * 1024 * 1024,
+                request_limit=limits.max_request_mb * 1024 * 1024)
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
         files = [p for p in parts if p.name == "file" and p.filename is not None]
         fields = {p.name: p.value for p in parts if p.filename is None}
         if len(files) != 1:
-            upload.discard_parts(parts)
+            shutil.rmtree(folder, ignore_errors=True)
             raise IngestError(400, "bad_request", "multipart에 `file` 파일 하나를 보냅니다")
         try:
             source_name = upload.check_filename(files[0].filename)
         except upload.UploadError:
-            upload.discard_parts(parts)
+            shutil.rmtree(folder, ignore_errors=True)
             raise
         dry_run = _flag(fields.get("dry_run"))
         path = files[0].path
