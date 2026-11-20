@@ -61,6 +61,17 @@ function typedDefault(type, v) {
   return v;
 }
 
+/** 경계 값이 JSON 수(배정밀도)로 바뀌어도 그대로인지: 유효 숫자 15자리까지, 정수는 ±(2^53−1)까지.
+ *  넘으면 저장한 경계가 입력과 달라지므로 폼에서 거절한다 */
+export function exactNumber(text) {
+  const t = String(text).trim();
+  const n = Number(t);
+  if (!Number.isFinite(n)) return false;
+  if (/^[-+]?\d+$/.test(t)) return Number.isSafeInteger(n);
+  const digits = t.replace(/^[-+]/, "").replace(/[eE].*$/, "").replace(".", "").replace(/^0+/, "").replace(/0+$/, "");
+  return digits.length <= 15;
+}
+
 /** 열 규칙 고치기 폼 → column.update 연산(바뀐 키만, 비우면 null = 지움). before: GET /tables/{t}의 열.
  *  form: {description, values(글), min, max, pattern, type}. 돌려주는 것: {op | null, problems, typeChanged} */
 export function columnUpdateOp(table, before, form) {
@@ -83,6 +94,7 @@ export function columnUpdateOp(table, before, form) {
     const kind = before.type === "date" ? "date" : before.type === "integer" ? "integer" : "number";
     const bad = checkValue({ name: k, type: kind }, v);
     if (bad) problems.push({ field: k, code: bad.code, arg: bad.arg });
+    else if (kind !== "date" && !exactNumber(tidy({ type: kind }, v))) problems.push({ field: k, code: "precision" });
     else set[k] = kind === "date" ? tidy({ type: "date" }, v) : Number(tidy({ type: kind }, v));
   }
   const pat = norm(form.pattern);

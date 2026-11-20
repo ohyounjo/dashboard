@@ -350,3 +350,22 @@ def test_compact_crash_is_finished_or_rolled_back(root, scratch_db, fault, lose_
         assert folder(root, "entries") == before and (root / "ledger/data/entries.csv").exists()
     else:
         assert len(folder(root, "entries")) == 1
+
+
+def test_plan_does_not_recover_an_unfinished_structure_change(root, monkeypatch, capsys):
+    """plan은 읽기만 한다: 끝나지 않은 구조 변경을 복구하지 않고(owner 계정을 열지 않는다) 알리기만 한다."""
+    from dashkit import __main__ as cli
+    from dashkit import plan as plan_mod
+    from dashkit.ingest import structure as st
+
+    record_dir = root / "ledger" / "data"
+    pending.write_record(record_dir, {"id": "half", "kind": "config", "project": "ledger", "data_revision": "x",
+                                      "loaded_at": None, "files": [{"path": "schema.yaml", "before": "", "after": "y"}]})
+    before = files(root)
+    monkeypatch.setenv("PROJECT", "ledger")
+    monkeypatch.setattr(st, "recover_before_read", lambda *a, **k: pytest.fail("plan이 복구를 불렀다"))
+    monkeypatch.setattr(plan_mod, "make_plan", lambda project: {"project": project.name})
+    monkeypatch.setattr(plan_mod, "format_plan", lambda result: "ok")
+    assert cli.main(["plan"]) == 0
+    assert "끝나지 않은 구조 변경이 1개" in capsys.readouterr().err
+    assert files(root) == before and len(pending.list_records(record_dir)) == 1

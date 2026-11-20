@@ -55,6 +55,11 @@ test("열 규칙 고치기: 바뀐 키만, 비우면 null, 유형은 넓히기�
   const bounded = { name: "n", type: "integer", min: 0, max: 100 };
   assert.deepEqual(columnUpdateOp("t", bounded, { min: "0", max: "100", type: "text" }).op.set, { type: "text", min: null, max: null });
   assert.deepEqual(columnUpdateOp("t", bounded, { min: "0", max: "100", type: "number" }).op.set, { type: "number" });
+  // 배정밀도로 정확히 나타나지 않는 경계는 반올림해 저장하지 않고 거절한다
+  assert.deepEqual(codes(columnUpdateOp("t", bounded, { min: "9007199254740993", max: "100" })), ["min:precision"]);
+  assert.deepEqual(columnUpdateOp("t", bounded, { min: "9007199254740991", max: "100" }).op.set, { min: 9007199254740991 });
+  assert.deepEqual(codes(columnUpdateOp("t", { name: "x", type: "number" }, { max: "0.12345678901234567" })), ["max:precision"]);
+  assert.deepEqual(columnUpdateOp("t", { name: "x", type: "number" }, { max: "0.5" }).op.set, { max: 0.5 });
   assert.deepEqual(columnUpdateOp("t", { name: "p", type: "text", pattern: "^A" }, { pattern: "" }).op.set, { pattern: null });
   assert.deepEqual(columnUpdateOp("t", { name: "d", type: "date" }, { min: "2026/01/01" }).op.set, { min: "2026-01-01" });
 });
