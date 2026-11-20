@@ -180,9 +180,12 @@ def login(body: LoginRequest, request: Request, response: Response):
         raise _fail_login(request, email, user, "not_active")
     new_hash = passwords.hash_password(body.password) if passwords.needs_rehash(user.password_hash) else None
     token = sessions.new_token()
-    store.create_session(user.id, sessions.token_hash(token), sessions.expires_at(now, cfg),
-                         client_ip(request), request.headers.get("user-agent"))
-    store.record_login_success(user.id, new_hash)
+    # 세션은 사용자 행을 잠근 트랜잭션에서, 검증한 해시가 지금도 그 계정의 것일 때만 만든다
+    # (그 사이 비밀번호가 재설정·변경됐거나 정지·잠금됐으면 실패: 옛 비밀번호로 새 세션을 얻지 못한다)
+    if not store.start_session(user.id, user.password_hash, sessions.token_hash(token), sessions.expires_at(now, cfg),
+                               client_ip(request), request.headers.get("user-agent"), new_hash):
+        _audit_login(request, "auth.login_failed", email, user.id, reason="changed_during_login")
+        raise _invalid_credentials()
     _audit_login(request, "auth.login", user.email, user.id)
     sessions.set_cookie(response, token, cfg)
     return {"email": user.email, "role": user.role, "must_change_password": user.must_change_password}
@@ -247,13 +250,17 @@ def signup(body: SignupRequest, request: Request):
     password_hash = passwords.hash_password(body.password)       # 어느 길이든 같은 비용
     user = store.user_by_email(email)
     if user is None:
-        try:
-            user = store.create_user(email, role="user", status="pending", source="signup", password_hash=password_hash)
-        except store.Conflict:          # 동시에 같은 주소로 가입
+        from datetime import timedelta
+
+        token = sessions.new_token()
+        try:   # 계정과 첫 인증 토큰을 한 트랜잭션으로(그 사이에 다시 가입이 끼어들지 못한다)
+            user = store.create_pending_user(email, password_hash, sessions.token_hash(token),
+                                             store.now() + timedelta(minutes=TOKEN_TTL["verify_email"]))
+        except store.Conflict:          # 동시에 같은 주소로 가입: 먼저 만든 쪽이 이긴다(같은 202)
             return ACCEPTED
         store.record_audit("auth.signup", actor_id=user.id, actor_email=email, target_type="user",
                            target_id=user.id, target_label=email, ip=client_ip(request))
-        mailer.send_quietly(email, "verify_email", mailer.link("verify.html", issue_token(user.id, "verify_email")))
+        mailer.send_quietly(email, "verify_email", mailer.link("verify.html", token))
     elif user.status == "pending" and _resign_pending(user.id, password_hash, email):
         pass
     else:

@@ -268,6 +268,55 @@ def test_resignup_and_verify_do_not_interleave(cleanup):
     assert outbox(email)[0]["kind"] == "already_registered"
 
 
+def test_login_cannot_outlive_a_concurrent_password_change(cleanup):
+    """옛 비밀번호로 시작한 로그인이 그 사이의 재설정·변경 뒤에 세션을 만들지 못한다(세션 생성은 사용자 행 잠금 안에서
+    검증한 해시가 지금도 같은지 본다)."""
+    import threading
+
+    from dashkit.auth import passwords
+
+    email = random_email("login-race")
+    cleanup.append(email)
+    uid = make_user(email, PASSWORD).id
+    result: dict = {}
+    with db.auth_conn() as conn:                                        # 재설정이 진행 중인 것처럼 사용자 행을 잡는다
+        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (uid,))
+        t = threading.Thread(target=lambda: result.setdefault("r", auth_post("/api/auth/login", {"email": email, "password": PASSWORD})))
+        t.start()
+        t.join(1.5)
+        assert t.is_alive()                                             # 비밀번호는 맞았고 세션 생성에서 기다린다
+        conn.execute("UPDATE dashkit_auth.users SET password_hash = %s WHERE id = %s", (passwords.hash_password(NEW_PASSWORD), uid))
+        conn.commit()
+    t.join(10)
+    code, body, headers = result["r"]
+    assert (code, body["detail"]) == (401, "invalid_credentials")
+    assert not sql("SELECT 1 FROM dashkit_auth.sessions WHERE user_id = %s", (uid,))
+    assert login(email, NEW_PASSWORD)
+
+
+def test_new_signup_creates_account_and_first_link_together(cleanup):
+    """신규 가입은 계정과 첫 인증 토큰을 한 트랜잭션으로 만든다. 유효한 인증 링크는 언제나 지금 비밀번호와 같은
+    트랜잭션에서 발급된 것이다(다시 가입이 끼면 처음 링크는 410)."""
+    from datetime import timedelta
+
+    from dashkit.auth import passwords, sessions
+
+    email = random_email("new-atomic")
+    cleanup.append(email)
+    first = sessions.new_token()
+    user = store.create_pending_user(email, passwords.hash_password(PASSWORD), sessions.token_hash(first),
+                                     store.now() + timedelta(hours=1))
+    assert sql("SELECT count(*) FROM dashkit_auth.tokens WHERE user_id = %s AND purpose = 'verify_email'", (user.id,))[0][0] == 1
+    with pytest.raises(store.Conflict):                                 # 같은 주소: 아무것도 만들지 않는다
+        store.create_pending_user(email, passwords.hash_password(NEW_PASSWORD), sessions.token_hash(sessions.new_token()), store.now())
+    second = sessions.new_token()
+    assert store.resign_pending(user.id, passwords.hash_password(NEW_PASSWORD), sessions.token_hash(second),
+                                store.now() + timedelta(hours=1))
+    assert auth_post("/api/auth/verify", {"token": first})[0] == 410
+    assert auth_post("/api/auth/verify", {"token": second})[0] == 204
+    assert login(email, NEW_PASSWORD)
+
+
 # ---------------------------------------------------------------- 기본 그룹
 
 def test_new_accounts_join_default_groups_when_they_become_active(cleanup):
