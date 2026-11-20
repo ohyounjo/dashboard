@@ -14,6 +14,11 @@ const COMMON = ["title", "dataset", "viz", "viz_type", "where", "description", "
 const LIST_KINDS = ["columns", "metrics", "order_by"];
 
 const blank = (v) => v === undefined || v === null || v === "";
+// JSON 글상자에 친 글 가운데 아직 객체로 읽히지 않는 것(닫는 괄호가 빠진 초안 등): 초안 객체 → {필드: 원문}.
+// 폼은 데이터셋을 바꾸거나 저장이 거절될 때마다 다시 그려지므로, 원문을 DOM이 아니라 초안 객체에 묶어 둔다.
+// 초안 객체가 바뀌면(취소, 저장 성공, 다른 칸 선택) 함께 사라진다.
+const brokenJson = new WeakMap();
+const brokenOf = (pending) => { if (!brokenJson.has(pending)) brokenJson.set(pending, {}); return brokenJson.get(pending); };
 const isSql = (v) => !!v && typeof v === "object";
 
 /** 유형을 바꿨을 때: 새 유형에 없는 필드를 초안에서 뺀다(저장할 때 null로 나간다) */
@@ -252,15 +257,17 @@ export function renderChartForm(box, { pending, isNew, keyBox, types, datasets, 
 
   function jsonArea(name, required) {
     const el = h("textarea", { class: "input mono", rows: raw ? 10 : 3, "data-path": name, spellcheck: "false" });
-    el.value = pending[name] === undefined ? "" : JSON.stringify(pending[name], null, 2);
+    const broken = brokenOf(pending);
+    if (typeof broken[name] === "string") { el.value = broken[name]; el.setAttribute("aria-invalid", "true"); }   // 읽히지 않던 초안을 그대로 되살린다
+    else el.value = pending[name] === undefined ? "" : JSON.stringify(pending[name], null, 2);
     el.addEventListener("input", () => {
       const src = el.value.trim();
-      if (!src) { el.removeAttribute("aria-invalid"); if (required) pending[name] = {}; else delete pending[name]; changed(false); return; }
+      if (!src) { delete broken[name]; el.removeAttribute("aria-invalid"); if (required) pending[name] = {}; else delete pending[name]; changed(false); return; }
       try {
         const v = JSON.parse(src);
         if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("object");
-        pending[name] = v; el.removeAttribute("aria-invalid");
-      } catch (e) { el.setAttribute("aria-invalid", "true"); }
+        pending[name] = v; delete broken[name]; el.removeAttribute("aria-invalid");
+      } catch (e) { broken[name] = el.value; el.setAttribute("aria-invalid", "true"); }
       changed(false);
     });
     return el;
