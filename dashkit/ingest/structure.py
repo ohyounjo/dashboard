@@ -322,10 +322,10 @@ def validate(project_name: str, op_list: list[Mapping[str, Any]],
 
 
 def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, revision: str | None, *, action: str,
-                  files: Mapping[str, bytes | None] | None = None, extra: Mapping[str, bytes | None] | None = None,
+                  restore: str | None = None, extra: Mapping[str, bytes | None] | None = None,
                   run_sync: bool = True, log_line: Callable[[str], None] | None = None,
                   dbname: str | None = None, wait_ms: int | None = None) -> dict[str, Any]:
-    """구조 변경 한 번(연산 또는 파일 내용). revision은 필수다(그 사이 바뀌었으면 409 stale_config).
+    """구조 변경 한 번(연산, 또는 restore: 설정 이력 id로 되돌리기). revision은 필수다(그 사이 바뀌었으면 409 stale_config).
 
     결과: {"changed": [경로], "history": id, "revision", "counts", "sync": {"ok", "errors"}}
     """
@@ -349,7 +349,9 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
         # 같은 프로세스의 다른 설정 저장(aliases 저장 등)과도 겹치지 않게 프로젝트 잠금을 함께 잡는다
         with store.project_lock(project.name), \
                 locked(project, conn, revision=revision, check_data_revision=False, wait_ms=wait_ms) as session:
-            if files is not None:
+            if restore is not None:
+                # 이력의 해시 검사(지금 내용이 그 작업 바로 뒤의 판인지)를 잠금 안에서 한다
+                files = history_files(project.name, restore)
                 changes = {_safe_rel(k): (_read(project.root / k), v) for k, v in files.items()}
                 changes = {k: v for k, v in changes.items() if v[0] != v[1]}
             else:
@@ -361,6 +363,10 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
             staged = _staged(project, changes)
             check_mode_switch(project, staged.project)          # 잠금 안에서 폴더를 다시 본다(이력 되돌리기 포함)
             new_revision = data_revision(staged.project.schema, staged.project.dashboard)
+            # 검증하는 사이 다른 곳(Studio의 CSV 교체 등. YAML revision에 들지 않는다)이 파일을 바꿨으면 덮어쓰지 않는다
+            for rel, (before, _after) in changes.items():
+                if _read(project.root / rel) != before:
+                    raise IngestError(409, "stale_config", f"{rel}이 그 사이에 바뀌어 고치지 않았습니다. 다시 불러온 뒤 시도하세요")
             hid = _new_history_id(action)
             record_path, record = _write_record(project, changes, new_revision, hid, action, session.loaded.loaded_at)
             for rel, (_b, after) in changes.items():

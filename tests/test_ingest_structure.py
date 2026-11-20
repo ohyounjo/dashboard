@@ -80,10 +80,27 @@ def test_column_add_on_replace_table_changes_csv_too_and_history_restores_both(r
     assert history[0]["id"] == result["history"] and {f["path"] for f in history[0]["files"]} == {
         "schema.yaml", "data/groups.csv"}
 
-    back = structure.history_files("ledger", result["history"])
-    change(root, scratch_db, None, files=back, action="restore")
+    change(root, scratch_db, None, restore=result["history"], action="restore")
     assert files(root) == before
     assert "note" not in columns_of(scratch_db, "groups")
+
+
+def test_a_file_changed_while_the_change_was_being_checked_is_not_overwritten(root, scratch_db, monkeypatch):
+    """잠금 안에서 검증하는 사이 다른 곳(Studio의 CSV 교체 등)이 파일을 바꾸면 409 stale_config. 이력 되돌리기도 같다."""
+    load(load_project("ledger", root), dbname=scratch_db)
+    result = change(root, scratch_db, [{"op": "column.add", "table": "groups", "column": "note", "value": {"type": "text"}}])
+    csv_path = root / "ledger/data/groups.csv"
+    real = structure._staged
+
+    def staged_then_someone_writes(project, changes):
+        out = real(project, changes)
+        csv_path.write_text(csv_path.read_text(encoding="utf-8") + "g7,일곱,\n", encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(structure, "_staged", staged_then_someone_writes)
+    err = pytest.raises(IngestError, change, root, scratch_db, None, restore=result["history"], action="restore").value
+    assert (err.status, err.detail) == (409, "stale_config")
+    assert "g7,일곱," in csv_path.read_text(encoding="utf-8") and leftovers(root) == []
 
 
 def test_history_restore_refuses_a_file_changed_afterwards(root, scratch_db):
@@ -160,8 +177,7 @@ def test_history_restore_cannot_switch_an_append_table_with_batches_back_to_repl
     result = change(root, scratch_db, [{"op": "table.update", "table": "groups", "set": {"mode": "append"}}])
     add(root, scratch_db, "groups", [{"id": "g9", "label": "아홉"}])
     data = all_rows(scratch_db)
-    back = structure.history_files("ledger", result["history"])
-    err = pytest.raises(IngestError, change, root, scratch_db, None, files=back, action="restore").value
+    err = pytest.raises(IngestError, change, root, scratch_db, None, restore=result["history"], action="restore").value
     assert (err.status, err.detail) == (422, "invalid_op")
     assert all_rows(scratch_db) == data and "g9" in {r[0] for r in rows(scratch_db, "groups")}
 
@@ -237,7 +253,7 @@ def test_new_table_from_csv_is_saved_validated_and_applied(root, scratch_db, mod
     rebuilt_equals_current(root, scratch_db)
     # 되돌리면 그 작업이 만든 첫 파일도 함께 지운다. 그 뒤에 더한 배치는 이력에 없어 그대로 남는다(데이터를 지우지 않는다)
     later = folder(root, "items")[1:]
-    change(root, scratch_db, None, files=structure.history_files("ledger", result["history"]), action="restore")
+    change(root, scratch_db, None, restore=result["history"], action="restore")
     assert "items" not in load_project("ledger", root).schema["tables"]
     assert not (root / "ledger/data/items.csv").exists() and folder(root, "items") == later
 

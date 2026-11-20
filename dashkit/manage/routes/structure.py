@@ -288,8 +288,8 @@ async def post_history_restore(hid: str, request: Request, principal: Principal 
         raise IngestError(404, "unknown_history", "그 설정 이력이 없습니다")
 
     def change(ctx, limits) -> dict[str, Any]:
-        files = structure.history_files(project.name, hid)     # 그 뒤에 다시 바뀐 파일이 있으면 409 stale_config
-        result = structure.change_config(project.name, None, revision, action="restore", files=files,
+        # 그 뒤에 다시 바뀐 파일이 있으면 409 stale_config(검사는 작업이 쓰기 잠금을 잡은 뒤에 한다)
+        result = structure.change_config(project.name, None, revision, action="restore", restore=hid,
                                          log_line=ctx.log, wait_ms=limits.lock_wait_ms)
         result["restored"] = hid
         return result
