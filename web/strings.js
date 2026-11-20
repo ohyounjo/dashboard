@@ -29,6 +29,35 @@ export default {
   appErrorBody: "백엔드 서버가 실행 중인지 확인하세요. 터미널에서 make logs로 원인을 볼 수 있습니다.",
   noTabs: "표시할 탭이 없습니다. 설정 파일의 tabs를 확인하세요.",
 
+  // 사용자 메뉴(레일 아래)
+  account: "내 계정",
+  accountMenuLabel: (email) => `내 계정: ${email}`,
+  logout: "로그아웃",
+  roleLabel: { admin: "어드민", operator: "운용진", user: "일반사용자" },
+  sessionExpired: "로그인이 만료되었습니다. 다시 로그인하세요.",
+
+  // 로그인 전 화면(login.html 등, auth.js)
+  auth: {
+    loginTitle: "로그인",
+    loginIntro: "사내 이메일과 비밀번호로 로그인하세요.",
+    email: "이메일",
+    password: "비밀번호",
+    loginSubmit: "로그인",
+    loginSubmitting: "로그인 중…",
+    loggedOut: "로그아웃했습니다.",
+    required: "이메일과 비밀번호를 입력하세요.",
+    errors: {
+      invalid_credentials: "이메일 또는 비밀번호가 올바르지 않습니다.",
+      email_not_verified: "메일 인증을 마쳐야 로그인할 수 있습니다. 받은 메일의 링크를 여세요.",
+      account_suspended: "정지된 계정입니다. 운용자에게 문의하세요.",
+      account_locked: "로그인에 여러 번 실패해 잠시 잠겼습니다. 15분 뒤에 다시 시도하거나 운용자에게 문의하세요.",
+      rate_limited: "요청이 너무 많습니다. 잠시 뒤에 다시 시도하세요.",
+      auth_unavailable: "로그인 서버에 문제가 있습니다. 관리자에게 알려 주세요(make logs).",
+      network: "서버에 연결할 수 없습니다. 잠시 뒤에 다시 시도하세요.",
+      server: (status) => `서버 오류가 발생했습니다(HTTP ${status}).`,
+    },
+  },
+
   // 섹션 공통
   sectionLoading: "불러오는 중…",
   dashboardLoading: "대시보드를 불러오는 중…",

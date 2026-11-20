@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title></title>
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="auth.css">
+<script type="module" src="auth.js"></script>
+</head>
+<body class="auth-page" data-page="login">
+<main class="auth" id="main">
+  <div class="auth-card">
+    <div class="auth-mark" id="mark" aria-hidden="true"></div>
+    <h1 id="title"></h1>
+    <p class="auth-intro" id="intro"></p>
+    <div class="auth-msg" id="msg" hidden></div>
+    <form id="form" novalidate>
+      <label class="field"><span id="emailLabel"></span>
+        <input id="email" name="email" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" required></label>
+      <label class="field"><span id="passwordLabel"></span>
+        <input id="password" name="password" type="password" autocomplete="current-password" required></label>
+      <button class="btn primary block" type="submit" id="submit"></button>
+    </form>
+    <nav class="auth-links" id="links"></nav>
+  </div>
+</main>
+</body>
+</html>

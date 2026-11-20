@@ -24,12 +24,25 @@ x-data-db-env: &data-db-env
   DATA_DB_READER_USER: ${DATA_DB_READER_USER}
   DATA_DB_READER_PASSWORD: ${DATA_DB_READER_PASSWORD:?make env 필요}
 
+# 인증 DB 계정과 로그인 설정(contracts/auth.md). backend와 tools(make admin)가 쓴다
+x-auth-env: &auth-env
+  DATA_DB_AUTH_USER: ${DATA_DB_AUTH_USER:-dash_auth}
+  DATA_DB_AUTH_PASSWORD: ${DATA_DB_AUTH_PASSWORD:?make env 필요}
+  AUTH_EMAIL_DOMAINS: ${AUTH_EMAIL_DOMAINS:?AUTH_EMAIL_DOMAINS가 필요(가입을 허용할 메일 도메인)}
+  AUTH_MAIL_MODE: ${AUTH_MAIL_MODE:-test}
+  WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:8080}
+  WEB_ORIGINS: ${WEB_ORIGINS}
+  AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-0}
+  AUTH_SESSION_IDLE_MINUTES: ${AUTH_SESSION_IDLE_MINUTES:-480}
+  AUTH_SESSION_MAX_DAYS: ${AUTH_SESSION_MAX_DAYS:-7}
+
 services:
   data-db:
     image: postgres:16.10
     restart: unless-stopped
     environment:
-      # superuser는 postgres로 따로 두고, 로더 계정(dash_owner)은 01-reader.sh가 일반 역할로 만든다
+      # superuser는 postgres로 따로 두고, 로더 계정(dash_owner)은 01-reader.sh가 일반 역할로 만든다.
+      # 인증 계정(dash_auth)과 dashkit_auth 스키마는 02-auth.sh가 만든다(이미 있는 볼륨에는 make auth-init)
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${DATA_DB_ADMIN_PASSWORD:?make env 필요}
       POSTGRES_DB: ${DATA_DB_NAME}
@@ -37,10 +50,14 @@ services:
       DATA_DB_OWNER_PASSWORD: ${DATA_DB_OWNER_PASSWORD:?make env 필요}
       DATA_DB_READER_USER: ${DATA_DB_READER_USER}
       DATA_DB_READER_PASSWORD: ${DATA_DB_READER_PASSWORD:?make env 필요}
+      DATA_DB_AUTH_USER: ${DATA_DB_AUTH_USER:-dash_auth}
+      DATA_DB_AUTH_PASSWORD: ${DATA_DB_AUTH_PASSWORD:?make env 필요}
       TZ: ${TZ}
     volumes:
       - data-db:/var/lib/postgresql/data
       - ./data-db/init:/docker-entrypoint-initdb.d:ro
+      # 인증 스키마의 번호 붙은 SQL(02-auth.sh가 순서대로 적용한다)
+      - ./dashkit/auth/sql:/dashkit-auth-sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
@@ -103,9 +120,9 @@ services:
       target: app
     image: dashkit-app:local
     restart: unless-stopped
-    # SUPERSET_ADMIN_PASSWORD, DATA_DB_OWNER_PASSWORD는 주지 않는다
+    # SUPERSET_ADMIN_PASSWORD, DATA_DB_OWNER_PASSWORD는 주지 않는다. 인증 DB는 dash_auth 계정만
     environment:
-      <<: *data-db-env
+      <<: [*data-db-env, *auth-env]
       PROJECT: ${PROJECT}
       TZ: ${TZ}
       SUPERSET_PUBLIC_URL: ${SUPERSET_PUBLIC_URL}
@@ -157,10 +174,10 @@ services:
     image: dashkit-app:local
     restart: "no"
     environment:
-      <<: *data-db-env
+      # 인증 DB 계정은 make admin, make test(로그인 도우미·DB 계정 경계 테스트)가 쓴다
+      <<: [*data-db-env, *auth-env]
       PROJECT: ${PROJECT}
       TZ: ${TZ}
-      WEB_ORIGINS: ${WEB_ORIGINS}
       SUPERSET_URL: ${SUPERSET_URL}
       SUPERSET_PUBLIC_URL: ${SUPERSET_PUBLIC_URL}
       SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}

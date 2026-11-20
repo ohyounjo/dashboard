@@ -5,6 +5,8 @@
 // 환경 변수
 //   BASE_URL   웹앱 주소 (기본 http://localhost:8080)
 //   SETTLE_MS  네트워크가 잠잠해진 뒤 추가로 기다리는 시간 (기본 1500)
+//   E2E_EMAIL, E2E_PASSWORD  로그인할 계정(make admin으로 만든 것). 웹앱이 로그인을 요구하면 이 계정으로 로그인해
+//              탭을 찍고, 로그인 전 화면(AUTH_PAGES)도 찍는다. 로그인 기능이 없는 버전(/api/auth/login이 404)은 그냥 찍는다.
 //
 // 출력
 //   <출력 폴더>/<탭>-<화면>-<테마>.png
@@ -23,8 +25,36 @@ const VIEWPORTS = [
 ];
 const THEMES = ["light", "dark"];
 
-async function fetchApp() {
-  const res = await fetch(`${BASE_URL}/api/app`);
+const SESSION_COOKIE = "dashkit_session";
+// 로그인 전 화면. 탭과 같은 표로 비교되도록 manifest의 tabs에 넣는다(키는 탭 키와 겹치지 않게 _로 시작)
+const AUTH_PAGES = [
+  { key: "_login", label: "로그인 화면", path: "/login.html" },
+];
+
+// 로그인해서 세션 쿠키 값을 돌려준다. 로그인 기능이 없는 버전이면 null.
+async function login() {
+  const email = process.env.E2E_EMAIL || "";
+  const password = process.env.E2E_PASSWORD || "";
+  const probe = await fetch(`${BASE_URL}/api/app`);
+  if (probe.ok) return null;                       // 로그인이 필요 없는 버전
+  if (probe.status !== 401) throw new Error(`/api/app ${probe.status}`);
+  if (!email || !password) throw new Error("웹앱이 로그인을 요구함: E2E_EMAIL, E2E_PASSWORD가 필요");
+  const res = await fetch(`${BASE_URL}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) throw new Error(`로그인 실패: HTTP ${res.status}`);
+  for (const c of res.headers.getSetCookie()) {
+    const [pair] = c.split(";");
+    const i = pair.indexOf("=");
+    if (pair.slice(0, i).trim() === SESSION_COOKIE) return pair.slice(i + 1).trim();
+  }
+  throw new Error("로그인 응답에 세션 쿠키가 없음");
+}
+
+async function fetchApp(cookie) {
+  const res = await fetch(`${BASE_URL}/api/app`, { headers: cookie ? { Cookie: `${SESSION_COOKIE}=${cookie}` } : {} });
   if (!res.ok) throw new Error(`/api/app ${res.status}`);
   return res.json();
 }
@@ -81,8 +111,10 @@ async function waitEmbedReady(handle) {
 
 async function main() {
   await mkdir(OUT, { recursive: true });
-  const app = await fetchApp();
+  const cookie = await login();
+  const app = await fetchApp(cookie);
   const tabs = app.tabs.map((t) => ({ key: t.key, label: t.label }));
+  const pages = cookie ? AUTH_PAGES : [];
   const shots = [];
   const consoleErrors = [];
 
@@ -109,6 +141,17 @@ async function main() {
         });
         page.on("pageerror", (err) => consoleErrors.push({ viewport: vp.name, theme, text: String(err) }));
 
+        // 로그인 전 화면은 쿠키 없이 찍는다
+        for (const pg of pages) {
+          await page.goto(`${BASE_URL}${pg.path}`, { waitUntil: "domcontentloaded" });
+          const warnings = await waitSettled(page);
+          const file = `${pg.key}-${vp.name}-${theme}.png`;
+          await page.screenshot({ path: path.join(OUT, file), fullPage: true });
+          shots.push({ tab: pg.key, label: pg.label, viewport: vp.name, theme, file, warnings });
+          console.log(`✔ ${file}`);
+        }
+        if (cookie) await context.addCookies([{ name: SESSION_COOKIE, value: cookie, url: BASE_URL }]);
+
         for (const tab of tabs) {
           await page.goto(`${BASE_URL}/#${encodeURIComponent(tab.key)}`, { waitUntil: "domcontentloaded" });
           const warnings = await waitSettled(page);
@@ -124,7 +167,10 @@ async function main() {
     await browser.close();
   }
 
-  const manifest = { project: app.project, title: app.app?.title ?? "", tabs, shots, consoleErrors };
+  const manifest = {
+    project: app.project, title: app.app?.title ?? "", tabs: [...tabs, ...pages.map((p) => ({ key: p.key, label: p.label }))],
+    shots, consoleErrors,
+  };
   await writeFile(path.join(OUT, "manifest.json"), JSON.stringify(manifest, null, 2));
   console.log(`캡처 ${shots.length}장, 콘솔 오류 ${consoleErrors.length}건 → ${OUT}`);
 }
