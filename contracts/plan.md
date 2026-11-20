@@ -132,12 +132,12 @@ CREATE TABLE dashkit_meta.batch (                 -- 원본 데이터 파일마�
 | 상황 | 결과 |
 |---|---|
 | 배치 기록에 없는 파일 | `batches.added`(배치 +1). 엄격하게 검증해 행 수를 `added`에 센다 |
-| 기록에 있는데 폴더에 없는 파일 | `batches.removed`(배치 −1). 기록된 행 수를 `removed`에 센다 |
-| 이름이 같고 내용 해시가 다른 파일 | `batches.changed`. 새 행 수를 `added`에, 기록된 행 수를 `removed`에 센다 |
+| 기록에 있는데 폴더에 없는 파일 | `batches.removed`(배치 −1). 그 배치가 넣었던 새 행 수(`inserted`)를 `removed`에 센다 |
+| 이름이 같고 내용 해시가 다른 파일 | `batches.changed`. 새 행 수를 `added`에, 기록된 `inserted`를 `removed`에 센다 |
 | 이름과 해시가 같은 배치 | 다시 읽지 않는다 |
 | 이 테이블을 가리키는 묶음 기록이 `data/_pending/`에 남아 있음 | `status: pending`. 기록을 고치지 않고 "끝나지 않은 폴더 작업이 있음"을 알리며 비교하지 않는다 |
 
-`rows`는 기록된 행 수 + 새 배치의 행 수 − 없어진 배치의 행 수(어림값. 키가 겹치는 배치는 적용해야 정확히 안다), `changed`·`unchanged`는 `null`, `comparable`은 `false`다. 사람이 읽는 출력은 `배치 +2 −1 ~0 (+120행 −30행)`이다. 배치 파일의 이름 오류와 검증 오류는 CSV 검증 실패와 같게 다룬다.
+`rows`는 지금 행 수(배치 기록의 `inserted` 합. 추가 적재분 포함) + 새 배치의 행 수 − 없어지거나 바뀐 배치의 `inserted`(어림값. 키가 겹치는 배치는 적용해야 정확히 안다), `changed`·`unchanged`는 `null`, `comparable`은 `false`다. 사람이 읽는 출력은 `배치 +2 −1 ~0 (+120행 −30행)`이다. 배치 파일의 이름 오류와 검증 오류는 CSV 검증 실패와 같게 다룬다.
 - `load`는 테이블을 통째로 다시 만든다. plan의 행 수는 "적용 뒤 내용이 지난 적재와 얼마나 다른가"이지 실행될 SQL의 수가 아니다.
 - 기록은 로더만 쓴다. owner 계정으로 raw를 직접 고친 내용은 plan에 나오지 않는다(다음 적재에서 덮어써진다).
 

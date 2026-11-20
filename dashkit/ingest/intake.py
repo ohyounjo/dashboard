@@ -26,6 +26,10 @@ from ..loader.validate import _check_value, _parse
 from . import batches, normalize
 
 MAX_REPORTED = 200        # 파일(요청) 하나에서 글로 보여 주는 오류 수(로더와 같다)
+# 칸 하나의 최대 글자 수. 파이썬 csv의 기본(131072자)보다 큰 값을 JSON 행으로 받아 저장하면 다시 읽을 수 없게 되므로,
+# 읽기 한도를 크게 두고(아래) 접수할 때 이 길이를 넘는 값을 오류로 막는다. 저장한 배치는 언제나 다시 읽힌다.
+MAX_CELL_CHARS = 10 * 1024 * 1024
+csv.field_size_limit(max(csv.field_size_limit(), MAX_CELL_CHARS + 1))
 _DELIMITERS = (",", "\t", ";")
 
 
@@ -453,6 +457,13 @@ class Intake:
                     yield at, [], None
                     continue
                 values = [record[i] for i in self._take]
+                long = [c for c, v in zip(self.header, values) if len(v) > MAX_CELL_CHARS]
+                if long:
+                    report.invalid += 1
+                    for col in long:
+                        report.error(f"{where(at, col)}: 값이 너무 김(최대 {MAX_CELL_CHARS}자)")
+                    yield at, values, None
+                    continue
                 if not self.strict:
                     values = [normalize.normalize(v, t, self._counts) for v, t in zip(values, self._types)]
                 typed, problems = self.checker.check(values)

@@ -70,7 +70,7 @@ projects/<프로젝트>/data/
 | `boolean` | `Y`/`N`, `yes`/`no`, `1`/`0`, 대문자 → `true`/`false` | `booleans` |
 | `timestamp` | 날짜와 시각 사이의 공백·`T`를 `T` 하나로, 날짜 부분은 `date`와 같다 | `timestamps` |
 
-검증 규칙과 오류 글은 지금의 CSV 검증과 같다(유형, `required`, `enum`, `min`·`max`, `pattern`, 배치 안의 기본 키 중복). 파일 하나의 오류는 200개까지 글로 싣고 `error_count`에 모두 센다. 원래 올린 파일은 보관하지 않는다.
+검증 규칙과 오류 글은 지금의 CSV 검증과 같다(유형, `required`, `enum`, `min`·`max`, `pattern`, 배치 안의 기본 키 중복). 칸 하나는 10MiB 글자(`MAX_CELL_CHARS`)까지다. 넘으면 그 칸의 오류다(저장한 배치는 언제나 다시 읽혀야 하므로 읽기 한도도 이 값보다 크게 둔다). 파일 하나의 오류는 200개까지 글로 싣고 `error_count`에 모두 센다. 원래 올린 파일은 보관하지 않는다.
 
 ## 반영
 

@@ -206,7 +206,7 @@ def _batch_rows(project_schema: Mapping[str, Any], src: Any) -> tuple[int, list[
 
 
 def batch_diff(name: str, table: Mapping[str, Any], folder: Mapping[str, Any], recorded: Mapping[str, Any] | None,
-               old_batches: Mapping[str, tuple[str, int]] | None, *, replaced_project: str | None = None
+               old_batches: Mapping[str, tuple[str, int, int]] | None, *, replaced_project: str | None = None
                ) -> dict[str, Any]:
     """누적(append) 테이블의 차이: 배치 단위로 비교한다(contracts/plan.md "누적 테이블").
 
@@ -238,8 +238,9 @@ def batch_diff(name: str, table: Mapping[str, Any], folder: Mapping[str, Any], r
     if errors:
         raise PlanError("CSV 검증 실패, 차이를 계산하지 않음", errors)
     removed = sorted(old)
-    removed_rows = sum(r for _h, r in old.values()) + sum(
-        (old_batches or {}).get(f, ("", 0))[1] for f in changed)
+    # 빠지는 행: 없어지거나 바뀐 배치가 넣었던 새 키의 수(배치 기록의 inserted)
+    removed_rows = sum(rec[2] for rec in old.values()) + sum(
+        (old_batches or {}).get(f, ("", 0, 0))[2] for f in changed)
     batch_lists = {"added": added, "removed": removed, "changed": changed}
     cols = _no_column_change()
     if old_batches is None:                      # 적재 기록이 없다
@@ -251,7 +252,9 @@ def batch_diff(name: str, table: Mapping[str, Any], folder: Mapping[str, Any], r
     else:
         cols = diff_columns(table_columns(table), [(c, t) for c, t in recorded["columns"]])
         status = "changed" if (added or removed or changed or _columns_changed(cols)) else "unchanged"
-    rows_now = int(recorded.get("rows", 0)) if recorded is not None and replaced_project is None else 0
+    # 지금 테이블의 행 수 = 배치 기록의 inserted 합(추가 적재분 포함. 스냅샷의 rows는 마지막 load 때의 값이라 쓰지 않는다)
+    rows_now = (sum(rec[2] for rec in (old_batches or {}).values())
+                if recorded is not None and replaced_project is None else 0)
     return {**entry, "rows": rows_now + new_rows - removed_rows if status != "unrecorded" else None,
             "status": status, "columns": cols,
             "added": new_rows, "removed": removed_rows, "changed": None, "unchanged": None,

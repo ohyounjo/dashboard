@@ -577,3 +577,26 @@ def test_hand_placed_file_applied_first_is_recovered_with_the_group(tmp_path, sc
     assert r["applied_first"] == [{"table": "entries", "file": "000080-hand.csv", "rows": 1}]
     assert "E97" not in {x[0] for x in rows(scratch_db, "entries")}
     rebuilt_equals_current(root, scratch_db)
+
+
+def test_long_text_batch_can_be_read_back(tmp_path, scratch_db):
+    """csv 모듈 기본 한도(131072자)보다 긴 값도 저장한 뒤 다시 만들 수 있다."""
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    add(root, scratch_db, "entries", [{"id": "E99", "memo": "가" * 200_000}])
+    rebuilt_equals_current(root, scratch_db)
+
+
+def test_plan_counts_rows_added_since_the_last_load(tmp_path, scratch_db, monkeypatch):
+    from dashkit import plan
+
+    root = make_project(tmp_path, batches=False)
+    load(load_project("ledger", root), dbname=scratch_db)      # entries 3행
+    r = add(root, scratch_db, "entries", [{"id": f"E{100 + i}"} for i in range(4)])
+    monkeypatch.setenv("BUILD_DIR", str(tmp_path / "build"))
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+    entry = next(t for t in plan.make_plan(load_project("ledger", root), dbname=scratch_db)["data"] if t["table"] == "entries")
+    assert entry["status"] == "unchanged" and entry["rows"] == 7
+    (root / "ledger" / "data" / "entries" / r["batches"][0]["file"]).unlink()
+    entry = next(t for t in plan.make_plan(load_project("ledger", root), dbname=scratch_db)["data"] if t["table"] == "entries")
+    assert entry["batches"]["removed"] == [r["batches"][0]["file"]] and entry["rows"] == 3 and entry["removed"] == 4
