@@ -10,8 +10,9 @@
 checks를 트랜잭션 안에서 먼저 하고 → 묶음 기록(종류 remove·restore) → 파일 옮기기 → 커밋 → 묶음 기록 지우기.
 DB 작업이 실패하면 파일을 건드리지 않는다.
 
-끊김 복구(recover.py의 RECOVERERS): 배치 기록으로 커밋 여부를 판정한다. remove는 기록에 그 파일이 없으면(커밋됨) 파일을
-`_removed/`에, 있으면(커밋 안 됨) 폴더에 둔다. restore는 반대다. load 방식은 기록만 지운다(파일이 놓인 자리대로 다시 만든다).
+끊김 복구(recover.py의 RECOVERERS): 커밋 여부를 판정해 파일을 그 결과에 맞는 자리(폴더 또는 `_removed/`)에 둔다.
+빠른 길은 배치 기록(그 줄이 지워졌는지), 다시 만드는 길은 적재 스냅샷의 loaded_at(다시 만들면 바뀐다)으로 판정한다.
+load 방식은 기록만 지운다(파일이 놓인 자리대로 다시 만든다).
 """
 from __future__ import annotations
 
@@ -74,10 +75,10 @@ def remove_batch(project_name: str, table: str, name: str, *, fast_only: bool = 
     """배치를 되돌린다. 빠른 길이면 {"fast": true, …}, 아니면 다시 만든다(fast_only면 NeedsRebuild)."""
     project, revision = load_stable(project_name, projects_dir)
     tname = check_table(project, table)
-    target = _target(project, tname, name, removed=False)
     conn = _connect(dbname)
     try:
         with locked(project, conn, revision=revision, wait_ms=wait_ms) as session:
+            target = _target(project, tname, name, removed=False)     # 복구가 파일을 제자리로 돌린 뒤에 본다
             reason = _fast_blocker(session, target)
             if reason is None:
                 result = _fast_remove(session, target)
@@ -97,12 +98,12 @@ def restore_batch(project_name: str, table: str, name: str, *, projects_dir: Pat
     """`_removed/`의 배치를 되살린다(다시 만든다)."""
     project, revision = load_stable(project_name, projects_dir)
     tname = check_table(project, table)
-    target = _target(project, tname, name, removed=True)
-    if target.folder_path.exists():
-        raise IngestError(409, "batch_exists", "같은 이름의 배치가 이미 폴더에 있습니다")
     conn = _connect(dbname)
     try:
         with locked(project, conn, revision=revision, wait_ms=wait_ms) as session:
+            target = _target(project, tname, name, removed=True)      # 복구가 파일을 제자리로 돌린 뒤에 본다
+            if target.folder_path.exists():
+                raise IngestError(409, "batch_exists", "같은 이름의 배치가 이미 폴더에 있습니다")
             result = _rebuild_move(session, target, "restore")
         after_ingest(project, [tname])
         return result
@@ -143,9 +144,13 @@ def _fast_blocker(session: Session, target: Target) -> str | None:
     return None
 
 
-def _record(session: Session, kind: str, target: Target) -> tuple[Path, dict[str, Any]]:
+def _record(session: Session, kind: str, target: Target, *, fast: bool) -> tuple[Path, dict[str, Any]]:
+    """묶음 기록. 커밋 여부를 판정할 표식을 함께 적는다: 빠른 길은 배치 기록의 그 줄(fast), 다시 만드는 길은 작업 전의
+    적재 시각(loaded_at. 다시 만들면 바뀐다. 반영되지 않은 손 파일을 빼는 경우에도 판정할 수 있다)."""
+    loaded_at = session.loaded.loaded_at
     record = {"id": pending.new_id(), "kind": kind, "project": session.project.name,
-              "table": target.table, "name": target.name}
+              "table": target.table, "name": target.name, "fast": fast,
+              "loaded_at": loaded_at.isoformat() if loaded_at is not None else None}
     return pending.write_record(session.project.data_dir, record), record
 
 
@@ -185,7 +190,7 @@ def _fast_remove(session: Session, target: Target) -> dict[str, Any]:
                 errors = run_checks(cur, project.schema, table_order(project))
                 if errors:
                     raise IngestError(422, "check_failed", "규칙(checks)을 위반해 되돌리지 않았습니다", errors)
-                record_path, record = _record(session, "remove", target)
+                record_path, record = _record(session, "remove", target, fast=True)
                 fault("after_record")
                 _move(target.folder_path, target.removed_path)
                 fault("after_move")
@@ -232,7 +237,7 @@ def _rebuild_move(session: Session, target: Target, kind: str) -> dict[str, Any]
                 raise IngestError(422, "check_failed" if kind == "remove" else "invalid_rows",
                                   "그 배치를 " + ("빼고" if kind == "remove" else "넣고") + " 다시 만들 수 없습니다(파일은 그대로입니다)",
                                   exc.errors) from None
-            record_path, record = _record(session, kind, target)
+            record_path, record = _record(session, kind, target, fast=False)
             fault("after_record")
             _move(src, dst)
             fault("before_commit")
@@ -275,9 +280,15 @@ def recover_move(project: Project, conn: psycopg.Connection | None, record: Mapp
     assert conn is not None
     with conn.cursor() as cur:
         recorded = name in ledger.read(cur, [tname]).get(tname, {})
+        now = ledger.loaded(cur)
     if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
         conn.commit()
-    committed = (not recorded) if kind == "remove" else recorded
+    if record.get("fast") is False:
+        # 다시 만드는 길: 커밋되면 적재 시각이 바뀐다(그 사이의 load는 이 기록을 load 방식으로 먼저 처리한다)
+        before = record.get("loaded_at")
+        committed = (now.loaded_at.isoformat() if now.loaded_at is not None else None) != before
+    else:
+        committed = (not recorded) if kind == "remove" else recorded
     want_removed = committed if kind == "remove" else not committed
     src, dst = (in_folder, in_removed) if want_removed else (in_removed, in_folder)
     if src.exists() and not dst.exists():

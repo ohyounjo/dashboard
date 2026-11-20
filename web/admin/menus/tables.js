@@ -464,7 +464,8 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
     });
   }
 
-  return { preview, commit, reset: () => { onCells([]); out.replaceChildren(); } };
+  // 입력을 비우거나 바꾸면 진행 중인 요청을 무효로 한다(늦게 온 응답이 비운 화면을 다시 채우지 않게)
+  return { preview, commit, reset: () => { gen += 1; state = { src: null, opts: {}, preview: null }; onCells([]); out.replaceChildren(); } };
 }
 
 /** 미리보기·결과 상자(contracts/ingest.md "결과"). */

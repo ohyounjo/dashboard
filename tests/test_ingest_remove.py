@@ -116,3 +116,25 @@ def test_crash_during_rebuild_removal_is_recovered(tmp_path, scratch_db, fault, 
     assert ("E4" in ids) == (point != "after_commit")
     assert leftovers(root) == []
     rebuilt_equals_current(root, scratch_db)
+
+
+@pytest.mark.parametrize("point", ["after_record", "before_commit"])
+def test_crash_while_removing_an_unapplied_hand_file_rolls_back(tmp_path, scratch_db, fault, point):
+    """반영되지 않은 손 파일 B를 빼며 다시 만들다 커밋 전에 끊기면, 복구는 작업 전 상태로 맞춘다(리뷰 지적 회귀).
+
+    배치 기록에 B가 없다는 것만으로는 커밋 여부를 알 수 없으므로 적재 시각으로 판정한다. 같은 다시 만들기에서 반영되던
+    다른 손 파일 C는 그 뒤의 작업이 정상으로 반영한다."""
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    data = root / "ledger" / "data" / "entries"
+    (data / "000050-b.csv").write_text("id\nE210\n", encoding="utf-8")
+    (data / "000051-c.csv").write_text("id\nE211\n", encoding="utf-8")
+    fault(point, operation.SimulatedCrash())
+    with pytest.raises(operation.SimulatedCrash):
+        remove(root, scratch_db, "entries", "000050-b.csv")
+    operation.FAULTS.clear()
+    r = remove(root, scratch_db, "entries", "000050-b.csv")      # 다음 작업이 먼저 복구하고, 다시 같은 일을 한다
+    assert not r["fast"] and "000050-b.csv" in removed_dir(root, "entries")
+    ids = {x[0] for x in rows(scratch_db, "entries")}
+    assert "E210" not in ids and "E211" in ids and leftovers(root) == []
+    rebuilt_equals_current(root, scratch_db)
