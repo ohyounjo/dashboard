@@ -63,16 +63,20 @@ def _drop_incoming(project: Project, record: Mapping[str, Any]) -> None:
                 pass
 
 
-def _check_add(project: Project, record: Mapping[str, Any]) -> list[dict[str, Any]]:
-    files = record.get("files")
+def _check_items(project: Project, record: Mapping[str, Any], key: str, *, required: bool) -> list[dict[str, Any]]:
+    items = record.get(key, [] if not required else None)
     tables = project.schema["tables"]
-    if not isinstance(files, list) or not files:
-        raise RecoverError([f"data/_pending/{record.get('id')}.json: files가 없음"])
-    for item in files:
+    if not isinstance(items, list) or (required and not items):
+        raise RecoverError([f"data/_pending/{record.get('id')}.json: {key}가 없음"])
+    for item in items:
         if not isinstance(item, dict) or item.get("table") not in tables or not isinstance(item.get("name"), str) \
                 or "/" in item["name"] or item["name"].startswith((".", "_")):
-            raise RecoverError([f"data/_pending/{record.get('id')}.json: files 항목 형식이 틀림"])
-    return files
+            raise RecoverError([f"data/_pending/{record.get('id')}.json: {key} 항목 형식이 틀림"])
+    return items
+
+
+def _check_add(project: Project, record: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return _check_items(project, record, "files", required=True)
 
 
 def recover_add(project: Project, conn: psycopg.Connection | None, record: Mapping[str, Any], mode: str) -> Outcome:
@@ -82,8 +86,12 @@ def recover_add(project: Project, conn: psycopg.Connection | None, record: Mappi
     ② 배치 기록에 없고 적힌 파일이 모두 제자리에 있다 → 묶음 전체를 한 트랜잭션으로 반영(load 방식은 반영할 필요가 없다).
        반영이 실패하면 ③
     ③ 일부만 제자리에 있다 → 옮겨진 파일을 모두 지운다. 묶음 전체가 없던 일이 된다
+
+    기록의 first는 그 작업이 같은 트랜잭션에서 먼저 반영하던 손 파일(원래부터 폴더에 있던 것)이다. ②에서 함께 다시
+    반영하고(참조 순서·번호순으로 새 파일보다 먼저), ③에서도 지우지 않는다.
     """
     files = _check_add(project, record)
+    first = _check_items(project, record, "first", required=False)
     rid = str(record.get("id"))
     names = [f"{f['table']}/{f['name']}" for f in files]
     present = [_final_path(project, f).is_file() for f in files]
@@ -95,7 +103,7 @@ def recover_add(project: Project, conn: psycopg.Connection | None, record: Mappi
             _drop_incoming(project, record)
             return Outcome(rid, "add", "committed", names)
         if all(present):
-            errors = _apply_group(project, conn, files)
+            errors = _apply_group(project, conn, files, first)
             if not errors:
                 _drop_incoming(project, record)
                 return Outcome(rid, "add", "applied", names)
@@ -120,11 +128,22 @@ def _discard(project: Project, files: list[Mapping[str, Any]]) -> None:
             pass
 
 
-def _apply_group(project: Project, conn: psycopg.Connection, files: list[Mapping[str, Any]]) -> list[str]:
-    """묶음의 파일 전체를 한 트랜잭션으로 반영한다(참조 순서대로). 오류 목록(없으면 반영·커밋됨)."""
+def _number(name: str) -> int:
+    m = BATCH_RE.fullmatch(name)
+    return int(m.group(1)) if m else 0
+
+
+def _apply_group(project: Project, conn: psycopg.Connection, files: list[Mapping[str, Any]],
+                 first: list[Mapping[str, Any]] = ()) -> list[str]:
+    """묶음의 파일 전체를 한 트랜잭션으로 반영한다(먼저 반영할 손 파일 → 새 파일, 각각 참조 순서대로).
+    오류 목록(없으면 반영·커밋됨). 이미 배치 기록에 있는 손 파일은 건너뛴다."""
     order = table_order(project)
     rank = {t: i for i, t in enumerate(order)}
-    items = sorted(files, key=lambda f: rank[f["table"]])
+    with conn.cursor() as cur:
+        done = ledger.read(cur, {f["table"] for f in first})
+    first = [f for f in first if f["name"] not in done.get(f["table"], {})]
+    items = sorted(first, key=lambda f: (rank[f["table"]], _number(f["name"]))) + \
+        sorted(files, key=lambda f: rank[f["table"]])
     errors: list[str] = []
     if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
         conn.commit()          # 앞의 조회가 연 트랜잭션을 끝낸다. 아래 블록이 저장점이 아니라 진짜 트랜잭션이 되게
@@ -150,10 +169,10 @@ def _apply_group(project: Project, conn: psycopg.Connection, files: list[Mapping
         return [f"DB 오류: {pg_message(exc)}"]
     # 반영이 실제로 커밋됐는지 새 조회로 확인한다(묶음 기록은 그 뒤에만 지운다)
     with conn.cursor() as cur:
-        recorded = ledger.read(cur, {f["table"] for f in files})
+        recorded = ledger.read(cur, {f["table"] for f in [*files, *first]})
     if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
         conn.commit()
-    if not all(f["name"] in recorded.get(f["table"], {}) for f in files):
+    if not all(f["name"] in recorded.get(f["table"], {}) for f in [*files, *first]):
         return ["반영을 커밋하지 못함"]
     return errors
 

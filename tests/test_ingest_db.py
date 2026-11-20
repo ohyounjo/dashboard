@@ -549,3 +549,31 @@ def test_hand_placed_files_are_applied_parents_first(tmp_path, scratch_db):
                projects_dir=root, dbname=scratch_db)
     assert [f["table"] for f in r["applied_first"]] == ["entries", "events"]
     rebuilt_equals_current(root, scratch_db)
+
+
+def test_hand_placed_file_applied_first_is_recovered_with_the_group(tmp_path, scratch_db, fault):
+    """먼저 반영한 손 파일도 묶음 기록에 들어가, 커밋 전에 끊기면 복구가 함께 다시 반영한다(지우지 않는다)."""
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    hand = root / "ledger" / "data" / "entries" / "000050-hand.csv"
+    hand.write_text("id\nE93\n", encoding="utf-8")
+    fault("before_commit", operation.SimulatedCrash())
+    with pytest.raises(operation.SimulatedCrash):
+        add(root, scratch_db, "entries", [{"id": "E94"}])
+    operation.FAULTS.clear()
+    r = add(root, scratch_db, "entries", [{"id": "E95"}])
+    assert r["recovered"][0]["result"] == "applied"
+    assert {"E93", "E94", "E95"} <= {x[0] for x in rows(scratch_db, "entries")} and hand.is_file()
+    rebuilt_equals_current(root, scratch_db)
+    # 일부만 옮긴 채 끊기면 새 파일만 치우고 손 파일은 남긴다
+    hand2 = root / "ledger" / "data" / "entries" / "000080-hand.csv"
+    hand2.write_text("id\nE96\n", encoding="utf-8")
+    fault("after_record", operation.SimulatedCrash())
+    with pytest.raises(operation.SimulatedCrash):
+        add(root, scratch_db, "entries", [{"id": "E97"}])
+    operation.FAULTS.clear()
+    r = add(root, scratch_db, "entries", [{"id": "E98"}])
+    assert r["recovered"][0]["result"] == "discarded" and hand2.is_file()
+    assert r["applied_first"] == [{"table": "entries", "file": "000080-hand.csv", "rows": 1}]
+    assert "E97" not in {x[0] for x in rows(scratch_db, "entries")}
+    rebuilt_equals_current(root, scratch_db)

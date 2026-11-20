@@ -238,7 +238,9 @@ def _commit(session: Session, prepared: list[_Prepared], *, force: bool, dry_run
         for p in prepared:
             p.writer_path = None          # 묶음 기록이 가리킨다. 지우지 않는다(복구 절차만 치운다)
 
-    finish(session, "add", moves, work, dry_run=dry_run, on_record=recorded, post_move=add_records)
+    # 먼저 반영하는 손 파일도 묶음 기록에 적는다: 커밋 전에 끊기면 복구가 새 파일과 함께 다시 반영한다(지우지는 않는다)
+    finish(session, "add", moves, work, dry_run=dry_run, on_record=recorded, post_move=add_records,
+           extra={"first": [{"table": f.table, "name": f.name} for f in first]})
     if not dry_run:
         after_ingest(project, sorted(targets))
     out = [_result(prepared[i], results.get(i), None if dry_run else names[i]) for i in range(len(prepared))]
