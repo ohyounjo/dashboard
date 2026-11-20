@@ -43,6 +43,12 @@ def test_settings_defaults_and_validation():
     assert settings(AUTH_COOKIE_SECURE="1").cookie_secure is True
     assert settings(WEB_ORIGINS="https://dash.example.com/", WEB_PUBLIC_URL="https://dash.example.com").web_origins == \
         frozenset({"https://dash.example.com"})
+    # 기본 포트를 적어도 브라우저가 보내는 Origin(기본 포트 생략)과 같은 모양이 된다
+    cfg = settings(WEB_ORIGINS="https://dash.example.com:443,http://intra.example.com:80/,http://localhost:8080",
+                   WEB_PUBLIC_URL="https://dash.example.com:443/")
+    assert cfg.web_origins == frozenset({"https://dash.example.com", "http://intra.example.com", "http://localhost:8080"})
+    assert guard.check("POST", {"origin": "https://dash.example.com", "content-type": "application/json"}, cfg.web_origins) is None
+    assert settings(WEB_ORIGINS="https://dash.example.com:8443").web_origins >= {"https://dash.example.com:8443"}
     for bad in ({"AUTH_MAIL_MODE": "sendmail"}, {"AUTH_COOKIE_SECURE": "maybe"}, {"AUTH_SESSION_MAX_DAYS": "0"},
                 {"AUTH_SESSION_IDLE_MINUTES": "x"}, {"WEB_PUBLIC_URL": "ftp://x"}):
         with pytest.raises(AuthConfigError):

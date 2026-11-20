@@ -61,6 +61,9 @@ def _origin(url: str) -> str | None:
     host = parts.hostname.lower()
     if ":" in host:
         host = f"[{host}]"
+    # 브라우저는 Origin 헤더에서 그 스킴의 기본 포트(http 80, https 443)를 생략한다. 같은 모양으로 맞춘다
+    if port == {"http": 80, "https": 443}[parts.scheme]:
+        port = None
     return f"{parts.scheme}://{host}" + (f":{port}" if port is not None else "")
 
 

@@ -55,7 +55,7 @@
 
 | 규칙 | 실패 |
 |---|---|
-| `Origin`이 있으면 `WEB_ORIGINS`(와 `WEB_PUBLIC_URL`의 출처) 중 하나 | 403 `forbidden_origin` |
+| `Origin`이 있으면 `WEB_ORIGINS`(와 `WEB_PUBLIC_URL`의 출처) 중 하나. 설정값은 `scheme://host[:port]`로 정규화하고 그 스킴의 기본 포트(`http` 80, `https` 443)는 지운다(브라우저가 `Origin`에서 생략하므로) | 403 `forbidden_origin` |
 | `Sec-Fetch-Site: cross-site`가 아님 | 403 `forbidden_origin` |
 | `Content-Type`이 `application/json`(매개변수 허용). 본문이 없는 요청도 이 형식으로 보낸다 | 415 `unsupported_media_type` |
 | `Origin`·`Content-Type` 헤더가 하나씩 | 400 `bad_request` |
