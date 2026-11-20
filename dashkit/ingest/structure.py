@@ -355,6 +355,12 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
                 changes = {_safe_rel(k): (_read(project.root / k), v) for k, v in files.items()}
                 changes = {k: v for k, v in changes.items() if v[0] != v[1]}
             else:
+                from .newtable import leftover_data
+
+                for o in op_list or []:          # 잠금 안에서 폴더를 다시 본다: 남은 데이터 파일을 새 테이블에 섞지 않는다
+                    if o.get("op") == "table.add" and isinstance(o.get("table"), str) \
+                            and o["table"] not in project.schema["tables"] and leftover_data(project, o["table"]):
+                        raise IngestError(409, "table_exists", "그 이름의 데이터 파일이 남아 있습니다(지운 테이블). 다른 이름을 쓰세요")
                 changes = plan_files(project, op_list or [], extra)
             if not changes:
                 return {"changed": [], "history": None, "revision": store.revision(project.root), "counts": None,

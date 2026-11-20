@@ -291,6 +291,17 @@ def test_new_table_rows_that_fail_the_rules_are_reported(root, scratch_db):
     inferred["name"] = "groups"
     err = pytest.raises(IngestError, newtable.build, project, inferred, CSV, "items.csv").value
     assert (err.status, err.detail) == (409, "table_exists")
+    # 지운 테이블의 데이터 파일이 남은 이름: 추론은 피하고, 만들기는 거절한다(남은 파일을 새 테이블에 섞지 않는다)
+    (root / "ledger/data/items").mkdir()
+    (root / "ledger/data/items/000001-20261120T0000Z.csv").write_text("item_code\nOLD\n", encoding="utf-8")
+    assert newtable.infer_one(project, "items.csv", CSV)["name"] == "items_2"
+    inferred["name"] = "items"
+    err = pytest.raises(IngestError, newtable.build, project, inferred, CSV, "items.csv").value
+    assert (err.status, err.detail) == (409, "table_exists")
+    load(project, dbname=scratch_db)
+    err = pytest.raises(IngestError, change, root, scratch_db, [{"op": "table.add", "table": "items", "value": {
+        "mode": "append", "primary_key": "item_code", "columns": {"item_code": {"type": "text"}}}}]).value
+    assert (err.status, err.detail) == (409, "table_exists")        # 잠금 안에서도 본다
 
 
 # ---------------------------------------------------------------- 계보

@@ -25,6 +25,26 @@ NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,62}")
 TYPES = ("text", "integer", "number", "boolean", "date", "timestamp", "enum")
 
 
+def leftover_data(project: config.Project, name: str) -> bool:
+    """그 이름의 데이터 파일이 남아 있는지(지운 테이블의 `data/<이름>.csv`나 `data/<이름>/`). 테이블 삭제는 파일을 남기므로,
+    같은 이름으로 새 테이블을 만들면 로더가 남은 파일까지 읽는다. 그 이름은 쓰지 않는다."""
+    folder = project.data_dir / name
+    return (project.data_dir / f"{name}.csv").exists() or (folder.is_dir() and any(folder.iterdir()))
+
+
+def taken_names(project: config.Project) -> set[str]:
+    names = set(project.schema["tables"])
+    if project.data_dir.is_dir():
+        for p in project.data_dir.iterdir():
+            if p.name.startswith(("_", ".")):
+                continue
+            if p.is_file() and p.name.endswith(".csv"):
+                names.add(p.name[:-4])
+            elif p.is_dir() and any(p.iterdir()):
+                names.add(p.name)
+    return names
+
+
 def unique(base: str, taken: set[str], limit: int = 63) -> str:
     """taken에 없는 이름: base, 아니면 base_2, base_3…(접미사가 잘리지 않게 base를 먼저 줄인다)."""
     if base not in taken:
@@ -45,7 +65,7 @@ def infer_one(project: config.Project, name: str, content: bytes) -> dict[str, A
     except scaffold.ScaffoldError as exc:
         raise IngestError(422, "invalid_csv", "CSV를 읽을 수 없습니다", exc.errors) from None
     table = tables[0]
-    taken = set(project.schema["tables"])
+    taken = taken_names(project)          # 지운 테이블의 데이터 파일이 남은 이름도 피한다
     base = table["name"]
     table["name"] = unique(base, taken)
     # 이미 있는 테이블의 단일 열 기본 키와 이름·유형이 맞는 열을 참조 후보로(값 대조는 apply가 한다)
@@ -69,6 +89,8 @@ def _check_table(project: config.Project, table: Mapping[str, Any]) -> tuple[str
         raise IngestError(422, "invalid_request", "테이블 이름은 소문자로 시작하는 snake_case입니다")
     if name in project.schema["tables"]:
         raise IngestError(409, "table_exists", "같은 이름의 테이블이 이미 있습니다")
+    if leftover_data(project, name):
+        raise IngestError(409, "table_exists", "그 이름의 데이터 파일이 남아 있습니다(지운 테이블). 다른 이름을 쓰세요")
     columns = table.get("columns")
     if not isinstance(columns, list) or not columns:
         raise IngestError(422, "invalid_request", "columns가 필요합니다")
