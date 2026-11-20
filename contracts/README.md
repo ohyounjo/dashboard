@@ -15,6 +15,7 @@
 | 9 | 적용 전 차이 보기(`make plan`)의 비교 규칙·권한·결과 형식(JSON), 로더가 남기는 적재 기록(`dashkit_meta` 스키마) | [plan.md](plan.md). plan은 `dash_reader` 계정만 쓴다. Studio의 데이터 화면이 같은 함수를 쓴다 |
 | 10 | 설정 형식 버전(`version`)과 `dashkit migrate` | 아래 "설정 버전", 형식 변경 기록 [../CHANGELOG.md](../CHANGELOG.md) |
 | 11 | Studio(구성 화면) API, 변경 연산, 요청 보호, 저장 방식 | [studio.md](studio.md). 화면(`web/studio/`)과 API(`dashkit/studio/`)의 약속이다. 프로젝트 마법사는 8번, 데이터 화면의 차이는 9번의 형식을 그대로 쓴다 |
+| 12 | 로그인·세션·요청 보호, 등급과 계정 상태, 인증 DB(`dashkit_auth` 스키마, `dash_auth` 계정), `/api/auth/*`, `make auth-init`·`make admin` | [auth.md](auth.md). 기존 웹앱 API의 로그인 요구는 4번(api.md)에도 적는다 |
 | — | Superset 6.1.0 확인 기록(Explore) | [superset-notes.md](superset-notes.md), 원본 export [superset-6.1.0-export/](superset-6.1.0-export/)(`managed/`는 sync가 만든 객체의 export) |
 | — | Superset 버전 관리와 업그레이드 절차 | [superset-upgrade.md](superset-upgrade.md). 버전은 `.env.example`의 `SUPERSET_VERSION` 한 곳, 키 대조는 `tests/test_superset_keys.py` |
 | — | 구현 계획(A~E 분담, 환경변수, 의존성) | [implementation-plan.md](implementation-plan.md) |
@@ -116,6 +117,6 @@ def layout_blocks(dashboard: dict) -> list[dict]                 # layout → �
 def load_schema(name: str) -> dict                               # 계약의 JSON Schema(dashboard.schema.json은 차트 유형 정의와 위젯 섹션 정의를 합성한 결과)
 ```
 
-CLI: `python -m dashkit {check|plan|load|sync|migrate|api|gen}`. `plan`은 적용 전에 차이를 보여 주고 아무것도 바꾸지 않는다([plan.md](plan.md), `--json`). `migrate`는 설정 파일을 최신 형식 버전으로 고친다(위 "설정 버전", `--check`는 확인만). `gen`은 계약 문서의 생성 구간을 레지스트리에서 다시 쓴다(`--check`는 확인만). 모든 하위 명령은 `PROJECT`, `PROJECTS_DIR`(기본 `/app/projects`) 환경변수를 쓴다.
+CLI: `python -m dashkit {check|plan|load|sync|migrate|api|gen|auth}`. `auth`는 인증 DB를 다룬다([auth.md](auth.md) "CLI", PROJECT를 쓰지 않는다). `plan`은 적용 전에 차이를 보여 주고 아무것도 바꾸지 않는다([plan.md](plan.md), `--json`). `migrate`는 설정 파일을 최신 형식 버전으로 고친다(위 "설정 버전", `--check`는 확인만). `gen`은 계약 문서의 생성 구간을 레지스트리에서 다시 쓴다(`--check`는 확인만). 모든 하위 명령은 `PROJECT`, `PROJECTS_DIR`(기본 `/app/projects`) 환경변수를 쓴다.
 
 CLI(프로젝트 초안): `python -m dashkit new <이름> --from <CSV 폴더> [--dry-run]`. CSV 폴더에서 `PROJECTS_DIR/<이름>/`을 만든다([scaffold.md](scaffold.md)). `PROJECT`는 쓰지 않고 DB도 필요 없다. `--dry-run`은 파일을 쓰지 않고 추론 결과(JSON)만 출력한다. 이미 있는 프로젝트는 덮어쓰지 않고 종료 코드 1로 끝낸다.

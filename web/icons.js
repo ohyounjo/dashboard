@@ -33,6 +33,8 @@ const UI_ICONS = {
   plug: [p("M9 3v5M15 3v5"), p("M6.5 8h11v3a5.5 5.5 0 0 1-11 0z"), p("M12 16.5V21")],
   database: [["ellipse", { cx: 12, cy: 6, rx: 7.5, ry: 3 }], p("M4.5 6v12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6"), p("M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3")],
   warning: TAB_ICONS.alert,
+  user: [c(12, 8, 4), p("M4.5 20.5a7.5 7.5 0 0 1 15 0")],
+  logout: [p("M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"), p("M10 16.5 5.5 12 10 7.5M5.5 12H15")],
 };
 
 const NS = "http://www.w3.org/2000/svg";

@@ -1,6 +1,7 @@
 // 웹앱 셸: /api/app으로 탭·섹션을 받아 그린다. 탭·섹션·데이터셋·열 이름은 코드에 없다.
 import S from "./strings.js";
 import { icon } from "./icons.js";
+import { loginUrl, postJson } from "./common.js";
 
 const WIDGET_TYPE = /^[a-z][a-z0-9_]*$/;         // 위젯 유형 이름 형식(import 경로에 쓰기 전 한 번 더 확인)
 const THEME_KEY = "dashboard-theme";             // localStorage 키(수동 테마 선택)
@@ -124,6 +125,14 @@ function widgetSkeleton() {
 
 /* ---------------- 네트워크 ---------------- */
 
+/** 세션이 없거나 만료됐다(401). 로그인 화면으로 보내고 돌아올 곳(지금 주소)을 넘긴다. */
+let leaving = false;
+function toLogin(reason) {
+  if (leaving) return;
+  leaving = true;
+  location.replace(loginUrl(location.pathname + location.search + location.hash, reason));
+}
+
 class SectionError extends Error {
   constructor(kind, body) { super(kind); this.kind = kind; this.body = body; }
 }
@@ -177,6 +186,7 @@ function supersetSection(container, sec, ctx) {
         body: JSON.stringify({ dashboard: sec.dashboard }),
       });
     } catch (e) { throw new SectionError("token", S.tokenErrorBody.network); }
+    if (res.status === 401) { toLogin("expired"); throw new SectionError("token", S.sessionExpired); }
     if (res.ok) {
       const j = await res.json().catch(() => ({}));
       if (j && typeof j.token === "string") return j.token;
@@ -308,6 +318,7 @@ function widgetSection(container, sec, ctx) {
       try {
         res = await fetch(`/api/data/${encodeURIComponent(sec.dataset)}`, { cache: "no-store", headers: { Accept: "application/json" } });
       } catch (e) { throw new SectionError("data", S.dataErrorBody.network); }
+      if (res.status === 401) { toLogin("expired"); throw new SectionError("data", S.sessionExpired); }
       if (!res.ok) {
         const detail = await readDetail(res);
         const known = (res.status === 404 && detail === "unknown_dataset") || (res.status === 503 && (detail === "not_loaded" || detail === "db_unavailable"));
@@ -363,6 +374,7 @@ async function boot() {
   let cfg;
   try {
     const res = await fetch("/api/app", { cache: "no-store", headers: { Accept: "application/json" } });
+    if (res.status === 401) { toLogin(); return; }
     if (!res.ok) throw new Error(String(res.status));
     cfg = await res.json();
     if (!cfg || !cfg.app || !Array.isArray(cfg.tabs)) throw new Error("shape");
@@ -373,8 +385,46 @@ async function boot() {
   renderApp(cfg);
 }
 
+/* ---------------- 사용자 메뉴 ---------------- */
+
+function renderUserMenu(user) {
+  const menu = $("userMenu"), btn = $("userBtn"), pop = $("userPop");
+  if (!user || typeof user.email !== "string") { menu.hidden = true; return; }
+  $("userIco").replaceChildren(icon("user"));
+  $("userLabel").textContent = S.account;
+  btn.setAttribute("aria-label", S.accountMenuLabel(user.email));
+  btn.title = user.email;
+  $("userEmail").textContent = user.email;
+  $("userRole").textContent = S.roleLabel[user.role] || user.role || "";
+  const logout = h("button", { type: "button" }, icon("logout"), S.logout);
+  logout.addEventListener("click", async () => {
+    logout.disabled = true;
+    try { await postJson("/api/auth/logout", {}); } catch (e) { /* 서버에 닿지 않아도 로그인 화면으로 간다 */ }
+    leaving = true;
+    location.replace(loginUrl("/", "logout"));
+  });
+  $("userActions").replaceChildren(logout);
+
+  const close = (focusButton) => {
+    if (pop.hidden) return;
+    pop.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    if (focusButton) btn.focus();
+  };
+  btn.addEventListener("click", () => {
+    const open = pop.hidden;
+    pop.hidden = !open;
+    btn.setAttribute("aria-expanded", String(open));
+    if (open) { const first = pop.querySelector("a, button"); if (first) first.focus(); }
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(true); });
+  document.addEventListener("click", (e) => { if (!menu.contains(e.target)) close(false); });
+  menu.hidden = false;
+}
+
 function renderApp(cfg) {
   const app = cfg.app;
+  renderUserMenu(cfg.user);
   const supersetUrl = String((cfg.superset && cfg.superset.url) || "").replace(/\/+$/, "");
   applyBrand(app.theme);
 
