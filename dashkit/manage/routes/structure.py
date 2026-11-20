@@ -146,10 +146,10 @@ async def patch_config(request: Request, principal: Principal = Depends(require_
     """{ops, revision} → 202 작업(검증 → 이력·묶음 기록 → 저장 → load → sync). contracts/manage.md "구조 변경"."""
     body = await _json(request)
     project = _project()
-    op_list = _check_ops(project, body.get("ops"))
     revision = body.get("revision")
     if not isinstance(revision, str):
         raise IngestError(400, "invalid_request", "revision이 필요합니다(설정을 읽을 때 받은 값)")
+    op_list = _check_ops(project, body.get("ops"))
     await run_in_threadpool(structure.validate, project.name, op_list)       # 형식·설정 검사는 바로 알린다
     affected = await run_in_threadpool(_affected, project, op_list)
     tables = {o.get("table") for o in op_list if isinstance(o.get("table"), str)}
