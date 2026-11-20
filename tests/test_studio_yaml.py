@@ -810,14 +810,14 @@ def test_unreadable_yaml_is_reported_not_rewritten(text):
 
 
 def test_only_roundtrip_module_imports_ruamel():
-    """ruamel.yaml은 studio 이미지에만 있다. dashkit/studio/roundtrip.py 밖에서는 import하지 않는다."""
+    """ruamel.yaml은 studio 이미지에만 있다. dashkit/project/roundtrip.py(공용 코어로 옮김) 밖에서는 import하지 않는다."""
     hits = []
     for path in (ROOT / "dashkit").rglob("*.py"):
         if "ruamel" in path.read_text(encoding="utf-8") and "import" in path.read_text(encoding="utf-8"):
             for line in path.read_text(encoding="utf-8").splitlines():
                 if line.strip().startswith(("import ruamel", "from ruamel")):
                     hits.append(str(path.relative_to(ROOT)))
-    assert set(hits) == {"dashkit/studio/roundtrip.py"}
+    assert set(hits) == {"dashkit/project/roundtrip.py"}
 
 
 def test_layout_set_keeps_identical_blocks_in_other_rows_apart():

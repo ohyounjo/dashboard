@@ -1,0 +1,25 @@
+app:
+  title: 누적 테스트
+  as_of: "2026-11-20"
+
+datasets:
+  entries:
+    table: entries
+    labels: { amount: 금액, on_day: 날짜 }
+  summary:
+    sql: |
+      SELECT e.group_id, count(*) AS n, sum(e.amount) AS total FROM raw.entries e GROUP BY e.group_id
+
+dashboards:
+  main:
+    title: 메인
+    charts:
+      - { key: c_total, title: 합계, viz: big_number_total, dataset: summary, metric: { sql: "SUM(total)", label: total } }
+    layout:
+      - [c_total]
+
+tabs:
+  - key: main
+    label: 메인
+    icon: grid
+    sections: [{ type: superset, dashboard: main }]

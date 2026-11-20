@@ -14,6 +14,7 @@ from conftest import ROOT
 
 WEB = ROOT / "web"
 STUDIO = WEB / "studio"
+SHARED = WEB / "shared"                     # 운용 화면과 함께 쓰는 모듈. studio 컨테이너는 /studio/shared/<파일>로 서빙한다
 STATIC_PREFIX = "/studio/static/"          # contracts/studio.md: `/`가 index.html, 나머지는 /studio/static/<파일>
 
 
@@ -22,7 +23,7 @@ def _read(path: Path) -> str:
 
 
 def _js_files() -> list[Path]:
-    return sorted(STUDIO.glob("*.js"))
+    return sorted(STUDIO.glob("*.js")) + sorted(SHARED.glob("*.js"))
 
 
 def _without_comments(js: str) -> str:
@@ -71,8 +72,8 @@ def test_studio_css_uses_tokens_only():
 
 
 def test_tab_icons_match_webapp():
-    assert _tab_icon_block(_read(WEB / "icons.js")) == _tab_icon_block(_read(STUDIO / "icons.js")), \
-        "web/studio/icons.js의 탭 아이콘 구간이 web/icons.js와 다름(구간을 다시 복사)"
+    assert _tab_icon_block(_read(WEB / "icons.js")) == _tab_icon_block(_read(SHARED / "icons.js")), \
+        "web/shared/icons.js의 탭 아이콘 구간이 web/icons.js와 다름(구간을 다시 복사)"
 
 
 def test_html_has_no_inline_code():
@@ -101,7 +102,7 @@ def test_js_imports_are_relative_and_exist():
     for f in _js_files():
         for spec in re.findall(r"""^\s*import\s[^;]*?from\s+["']([^"']+)["']""", _read(f), flags=re.M):
             assert re.fullmatch(r"\./[a-z0-9-]+\.js", spec), f"{f.name}: 상대 경로 한 단계만 import한다({spec})"
-            assert (STUDIO / spec[2:]).is_file(), f"{f.name}: 없는 모듈 {spec}"
+            assert (f.parent / spec[2:]).is_file(), f"{f.name}: 없는 모듈 {spec}"
         assert not re.search(r"\bimport\s*\(", _without_comments(_read(f))), f"{f.name}: 동적 import 없음"
 
 
@@ -216,7 +217,7 @@ def test_views_release_listeners_on_the_shared_container():
     root = Path(__file__).resolve().parent.parent / "web" / "studio"
     shell = (root / "app.js").read_text(encoding="utf-8")
     assert "view.destroy()" in shell, "셸이 화면을 바꾸기 전에 이전 화면의 destroy를 불러야 함"
-    dom = (root / "dom.js").read_text(encoding="utf-8")
+    dom = (root.parent / "shared" / "dom.js").read_text(encoding="utf-8")
     assert "signal: off.signal" in dom and "off.abort()" in dom, "fileDrop은 리스너를 떼는 함수를 돌려줘야 함"
     views = sorted(root.glob("view-*.js"))
     assert len(views) >= 6

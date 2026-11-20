@@ -502,9 +502,14 @@ def test_record_stores_keys_and_hashes_only(applied):
         cols = conn.execute(
             "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'dashkit_meta' "
             "ORDER BY 1, ordinal_position").fetchall()
-        assert cols == [("load_snapshot", "id"), ("load_snapshot", "loaded_at"), ("load_snapshot", "snapshot"),
+        # 배치 기록(contracts/ingest.md "배치 기록")은 파일 이름·내용 해시·행 수뿐이다
+        assert cols == [("batch", c) for c in ("table_name", "file", "sha256", "added_at", "rows", "inserted",
+                                               "updated", "skipped", "unchanged")] + [
+                        ("load_snapshot", "id"), ("load_snapshot", "loaded_at"), ("load_snapshot", "snapshot"),
                         ("row_fingerprint", "table_name"), ("row_fingerprint", "row_key"), ("row_fingerprint", "row_hash")]
         name = read_csv(PROJECTS / PROJECT / "data" / "members.csv")[1][0]["name"]
+        files = conn.execute("SELECT string_agg(file, ',') FROM dashkit_meta.batch").fetchone()[0]
+        assert name not in files
         dump = conn.execute("SELECT string_agg(row_key || row_hash, '') FROM dashkit_meta.row_fingerprint").fetchone()[0]
         snap = conn.execute("SELECT snapshot::text FROM dashkit_meta.load_snapshot").fetchone()[0]
         assert name not in dump and name not in snap

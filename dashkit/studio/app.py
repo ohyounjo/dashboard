@@ -2,6 +2,7 @@
 
 `python -m dashkit studio`(uvicorn dashkit.studio.app:app)로 띄운다. `app`은 요청 보호(guard.Guard)를 씌운 ASGI 앱이다.
 화면 정적 파일은 STUDIO_WEB_DIR(기본 저장소의 web/studio)에서 `/`(index.html)와 `/studio/static/…`으로 내보낸다.
+운용 화면과 함께 쓰는 화면 모듈은 STUDIO_SHARED_DIR(기본 저장소의 web/shared)에서 `/studio/shared/…`로 내보낸다.
 화면 파일이 없어도 API는 뜬다.
 """
 from __future__ import annotations
@@ -356,7 +357,7 @@ async def post_data_check(p: str, table: str, request: Request):
     name = store.resolve_project(p)
 
     def work() -> dict[str, Any]:
-        tname = store.resolve_table(store.load(name), table)
+        tname = store.resolve_replace_table(store.load(name), table)
         try:
             staged = store.prepare(name, {f"data/{tname}.csv": content}, with_csv=True)
         except StoreError as exc:
@@ -380,7 +381,7 @@ async def put_data(p: str, table: str, request: Request):
     name = store.resolve_project(p)
 
     def work() -> dict[str, Any]:
-        tname = store.resolve_table(store.load(name), table)
+        tname = store.resolve_replace_table(store.load(name), table)
         files = {f"data/{tname}.csv": content}
         with _Busy(name):
             staged = store.prepare(name, files, with_csv=True)
@@ -487,8 +488,14 @@ _MEDIA_TYPES = {
 }
 
 
-def _static(path: str) -> Response:
-    base = web_dir().resolve()
+def shared_dir() -> Path:
+    """운용 화면과 함께 쓰는 화면 모듈(web/shared). web/studio의 모듈이 `../shared/…`로 import하면 `/studio/shared/…`가 된다."""
+    env = os.environ.get("STUDIO_SHARED_DIR")
+    return Path(env) if env else Path(__file__).resolve().parents[2] / "web" / "shared"
+
+
+def _static(path: str, root: Path | None = None) -> Response:
+    base = (root or web_dir()).resolve()
     parts = path.split("/")
     if not path or "\\" in path or "\0" in path or any(part in ("", ".", "..") or part.startswith(".") for part in parts):
         return _error(404, "not_found", "Not Found")
@@ -510,6 +517,11 @@ def get_index():
 @api.get("/studio/static/{path:path}")
 def get_static(path: str):
     return _static(path)
+
+
+@api.get("/studio/shared/{path:path}")
+def get_shared(path: str):
+    return _static(path, shared_dir())
 
 
 # 요청 보호를 씌운 ASGI 앱. uvicorn은 이것을 띄운다

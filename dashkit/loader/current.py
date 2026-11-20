@@ -27,6 +27,9 @@ class LoadRecord:
     """지난 적재의 기록. snapshot은 record.snapshot의 형식, fingerprints는 테이블 → [(row_key, row_hash)]."""
     snapshot: dict[str, Any]
     fingerprints: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
+    # 테이블 → {파일: (sha256, rows, inserted)}. 배치 기록(dashkit_meta.batch)이 없던 dashkit으로 적재한 DB면 빈 dict.
+    # 추가 적재도 이 표에 줄을 더하므로, inserted의 합이 지금 테이블의 행 수다(스냅샷의 rows는 마지막 load 때의 값)
+    batches: dict[str, dict[str, tuple[str, int, int]]] = field(default_factory=dict)
 
     @property
     def project(self) -> str | None:
@@ -104,7 +107,20 @@ def read_load_record(conn: psycopg.Connection, tables: Sequence[str] | None = No
                     cur.execute(stmt)
                 for table, key, digest in cur:
                     out.fingerprints.setdefault(table, []).append((key, digest))
-                return out
+        try:
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    stmt = sql.SQL("SELECT table_name, file, sha256, rows, inserted FROM {}.{}").format(
+                        meta, sql.Identifier(record.BATCH_TABLE))
+                    if tables is not None:
+                        cur.execute(stmt + sql.SQL(" WHERE table_name = ANY(%s)"), (list(tables),))
+                    else:
+                        cur.execute(stmt)
+                    for table, file, digest, rows, inserted in cur:
+                        out.batches.setdefault(table, {})[file] = (digest, int(rows), int(inserted))
+        except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
+            pass
+        return out
     except (psycopg.errors.UndefinedTable, psycopg.errors.InvalidSchemaName, psycopg.errors.InsufficientPrivilege):
         return None
     except psycopg.Error as exc:

@@ -17,7 +17,7 @@ COMPOSE = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 def test_built_images_take_the_folder_suffix():
     images = re.findall(r"^\s+image:\s*(\S.*)$", COMPOSE, flags=re.M)
     built = [i for i in images if i.startswith("dashkit-")]
-    assert len(built) == 5, built            # superset-init, superset, backend, tools, studio
+    assert len(built) == 6, built            # superset-init, superset, backend, tools, studio, manager
     for image in built:
         assert image.endswith("${IMAGE_SUFFIX:-}"), f"직접 빌드하는 이미지에 접미사가 없음: {image}"
     # 받아 쓰는 이미지(postgres, nginx)는 고정 버전 그대로다

@@ -5,7 +5,7 @@ Studio는 `projects/<이름>/`의 파일을 고치고 `make apply`와 같은 일
 - 실행: `make studio` → http://localhost:8090 (`STUDIO_PORT`). compose `studio` 프로필의 별도 컨테이너(`dashkit-studio:local`, `dashkit/Dockerfile`의 `studio` 단계). 컨테이너 안에서는 `python -m dashkit studio`(0.0.0.0:8090).
 - 권한: tools 컨테이너와 같다(owner DB 계정, Superset 관리자 계정, `projects/` 쓰기). backend(읽기 전용, Superset 계정 없음)와 분리한다.
 - 인증: 없다. `127.0.0.1`에만 연다. **외부에 열지 않는다. 운영 배포에 넣지 않는다.**
-- 코드: API는 `dashkit/studio/`, 화면은 `web/studio/`(바닐라 JS, 기존 디자인 토큰, 빌드 단계 없음). `ruamel.yaml`은 주석과 순서를 보존하는 YAML 쓰기의 예비 경로에만 쓴다(studio 이미지 전용. 아래 "YAML을 다시 쓰는 방법").
+- 코드: API(라우팅과 요청 보호)는 `dashkit/studio/`, 로직(저장, 연산, YAML 다시 쓰기, apply 실행기, 업로드 읽기)은 관리 서비스와 함께 쓰는 공용 코어 `dashkit/project/`(`dashkit/studio/`의 같은 이름 모듈은 다시 내보내기), 화면은 `web/studio/`(바닐라 JS, 기존 디자인 토큰, 빌드 단계 없음). `ruamel.yaml`은 주석과 순서를 보존하는 YAML 쓰기의 예비 경로에만 쓴다(studio 이미지 전용. 아래 "YAML을 다시 쓰는 방법").
 
 ## 요청 보호
 
@@ -29,7 +29,7 @@ Studio는 `projects/<이름>/`의 파일을 고치고 `make apply`와 같은 일
 | 400 | `invalid_filename` · `too_many_files` | 업로드 규칙 위반 |
 | 403 | `forbidden_host` · `forbidden_origin` | 요청 보호 |
 | 404 | `unknown_project` · `unknown_table` · `not_found` | 목록에 없는 경로 값 · 없는 경로 |
-| 409 | `project_exists` · `apply_running` · `stale_config` | 같은 이름의 프로젝트 · 적용 실행 중(같은 프로젝트의 저장도 이 코드로 거절) · `revision` 불일치 |
+| 409 | `project_exists` · `apply_running` · `stale_config` · `append_table` | 같은 이름의 프로젝트 · 적용 실행 중(같은 프로젝트의 저장도 이 코드로 거절) · `revision` 불일치 · 누적 테이블의 CSV를 통째로 바꾸려 함 |
 | 410 | `upload_expired` | `upload_id`를 찾을 수 없음(1시간이 지났거나 그 뒤에 3번 넘게 새로 올림, 또는 Studio를 다시 띄움) |
 | 413 | `upload_too_large` | 업로드 한도 초과(JSON 본문은 5MB) |
 | 415 | `unsupported_media_type` | Content-Type |
@@ -43,11 +43,13 @@ Studio는 `projects/<이름>/`의 파일을 고치고 `make apply`와 같은 일
 2. 사본을 `config.load_project`로 검증한다. CSV를 바꿨으면 `validate_csv`도 돌린다.
 3. 통과하면 바뀐 파일만 원래 자리에 원자적으로 바꿔 넣는다(같은 폴더의 임시 파일 → `os.replace`). 실패하면 파일을 건드리지 않고 오류를 돌려준다.
 
-같은 프로젝트의 저장과 apply는 잠금 하나로 순서를 세운다(apply가 도는 동안의 저장은 409 `apply_running`).
+같은 프로젝트의 저장과 apply는 잠금 하나로 순서를 세운다(apply가 도는 동안의 저장은 409 `apply_running`). 이 잠금은 Studio 프로세스 안의 것이고, apply의 load 단계는 그와 별도로 **데이터 DB의 쓰기 잠금**을 잡는다([ingest.md](ingest.md) "쓰기 잠금"). 그래서 관리 서비스의 추가 적재나 `make apply`·`make ingest`와 겹치지 않는다(잠금을 10초 안에 못 잡으면 load가 실패한다). DB를 건드리지 않는 저장(탭 편집 등)은 DB 잠금에 들어오지 않는다. 운영 서버의 같은 프로젝트 폴더에 Studio를 함께 띄우지 않는다.
+
+누적(`mode: append`) 테이블은 배치 폴더가 원본이라 Studio의 데이터 화면에서 CSV를 통째로 바꾸지 않는다: 데이터 검사·교체 경로는 409 `append_table`이다. 저장 때의 CSV 검증(`validate_csv`)도 `replace` 테이블만 본다.
 
 ### YAML을 다시 쓰는 방법 (손으로 쓴 주석·키 순서·모양 보존)
 
-- **고친 곳만 다시 쓴다**(`dashkit/studio/yamledit.py`). 파일을 통째로 다시 내보내지 않고, YAML 노드의 위치로 원문을 조각내 바뀌지 않은 조각은 원문 글자 그대로 이어 붙인다. 그래서 **건드리지 않은 줄은 바이트 단위로 같다**(주석, 빈 줄, 인용 부호, 들여쓰기, `{ a: b }` 같은 한 줄 표기, 키 뒤의 줄 맞춤 공백).
+- **고친 곳만 다시 쓴다**(`dashkit/project/yamledit.py`). 파일을 통째로 다시 내보내지 않고, YAML 노드의 위치로 원문을 조각내 바뀌지 않은 조각은 원문 글자 그대로 이어 붙인다. 그래서 **건드리지 않은 줄은 바이트 단위로 같다**(주석, 빈 줄, 인용 부호, 들여쓰기, `{ a: b }` 같은 한 줄 표기, 키 뒤의 줄 맞춤 공백).
   - 값을 바꾸면 그 값의 글자만 바뀐다(같은 줄의 주석은 남는다). 키를 지우면 그 줄(과 바로 위의 주석)이 없어진다. 새 키는 그 매핑의 끝에 붙는다.
   - 항목(탭, 섹션)을 옮기면 그 항목의 줄들이 바로 위의 주석과 함께 그대로 옮겨진다. 항목 사이의 빈 줄은 자리에 남는다.
   - 새 항목은 이웃과 같은 꼴로 쓴다: 한 줄 목록(`sections: [{ … }]`)에는 한 줄로, 여러 줄 목록에는 여러 줄로. 한 줄 목록에 여러 줄짜리 섹션을 옮겨 넣거나 새 항목 때문에 줄이 80자를 넘으면 그 목록만 여러 줄로 푼다.
@@ -55,7 +57,7 @@ Studio는 `projects/<이름>/`의 파일을 고치고 `make apply`와 같은 일
   - `layout.set`은 layout 전체를 받지만 통째로 다시 쓰지 않는다. 받은 layout과 파일의 layout을 **행 단위로 견줘** 내용이 같은 행은 원문 줄을 그대로 쓰고(자리만 옮긴다. 탭 안팎으로도), 달라진 행은 항목을 가장 많이 공유하는 원래 행을 골라 그 안에서 바뀐 항목만 고친다(`{ chart: a, width: 4 }`의 `4`만 바뀌고 같은 줄의 주석은 남는다). 짝이 없는 행만 새로 쓴다. 제목(header)·글(markdown)은 글자를 고쳐도 원래 항목 자리에 쓴다.
   - 여러 줄 문자열(글 블록의 markdown 등)을 새로 쓸 때는 literal block(`|`)으로 쓴다. 그렇게 쓸 수 없는 글(첫 줄이 공백으로 시작하는 등)만 `"…\n…"`으로 쓴다.
   - 여러 줄로 쓴 항목(예: `- markdown: |` 글 블록)을 한 줄 행·한 줄 탭(`{ label: …, rows: [[a]] }`) 안으로 옮기면 그 행·탭만 여러 줄로 풀어 쓴다(안의 바뀌지 않은 값은 원문 그대로).
-- 이 방법으로 다룰 수 없는 파일·변경(앵커·별칭·병합 키, CR 줄바꿈, 여러 줄에 걸친 `{ … }` 안의 수정 등)은 **`ruamel.yaml` round-trip**으로 파일 전체를 다시 쓴다(`dashkit/studio/roundtrip.py`). 주석과 키 순서는 남지만 모양은 표준 꼴로 바뀐다(`{ a: b }` → `{a: b}`, 줄 맞춤 공백 제거, 겹친 목록의 들여쓰기). 응답의 `written`이 파일마다 어느 쪽이었는지 알려 준다(`exact` | `roundtrip`).
+- 이 방법으로 다룰 수 없는 파일·변경(앵커·별칭·병합 키, CR 줄바꿈, 여러 줄에 걸친 `{ … }` 안의 수정 등)은 **`ruamel.yaml` round-trip**으로 파일 전체를 다시 쓴다(`dashkit/project/roundtrip.py`). 주석과 키 순서는 남지만 모양은 표준 꼴로 바뀐다(`{ a: b }` → `{a: b}`, 줄 맞춤 공백 제거, 겹친 목록의 들여쓰기). 응답의 `written`이 파일마다 어느 쪽이었는지 알려 준다(`exact` | `roundtrip`).
 - 어느 쪽이든 다시 쓴 글을 PyYAML로 읽어 "연산을 적용한 값"과 같은지 확인한 뒤에만 저장 단계(위 1~3)로 넘어간다. 다르면 500 `cannot_write`이고 파일은 그대로다.
 
 되돌리기는 git에 맡긴다. Studio는 이번 실행에서 자기가 쓴 파일 목록만 보여 준다(`GET /studio/api/changes`).
@@ -71,7 +73,7 @@ Studio에서 적용(apply)하면 그 프로젝트가 웹앱에 보인다. backen
 
 ## API
 
-모든 경로는 `/studio/api/` 아래다. 화면은 `/`(= `web/studio/index.html`)와 `/studio/static/<경로>`(= `web/studio/<경로>`. 폴더는 `STUDIO_WEB_DIR`로 바꿀 수 있다). 화면 파일이 없어도 API는 뜬다.
+모든 경로는 `/studio/api/` 아래다. 화면은 `/`(= `web/studio/index.html`), `/studio/static/<경로>`(= `web/studio/<경로>`. 폴더는 `STUDIO_WEB_DIR`로 바꿀 수 있다), 운용 화면과 함께 쓰는 화면 모듈 `/studio/shared/<경로>`(= `web/shared/<경로>`. 폴더는 `STUDIO_SHARED_DIR`. `web/studio`의 모듈이 `../shared/…`로 import한다). 화면 파일이 없어도 API는 뜬다.
 
 | 메서드 경로 | 내용 |
 |---|---|
@@ -116,7 +118,7 @@ Studio에서 적용(apply)하면 그 프로젝트가 웹앱에 보인다. backen
 | `section.move` | `tab`, `index`, `to_index`, `to_tab?` | 섹션 순서 변경(다른 탭으로도). `to_index`는 **옮긴 뒤의 자리**(같은 탭이면 원래 자리에서 뺀 뒤 넣을 자리, 다른 탭이면 그 탭에 끼워 넣을 자리) |
 | `section.remove` | `tab`, `index` | 섹션 삭제 |
 
-연산은 `dashkit/studio/ops.py`의 등록 표(`@op("이름")`)에 있다. 함수 하나를 더하면 연산 하나가 는다.
+연산은 `dashkit/project/ops.py`의 등록 표(`@op("이름")`)에 있다. 함수 하나를 더하면 연산 하나가 는다.
 
 5b단계(대시보드 배치, 필터):
 

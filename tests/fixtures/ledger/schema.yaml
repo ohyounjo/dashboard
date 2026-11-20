@@ -1,0 +1,38 @@
+# 누적(append) 테이블 테스트용 프로젝트(도메인 없는 이름). contracts/ingest.md
+tables:
+  groups:                       # replace 테이블(기준 정보)
+    primary_key: id
+    columns:
+      id:    { type: text }
+      label: { type: text, required: true }
+  entries:
+    mode: append
+    on_conflict: update
+    primary_key: id
+    columns:
+      id:       { type: text, pattern: "^E\\d+$" }
+      group_id: { type: text, ref: groups.id }
+      state:    { type: enum, values: [open, done], required: true, default: open, aliases: ["State Name"] }
+      amount:   { type: number, min: 0 }
+      on_day:   { type: date }
+      flag:     { type: boolean }
+      qty:      { type: integer, default: 0 }
+      memo:     { type: text, aliases: [note, "비고"] }
+    checks:
+      - name: 수량이 음수
+        sql: SELECT id FROM raw.entries WHERE qty < 0
+  events:
+    mode: append
+    primary_key: id
+    columns:
+      id:       { type: integer }
+      entry_id: { type: text, ref: entries.id, required: true }
+      seen_at:  { type: timestamp }
+  marks:
+    mode: append
+    on_conflict: skip
+    primary_key: [entry_id, kind]
+    columns:
+      entry_id: { type: text, ref: entries.id }
+      kind:     { type: text }
+      points:   { type: integer }

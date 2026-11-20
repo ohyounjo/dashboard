@@ -43,6 +43,7 @@ services:
     environment:
       # superuser는 postgres로 따로 두고, 로더 계정(dash_owner)은 01-reader.sh가 일반 역할로 만든다.
       # 인증 계정(dash_auth)과 dashkit_auth 스키마는 02-auth.sh가 만든다(이미 있는 볼륨에는 make auth-init)
+      # 운용자 조회 계정(dash_inspect)은 03-inspect.sh가 만든다(이미 있는 볼륨에는 make data-init)
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${DATA_DB_ADMIN_PASSWORD:?make env 필요}
       POSTGRES_DB: ${DATA_DB_NAME}
@@ -52,6 +53,9 @@ services:
       DATA_DB_READER_PASSWORD: ${DATA_DB_READER_PASSWORD:?make env 필요}
       DATA_DB_AUTH_USER: ${DATA_DB_AUTH_USER:-dash_auth}
       DATA_DB_AUTH_PASSWORD: ${DATA_DB_AUTH_PASSWORD:?make env 필요}
+      # 운용자 조회용 읽기 계정(03-inspect.sh. 이미 있는 볼륨에는 make data-init)
+      DATA_DB_INSPECT_USER: ${DATA_DB_INSPECT_USER:-dash_inspect}
+      DATA_DB_INSPECT_PASSWORD: ${DATA_DB_INSPECT_PASSWORD:?make env 필요}
       TZ: ${TZ}
     volumes:
       - data-db:/var/lib/postgresql/data
@@ -186,6 +190,9 @@ services:
       GUEST_TOKEN_JWT_AUDIENCE: ${GUEST_TOKEN_JWT_AUDIENCE}
       DATA_DB_OWNER_USER: ${DATA_DB_OWNER_USER}
       DATA_DB_OWNER_PASSWORD: ${DATA_DB_OWNER_PASSWORD:?make env 필요}
+      # 운용자 조회 계정(테스트가 권한 경계를 확인한다)
+      DATA_DB_INSPECT_USER: ${DATA_DB_INSPECT_USER:-dash_inspect}
+      DATA_DB_INSPECT_PASSWORD: ${DATA_DB_INSPECT_PASSWORD:?make env 필요}
       STATE_DIR: ${STATE_DIR}
       BUILD_DIR: ${BUILD_DIR}
       # sync가 만든 Superset 객체의 화면 편집 차단(기본 1). contracts/state-and-uuid.md "표식"
@@ -229,6 +236,8 @@ services:
       - ${HOST_STATE_DIR:-./.state}:${STATE_DIR:-/app/.state}
       - ${HOST_BUILD_DIR:-./.build}:${BUILD_DIR:-/app/.build}
       - ./web/studio:/app/web/studio:ro
+      # 운용 화면과 함께 쓰는 화면 부품(web/shared. 설계서 9-4)
+      - ./web/shared:/app/web/shared:ro
     ports:
       - "127.0.0.1:${STUDIO_PORT:-8090}:8090"
     depends_on:
@@ -236,6 +245,58 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/studio/api/health', timeout=5).status == 200 else 1)"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+
+  # 관리 서비스(reference/data-design.md 10절, contracts/manage.md). `make manage`로만 띄운다(프로필 manage).
+  # 로그인한 운용자의 데이터 운용 API(/api/manage/). 포트를 밖에 열지 않고 nginx(web)의 /api/manage/로만 닿는다.
+  # 쓰기(projects/, owner DB 계정, Superset 관리자 계정)가 필요해 backend와 따로 둔다. 이미지는 studio와 같은 것이다
+  # (YAML을 고치는 데 ruamel.yaml이 필요하다). 작업 상태가 메모리에 있으므로 프로세스는 하나만 띄운다.
+  manager:
+    profiles: ["manage"]
+    build:
+      context: .
+      dockerfile: dashkit/Dockerfile
+      target: studio
+    image: dashkit-studio:local${IMAGE_SUFFIX:-}
+    restart: unless-stopped
+    command: ["python", "-m", "dashkit", "manage", "--port", "8100"]
+    # projects/에 쓰는 파일이 호스트 사용자 소유가 되도록 같은 uid:gid로 실행한다(Makefile이 넘긴다)
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      <<: [*data-db-env, *auth-env]
+      PROJECT: ${PROJECT}
+      TZ: ${TZ}
+      SUPERSET_URL: ${SUPERSET_URL}
+      SUPERSET_PUBLIC_URL: ${SUPERSET_PUBLIC_URL}
+      SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?make env 필요}
+      DATA_DB_OWNER_USER: ${DATA_DB_OWNER_USER}
+      DATA_DB_OWNER_PASSWORD: ${DATA_DB_OWNER_PASSWORD:?make env 필요}
+      DATA_DB_INSPECT_USER: ${DATA_DB_INSPECT_USER:-dash_inspect}
+      DATA_DB_INSPECT_PASSWORD: ${DATA_DB_INSPECT_PASSWORD:?make env 필요}
+      STATE_DIR: ${STATE_DIR}
+      BUILD_DIR: ${BUILD_DIR}
+      SYNC_LOCK_UI: ${SYNC_LOCK_UI:-1}
+      INGEST_INLINE_MAX_ROWS: ${INGEST_INLINE_MAX_ROWS:-500}
+      INGEST_MAX_UPLOAD_MB: ${INGEST_MAX_UPLOAD_MB:-200}
+      INGEST_MAX_ROWS: ${INGEST_MAX_ROWS:-2000000}
+      INGEST_MAX_REQUEST_MB: ${INGEST_MAX_REQUEST_MB:-500}
+      INGEST_COMPACT_HINT: ${INGEST_COMPACT_HINT:-200}
+      MANAGE_STATEMENT_TIMEOUT_MS: ${MANAGE_STATEMENT_TIMEOUT_MS:-15000}
+      MANAGE_LOCK_WAIT_MS: ${MANAGE_LOCK_WAIT_MS:-5000}
+      HOME: /tmp
+    volumes:
+      - ./projects:/app/projects
+      - ${HOST_STATE_DIR:-./.state}:${STATE_DIR:-/app/.state}
+      - ${HOST_BUILD_DIR:-./.build}:${BUILD_DIR:-/app/.build}
+    depends_on:
+      data-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/api/manage/health', timeout=5).status == 200 else 1)"]
       interval: 10s
       timeout: 10s
       retries: 10

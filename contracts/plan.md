@@ -47,6 +47,15 @@ CREATE TABLE dashkit_meta.load_snapshot (
   loaded_at timestamptz NOT NULL DEFAULT now(),
   snapshot  jsonb NOT NULL
 );
+CREATE TABLE dashkit_meta.batch (                 -- 원본 데이터 파일마다 한 줄(contracts/ingest.md "배치 기록")
+  table_name text NOT NULL,
+  file       text NOT NULL,                       -- replace 테이블·첫 배치는 "<테이블>.csv", 배치는 폴더 안의 이름
+  sha256     text NOT NULL,                       -- 내용 해시(압축을 푼 내용의 SHA-256)
+  added_at   timestamptz,                         -- 파일 이름의 시각. 없으면 NULL
+  rows       integer NOT NULL,
+  inserted   integer NOT NULL, updated integer NOT NULL, skipped integer NOT NULL, unchanged integer NOT NULL,
+  PRIMARY KEY (table_name, file)
+);
 ```
 
 `snapshot`:
@@ -55,8 +64,9 @@ CREATE TABLE dashkit_meta.load_snapshot (
 {
   "version": 1,
   "project": "devtracker",
+  "data_revision": "<sha256>",
   "tables": {
-    "members": { "columns": [["id", "text"], ["name", "text"], ["role", "text"]], "primary_key": ["id"], "rows": 6 }
+    "members": { "columns": [["id", "text"], ["name", "text"], ["role", "text"]], "primary_key": ["id"], "rows": 6, "mode": "replace" }
   },
   "datasets": {
     "kpi_snapshots": { "kind": "table", "definition": "<sha256>" },
@@ -66,9 +76,12 @@ CREATE TABLE dashkit_meta.load_snapshot (
 ```
 
 - `tables.<이름>.columns`: 적재 뒤 raw 테이블의 열(이름, `information_schema`의 `data_type`), schema.yaml 순서. `enum`은 `text`다.
+- `data_revision`: 데이터 설정 지문(DB의 내용을 정하는 설정만으로 구한 해시. [ingest.md](ingest.md) "배치 기록과 데이터 설정 지문"). 추가 적재가 "설정이 DB에 적용됐는지" 확인하는 데 쓴다.
+- `tables.<이름>.mode`: `replace` | `append`. `rows`는 적재 뒤 테이블의 행 수다. `append` 테이블은 `rules`(정규화한 테이블 정의의 SHA-256)도 남긴다.
+- `batch`: **프로젝트의 모든 원본 데이터 파일**(replace 테이블의 CSV, append 테이블의 배치마다)이 한 줄씩. 이름·해시·행 수뿐이다. 누적(append) 테이블은 행 지문을 남기지 않는다(배치 단위로 비교한다).
 - `datasets.<키>.definition`: 뷰 정의의 해시. `table:`은 `"table:<테이블>"`, `sql:`은 로더가 뷰를 만들 때처럼 다듬은 쿼리(앞뒤 공백과 끝의 `;` 제거)의 SHA-256.
-- **raw의 원본 값은 하나도 저장하지 않는다.** 지문 테이블의 두 열은 모두 해시이고(기본 키 값도 해시로만), 스냅샷에는 이름·타입·행 수·정의 해시만 있다. raw의 기본 키(이메일 등)는 dash 뷰에 나오지 않는 값일 수 있어, `dash_reader`가 읽는 기록에 두면 권한 경계가 넓어진다.
-- 권한: `dash` 스키마와 같은 방식으로, 적재할 때마다 로더가 `REVOKE ALL ON SCHEMA dashkit_meta FROM PUBLIC`, `GRANT USAGE`·`GRANT SELECT ON ALL TABLES`를 `dash_reader`에게 준다. 초기화 스크립트(`data-db/init/01-reader.sh`)에 기대지 않으므로 이미 있는 DB 볼륨에서도 다음 적재부터 생긴다. `dash_reader`는 이 스키마에 쓰거나 지울 수 없다(`tests/test_plan.py`).
+- **raw의 원본 값은 하나도 저장하지 않는다.** 지문 테이블의 두 열은 모두 해시이고(기본 키 값도 해시로만), 스냅샷에는 이름·타입·행 수·정의 해시만, 배치 기록에는 파일 이름·내용 해시·행 수만 있다. raw의 기본 키(이메일 등)는 dash 뷰에 나오지 않는 값일 수 있어, `dash_reader`가 읽는 기록에 두면 권한 경계가 넓어진다.
+- 권한: `dash` 스키마와 같은 방식으로, 적재할 때마다 로더가 `REVOKE ALL ON SCHEMA dashkit_meta FROM PUBLIC`, `GRANT USAGE`·`GRANT SELECT ON ALL TABLES`를 `dash_reader`(와 있으면 `dash_inspect`)에게 준다. 초기화 스크립트(`data-db/init/01-reader.sh`)에 기대지 않으므로 이미 있는 DB 볼륨에서도 다음 적재부터 생긴다. `dash_reader`는 이 스키마에 쓰거나 지울 수 없다(`tests/test_plan.py`).
 
 ### 행 지문
 
@@ -111,6 +124,21 @@ CREATE TABLE dashkit_meta.load_snapshot (
   | schema에서 빠진 테이블 | `removed`. −기록된 행 수 |
 
 - 어느 쪽이든 같은 키가 두 번 나오면 조용히 덮어쓰지 않고 `comparable: false`(전부 추가·전부 삭제)로 돌려준다(`diff_rows`).
+
+#### 누적 테이블(`mode: append`)
+
+배치 단위로 비교한다(행 지문이 없다). 항목에 `"mode": "append"`와 `"batches": {"added": [파일], "removed": [파일], "changed": [파일]}`가 더해진다.
+
+| 상황 | 결과 |
+|---|---|
+| 배치 기록에 없는 파일 | `batches.added`(배치 +1). 엄격하게 검증해 행 수를 `added`에 센다 |
+| 기록에 있는데 폴더에 없는 파일 | `batches.removed`(배치 −1). 그 배치가 넣었던 새 행 수(`inserted`)를 `removed`에 센다 |
+| 이름이 같고 내용 해시가 다른 파일 | `batches.changed`. 새 행 수를 `added`에, 기록된 `inserted`를 `removed`에 센다 |
+| 이름과 해시가 같은 배치 | 다시 읽지 않는다 |
+| 테이블 정의(충돌 정책·`default`·검증 규칙·`checks`)가 지난 적재와 다름(스냅샷의 `tables.<이름>.rules`, 정의의 해시) | 파일이 같아도 `status: changed`, `rules_changed: true`. "테이블 규칙이 바뀜: 다시 만든 결과가 달라질 수 있음" |
+| 이 테이블을 가리키는 묶음 기록이 `data/_pending/`에 남아 있음 | `status: pending`. 기록을 고치지 않고 "끝나지 않은 폴더 작업이 있음"을 알리며 비교하지 않는다 |
+
+`rows`는 지금 행 수(배치 기록의 `inserted` 합. 추가 적재분 포함) + 새 배치의 행 수 − 없어지거나 바뀐 배치의 `inserted`(어림값. 키가 겹치는 배치는 적용해야 정확히 안다), `changed`·`unchanged`는 `null`, `comparable`은 `false`다. 사람이 읽는 출력은 `배치 +2 −1 ~0 (+120행 −30행)`이다. 배치 파일의 이름 오류와 검증 오류는 CSV 검증 실패와 같게 다룬다.
 - `load`는 테이블을 통째로 다시 만든다. plan의 행 수는 "적용 뒤 내용이 지난 적재와 얼마나 다른가"이지 실행될 SQL의 수가 아니다.
 - 기록은 로더만 쓴다. owner 계정으로 raw를 직접 고친 내용은 plan에 나오지 않는다(다음 적재에서 덮어써진다).
 

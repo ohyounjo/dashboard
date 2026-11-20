@@ -16,6 +16,8 @@
 | 10 | 설정 형식 버전(`version`)과 `dashkit migrate` | 아래 "설정 버전", 형식 변경 기록 [../CHANGELOG.md](../CHANGELOG.md) |
 | 11 | Studio(구성 화면) API, 변경 연산, 요청 보호, 저장 방식 | [studio.md](studio.md). 화면(`web/studio/`)과 API(`dashkit/studio/`)의 약속이다. 프로젝트 마법사는 8번, 데이터 화면의 차이는 9번의 형식을 그대로 쓴다 |
 | 12 | 로그인·세션·요청 보호, 등급과 계정 상태, 인증 DB(`dashkit_auth` 스키마, `dash_auth` 계정), `/api/auth/*`, `make auth-init`·`make admin` | [auth.md](auth.md). 기존 웹앱 API의 로그인 요구는 4번(api.md)에도 적는다 |
+| 13 | 데이터 추가 적재: 테이블 방식(`mode`·`on_conflict`), 배치 폴더와 정규형, 접수(파서·머리글 맞추기·값 다듬기), 충돌 정책, 배치 기록(`dashkit_meta.batch`)과 데이터 설정 지문, 쓰기 잠금, 폴더를 바꾸는 작업의 공통 순서, 묶음 기록과 끊김 복구, 운용자 조회 계정(`dash_inspect`, `make data-init`) | [ingest.md](ingest.md). 로더·관리 서비스·CLI·Studio가 `dashkit/ingest/` 한 벌을 쓴다 |
+| 14 | 관리 서비스(`/api/manage`, `make manage`)의 경로·권한·요청 보호·한도 | [manage.md](manage.md). 형식과 동작은 13번, 설정 변경 연산은 11번을 그대로 쓴다 |
 | — | Superset 6.1.0 확인 기록(Explore) | [superset-notes.md](superset-notes.md), 원본 export [superset-6.1.0-export/](superset-6.1.0-export/)(`managed/`는 sync가 만든 객체의 export) |
 | — | Superset 버전 관리와 업그레이드 절차 | [superset-upgrade.md](superset-upgrade.md). 버전은 `.env.example`의 `SUPERSET_VERSION` 한 곳, 키 대조는 `tests/test_superset_keys.py` |
 | — | 구현 계획(A~E 분담, 환경변수, 의존성) | [implementation-plan.md](implementation-plan.md) |
@@ -60,6 +62,10 @@
 | schema `ref` | `<테이블>.<열>`이 있고, 그 열이 대상 테이블의 단일 열 PK. 참조 열과 대상 열의 type이 같음. 테이블 참조에 순환이 없음 |
 | schema `min`/`max` | 열 type에 맞는 값(date는 날짜 문자열), `min ≤ max` |
 | schema `pattern` | 컴파일되는 정규식 |
+| schema `on_conflict` | `mode: append`인 테이블에만 |
+| schema `default` | 열의 type·규칙(`enum`·`min`·`max`·`pattern`)을 통과하는 값. 기본 키 열에는 쓸 수 없음 |
+| schema `aliases` | 같은 테이블의 다른 열 이름이나 다른 열의 `aliases`와 겹치지 않음 |
+| 누적 테이블의 배치 파일 이름(`dashkit check`, load) | `data/<테이블>/` 바로 아래의 `<번호>[-<덧붙임>].csv(.gz)`. 같은 번호가 둘이면 오류([ingest.md](ingest.md) "배치 폴더") |
 | `datasets.*.table` | schema의 테이블 |
 | `datasets` 키 | 예약어 금지 |
 | 차트 `key` | 프로젝트 전체에서 유일 |
@@ -87,7 +93,7 @@
 
 ### 적재 기록 (`dashkit load`가 같은 트랜잭션에서 남긴다)
 
-로더는 raw·dash를 다시 만드는 트랜잭션에서 `dashkit_meta` 스키마(행 지문 `row_fingerprint`, 적재 스냅샷 `load_snapshot`)도 통째로 다시 만들고 `dash_reader`에게 USAGE·SELECT만 준다. raw의 원본 값은 하나도 넣지 않는다(기본 키의 해시와 행 해시뿐). `dashkit plan`이 owner 계정 없이 CSV와 지난 적재를 비교하는 데 쓴다. 테이블 정의와 지문 규칙은 [plan.md](plan.md) "적재 기록". 데이터 DB의 스키마는 `raw`(owner만), `dash`(reader 읽기), `dashkit_meta`(reader 읽기) 셋이다.
+로더는 raw·dash를 다시 만드는 트랜잭션에서 `dashkit_meta` 스키마(행 지문 `row_fingerprint`, 배치 기록 `batch`, 적재 스냅샷 `load_snapshot`)도 통째로 다시 만들고 `dash_reader`(와 있으면 `dash_inspect`)에게 USAGE·SELECT만 준다. raw의 원본 값은 하나도 넣지 않는다(기본 키의 해시와 행 해시, 파일 이름·내용 해시·행 수뿐). `dashkit plan`이 owner 계정 없이 원본 파일과 지난 적재를 비교하는 데 쓰고, 추가 적재가 대조와 중복 확인에 쓴다. 테이블 정의와 지문 규칙은 [plan.md](plan.md) "적재 기록". 데이터 DB의 스키마는 `raw`(owner만, `dash_inspect` 읽기), `dash`(reader·inspect 읽기), `dashkit_meta`(reader·inspect 읽기) 셋이다.
 
 ## `dashkit/config.py` 공개 인터페이스
 
@@ -118,6 +124,6 @@ def layout_blocks(dashboard: dict) -> list[dict]                 # layout → �
 def load_schema(name: str) -> dict                               # 계약의 JSON Schema(dashboard.schema.json은 차트 유형 정의와 위젯 섹션 정의를 합성한 결과)
 ```
 
-CLI: `python -m dashkit {check|plan|load|sync|migrate|api|gen|auth}`. `auth`는 인증 DB를 다룬다([auth.md](auth.md) "CLI", PROJECT를 쓰지 않는다). `plan`은 적용 전에 차이를 보여 주고 아무것도 바꾸지 않는다([plan.md](plan.md), `--json`). `migrate`는 설정 파일을 최신 형식 버전으로 고친다(위 "설정 버전", `--check`는 확인만). `gen`은 계약 문서의 생성 구간을 레지스트리에서 다시 쓴다(`--check`는 확인만). 모든 하위 명령은 `PROJECT`, `PROJECTS_DIR`(기본 `/app/projects`) 환경변수를 쓴다.
+CLI: `python -m dashkit {check|plan|load|sync|migrate|api|gen|manage|auth}`. `manage`는 관리 서비스를 띄운다([manage.md](manage.md)). `auth`는 인증 DB를 다룬다([auth.md](auth.md) "CLI", PROJECT를 쓰지 않는다). `plan`은 적용 전에 차이를 보여 주고 아무것도 바꾸지 않는다([plan.md](plan.md), `--json`). `migrate`는 설정 파일을 최신 형식 버전으로 고친다(위 "설정 버전", `--check`는 확인만). `gen`은 계약 문서의 생성 구간을 레지스트리에서 다시 쓴다(`--check`는 확인만). 모든 하위 명령은 `PROJECT`, `PROJECTS_DIR`(기본 `/app/projects`) 환경변수를 쓴다.
 
 CLI(프로젝트 초안): `python -m dashkit new <이름> --from <CSV 폴더> [--dry-run]`. CSV 폴더에서 `PROJECTS_DIR/<이름>/`을 만든다([scaffold.md](scaffold.md)). `PROJECT`는 쓰지 않고 DB도 필요 없다. `--dry-run`은 파일을 쓰지 않고 추론 결과(JSON)만 출력한다. 이미 있는 프로젝트는 덮어쓰지 않고 종료 코드 1로 끝낸다.

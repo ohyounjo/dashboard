@@ -124,7 +124,9 @@ def test_snapshot_shape(tmp_path):
     snap = record.snapshot(project.name, project.schema, project.dashboard, {"owners": 2, "things": 5})
     assert json.loads(json.dumps(snap)) == snap
     assert snap["version"] == 1 and snap["project"] == "basic"
-    assert snap["tables"]["owners"] == {"columns": [["id", "text"], ["label", "text"]], "primary_key": ["id"], "rows": 2}
+    assert snap["tables"]["owners"] == {"columns": [["id", "text"], ["label", "text"]], "primary_key": ["id"], "rows": 2,
+                                        "mode": "replace"}
+    assert snap["data_revision"] == record.data_revision(project.schema, project.dashboard)
     assert snap["tables"]["things"]["columns"] == [list(c) for c in THINGS_NOW]
     assert snap["datasets"]["owners"]["kind"] == "table" and snap["datasets"]["things"]["kind"] == "sql"
     assert len(snap["datasets"]["things"]["definition"]) == 64

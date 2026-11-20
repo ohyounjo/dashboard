@@ -331,9 +331,11 @@ class Mailer(Protocol):
 |---|---|---|
 | `dash_owner` | raw·dash 스키마 소유 | 로더(tools). backend에는 주지 않는다 |
 | `dash_reader` | dash 스키마 SELECT | 대시보드 데이터 읽기(`/api/data`, plan) |
-| `dash_auth` | `dashkit_auth` 스키마의 표에 대한 SELECT·INSERT·UPDATE·DELETE만(`schema_version`은 SELECT만) | backend의 인증·권한·운용 API, `dashkit auth` CLI(tools) |
+| `dash_auth` | `dashkit_auth` 스키마의 표에 대한 SELECT·INSERT·UPDATE·DELETE만(`schema_version`은 SELECT만) | backend의 인증·권한·운용 API, `dashkit auth` CLI(tools), 관리 서비스의 로그인 확인 |
+| `dash_inspect` | raw·dash·dashkit_meta의 SELECT만(기본 읽기 전용 트랜잭션) | 관리 서비스의 읽기 경로(운용자 조회). [ingest.md](ingest.md) "DB 계정" |
 
-- `dash_auth`는 raw·dash·dashkit_meta를 읽을 수 없고 표·스키마를 만들거나 바꿀 수 없다. `dash_reader`와 `dash_owner`는 `dashkit_auth`를 읽을 수 없다(`tests/test_auth_db.py`).
+- `dash_auth`는 raw·dash·dashkit_meta를 읽을 수 없고 표·스키마를 만들거나 바꿀 수 없다. `dash_reader`와 `dash_owner`는 `dashkit_auth`를 읽을 수 없다(`tests/test_auth_db.py`). `dash_inspect`도 `dashkit_auth`를 읽을 수 없고 어디에도 쓰지 못한다(`tests/test_ingest_db.py`).
+- 관리 서비스(`/api/manage`, [manage.md](manage.md))는 backend와 같은 로그인 확인(`require_operator`·`require_admin`)과 요청 보호(`dashkit/auth/guard.py`)를 쓴다.
 - `dashkit/db.py`의 `auth_conn()`이 `DATA_DB_AUTH_USER`, `DATA_DB_AUTH_PASSWORD`로 접속한다. backend는 이 계정과 `dash_reader`만 갖는다(owner 계정·Superset 계정 없음).
 - 스키마 소유자는 superuser(`postgres`)다. 로더 계정이 DB 소유자여도 `dashkit_auth`를 지우지 못하고, 로더의 재적재(`DROP SCHEMA`)는 raw·dash·dashkit_meta만 지운다. 프로젝트를 바꿔도 계정과 그룹은 남는다.
 - 사용자 입력이 SQL에 들어가는 곳은 전부 매개변수 바인딩이다.
