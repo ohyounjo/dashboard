@@ -206,13 +206,16 @@ export function renderChartForm(box, { pending, isNew, keyBox, types, datasets, 
       const rows = arr.map((pair, i) => {
         const cur = Array.isArray(pair) ? pair : [];
         const opts = choices.slice();
+        // 방향은 렌더링 때의 값(cur)이 아니라 지금 초안(arr[i])에서 읽는다. 방향을 바꾼 뒤 열을 바꿔도 방향이 유지된다
+        const dirNow = () => (Array.isArray(arr[i]) && arr[i][1]) || "asc";
+        const byNow = () => (Array.isArray(arr[i]) ? arr[i][0] : "") ?? "";
         if (!blank(cur[0]) && !opts.includes(cur[0])) opts.push({ value: cur[0], label: S.notInList(cur[0]) });
         const by = choices.length
-          ? select(opts, cur[0], { "data-path": `${name}.${i}`, placeholder: S.choose, "aria-label": S.orderByTarget(i + 1), onchange: (v) => { arr[i] = [v, cur[1] || "asc"]; changed(true, `${name}.${i}`); } })
+          ? select(opts, cur[0], { "data-path": `${name}.${i}`, placeholder: S.choose, "aria-label": S.orderByTarget(i + 1), onchange: (v) => { arr[i] = [v, dirNow()]; changed(true, `${name}.${i}`); } })
           : h("input", { type: "text", class: "input mono", autocomplete: "off", value: cur[0] ?? "", "data-path": `${name}.${i}`, "aria-label": S.orderByTarget(i + 1) });
-        if (!choices.length) by.addEventListener("input", () => { cur[0] = by.value; arr[i] = [by.value, cur[1] || "asc"]; changed(false); });
+        if (!choices.length) by.addEventListener("input", () => { arr[i] = [by.value, dirNow()]; changed(false); });
         const dir = select([{ value: "asc", label: S.orderAsc }, { value: "desc", label: S.orderDesc }], cur[1] || "asc",
-          { "data-path": `${name}.${i}.dir`, "aria-label": S.orderByDir(i + 1), onchange: (v) => { arr[i] = [arr[i][0], v]; changed(false); } });
+          { "data-path": `${name}.${i}.dir`, "aria-label": S.orderByDir(i + 1), onchange: (v) => { arr[i] = [byNow(), v]; changed(false); } });
         return listRow(name, i, arr.length, h("div", { class: "pair" }, by, dir), { move: (to) => ops.move(i, to), remove: () => ops.remove(i) });
       });
       const adder = button(S.itemAdd, { iconName: "plus", cls: "small", "data-path": `${name}.__add`, onclick: () => ops.add(["", "asc"]) });
