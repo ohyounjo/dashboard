@@ -109,7 +109,8 @@ def config_version(doc: dict) -> int                            # 설정 파일 
 def object_uuid(project: str, kind: str, key: str) -> str
 def resolve_as_of(project: Project, today: date | None = None) -> date
 def table_order(project: Project) -> list[str]                  # ref 위상 정렬(적재 순서)
-def widget_datasets(project: Project) -> set[str]               # 위젯 섹션이 참조한 데이터셋 = /api/data 허용 목록
+def widget_datasets(project: Project, tab_keys: set[str] | None = None) -> set[str]   # 위젯 섹션이 참조한 데이터셋 = /api/data 허용 목록(tab_keys: 그 탭들만)
+def superset_dashboards(project: Project, tab_keys: set[str] | None = None) -> set[str]   # superset 섹션이 참조한 대시보드 키(tab_keys: 그 탭들만)
 def referenced_columns(project: Project) -> dict[str, dict[str, list[str]]]
 def check_view_columns(project: Project, view_columns: dict[str, set[str]]) -> list[str]   # 오류 목록(없으면 [])
 def charts(project: Project) -> Iterator[tuple[str, dict]]       # (대시보드 키, 차트)

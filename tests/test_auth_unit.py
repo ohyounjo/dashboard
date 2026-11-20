@@ -256,7 +256,7 @@ def test_latest_sql_version_matches_files():
 
 def test_auth_pages_have_no_inline_script():
     """CSP(script-src 'self')를 지킨다: 인라인 스크립트·이벤트 속성이 없다."""
-    for page in ("index.html", "login.html"):
+    for page in ("index.html", "login.html", "admin/index.html"):
         html = (ROOT / "web" / page).read_text(encoding="utf-8")
         for m in re.finditer(r"<script\b([^>]*)>(.*?)</script>", html, re.S | re.I):
             assert "src=" in m.group(1) and not m.group(2).strip(), page

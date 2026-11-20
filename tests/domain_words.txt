@@ -48,3 +48,5 @@ planned
 # 일반 탭 이름
 overview
 개요
+# 로그인·그룹(contracts/auth.md)의 일반 단어. 그룹 구성원 API 경로가 /groups/{id}/members다
+members

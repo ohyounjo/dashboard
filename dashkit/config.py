@@ -673,14 +673,29 @@ def check_view_columns(project: Project, view_columns: dict[str, set[str]], only
 
 # ---------------------------------------------------------------- 기타 조회
 
-def widget_datasets(project: Project) -> set[str]:
-    """위젯 섹션이 dataset으로 참조한 데이터셋. /api/data 허용 목록."""
+def widget_datasets(project: Project, tab_keys: set[str] | None = None) -> set[str]:
+    """위젯 섹션이 dataset으로 참조한 데이터셋. /api/data 허용 목록.
+
+    tab_keys를 주면 그 탭들의 위젯 섹션만 본다(로그인한 사용자가 볼 수 있는 탭, contracts/auth.md "접근 제어").
+    """
     widget_types = widget_registry.registry()
     return {
         sec["dataset"]
         for tab in project.dashboard["tabs"]
+        if tab_keys is None or tab["key"] in tab_keys
         for sec in tab["sections"]
         if sec["type"] in widget_types and widget_types[sec["type"]].has_dataset
+    }
+
+
+def superset_dashboards(project: Project, tab_keys: set[str] | None = None) -> set[str]:
+    """superset 섹션이 참조한 대시보드 키. tab_keys를 주면 그 탭들만 본다."""
+    return {
+        sec["dashboard"]
+        for tab in project.dashboard["tabs"]
+        if tab_keys is None or tab["key"] in tab_keys
+        for sec in tab["sections"]
+        if sec["type"] == "superset"
     }
 
 

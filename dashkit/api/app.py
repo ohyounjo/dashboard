@@ -26,6 +26,8 @@ from pydantic import BaseModel, StrictStr
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import config, widgets
+from ..auth import access
+from ..auth import admin_routes
 from ..auth import settings as auth_settings
 from ..auth import store as auth_store
 from ..auth.guard import Guard
@@ -100,6 +102,8 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="dashkit", openapi_url=None, lifespan=lifespan)
 app.add_middleware(Guard)
 app.include_router(auth_router)
+app.include_router(admin_routes.router)
+admin_routes.set_project_provider(lambda: ctx.current().project)
 
 
 # ---------------------------------------------------------------- 공통 응답
@@ -162,8 +166,10 @@ async def _unhandled(_req: Request, exc: Exception):
 
 # ---------------------------------------------------------------- 도우미
 
-def _sections_with_embeds(project: config.Project, embeds: dict[str, str]) -> tuple[list[dict], bool]:
-    tabs = copy.deepcopy(project.dashboard["tabs"])
+def _sections_with_embeds(project: config.Project, embeds: dict[str, str],
+                          tab_keys: set[str] | None = None) -> tuple[list[dict], bool]:
+    """탭(tab_keys를 주면 그 탭만, 설정 순서대로)과 applied(남은 탭의 superset 섹션이 모두 적용됐는지)."""
+    tabs = copy.deepcopy([t for t in project.dashboard["tabs"] if tab_keys is None or t["key"] in tab_keys])
     applied = True
     for tab in tabs:
         for sec in tab["sections"]:
@@ -189,7 +195,8 @@ def _applied(project: config.Project, embeds: dict[str, str]) -> bool:
 def get_app(user: Principal = Depends(require_user)):
     cur = ctx.current()
     project, embeds = cur.project, cur.embeds
-    tabs, applied = _sections_with_embeds(project, embeds)
+    # 볼 수 있는 탭만 돌려준다(운용자는 전부, user는 속한 그룹들이 허용한 탭)
+    tabs, applied = _sections_with_embeds(project, embeds, access.allowed_tab_keys(user, project))
     app_cfg = project.dashboard["app"]
     return {
         "project": project.name,
@@ -218,6 +225,8 @@ def post_guest_token(body: GuestTokenRequest, user: Principal = Depends(require_
     cur = ctx.current()
     if key not in cur.project.dashboard["dashboards"]:
         raise ApiError(404, "unknown_dashboard", "설정에 없는 대시보드입니다")
+    if key not in access.allowed_dashboards(user, cur.project):
+        raise ApiError(403, "forbidden", "이 대시보드를 볼 권한이 없습니다")
     embed_id = cur.embeds.get(key)
     if not embed_id:
         raise ApiError(409, "not_applied", "대시보드가 아직 적용되지 않았습니다(make apply)")
@@ -243,7 +252,8 @@ def post_guest_token(body: GuestTokenRequest, user: Principal = Depends(require_
 
 @app.get("/api/data/{dataset}")
 def get_data(dataset: str, user: Principal = Depends(require_user)):
-    allowed = config.widget_datasets(ctx.current().project)
+    # 볼 수 있는 탭의 위젯 섹션이 참조하는 데이터셋만. 아니면 설정에 없는 것과 같은 404
+    allowed = access.allowed_datasets(user, ctx.current().project)
     if dataset not in allowed:
         raise ApiError(404, "unknown_dataset", "위젯이 참조하지 않는 데이터셋입니다")
     # 이후에는 허용 목록 쪽 문자열만 SQL에 넣는다

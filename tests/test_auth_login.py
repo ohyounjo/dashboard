@@ -261,3 +261,17 @@ def test_login_page_is_served_with_csp():
     code, body, headers = http_full("GET", f"{WEB_URL}/login.html")
     assert code == 200 and "auth.js" in body
     assert "script-src 'self'" in headers["Content-Security-Policy"]
+
+
+def test_login_and_logout_are_audited(account):
+    email, password, user_id = account
+    post_login(email, password + "x")
+    post_login(random_email("nobody"), password)
+    token = login(email, password)
+    http_full("POST", f"{WEB_URL}/api/auth/logout", {}, with_cookie(token))
+    rows = auth_sql("""SELECT action, actor_id, actor_email, detail, ip FROM dashkit_auth.audit_log
+                        WHERE actor_email = %s ORDER BY id""", (email,))
+    assert [r[0] for r in rows] == ["auth.login_failed", "auth.login", "auth.logout"]
+    assert rows[0][3] == {"reason": "wrong_password"} and str(rows[0][1]) == user_id and rows[0][4] is not None
+    text = repr(auth_sql("SELECT detail FROM dashkit_auth.audit_log WHERE actor_email = %s", (email,)))
+    assert password not in text                                          # 비밀번호는 남기지 않는다

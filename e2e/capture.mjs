@@ -30,6 +30,10 @@ const SESSION_COOKIE = "dashkit_session";
 const AUTH_PAGES = [
   { key: "_login", label: "로그인 화면", path: "/login.html" },
 ];
+// 로그인한 채로 찍는 운용 화면(캡처용 계정은 admin이다)
+const ADMIN_PAGES = [
+  { key: "_admin-groups", label: "운용: 그룹", path: "/admin/#groups" },
+];
 
 // 로그인해서 세션 쿠키 값을 돌려준다. 로그인 기능이 없는 버전이면 null.
 async function login() {
@@ -115,6 +119,7 @@ async function main() {
   const app = await fetchApp(cookie);
   const tabs = app.tabs.map((t) => ({ key: t.key, label: t.label }));
   const pages = cookie ? AUTH_PAGES : [];
+  const adminPages = cookie ? ADMIN_PAGES : [];
   const shots = [];
   const consoleErrors = [];
 
@@ -160,6 +165,15 @@ async function main() {
           shots.push({ tab: tab.key, label: tab.label, viewport: vp.name, theme, file, warnings });
           console.log(`${warnings.length ? "⚠" : "✔"} ${file}${warnings.length ? " — " + warnings.join(", ") : ""}`);
         }
+        for (const pg of adminPages) {
+          await page.goto(`${BASE_URL}${pg.path}`, { waitUntil: "domcontentloaded" });
+          await page.waitForFunction(() => !document.querySelector("#view .sk-note"), null, { timeout: 30_000 }).catch(() => {});
+          const warnings = await waitSettled(page);
+          const file = `${pg.key}-${vp.name}-${theme}.png`;
+          await page.screenshot({ path: path.join(OUT, file), fullPage: true });
+          shots.push({ tab: pg.key, label: pg.label, viewport: vp.name, theme, file, warnings });
+          console.log(`✔ ${file}`);
+        }
         await context.close();
       }
     }
@@ -168,7 +182,7 @@ async function main() {
   }
 
   const manifest = {
-    project: app.project, title: app.app?.title ?? "", tabs: [...tabs, ...pages.map((p) => ({ key: p.key, label: p.label }))],
+    project: app.project, title: app.app?.title ?? "", tabs: [...tabs, ...[...pages, ...adminPages].map((p) => ({ key: p.key, label: p.label }))],
     shots, consoleErrors,
   };
   await writeFile(path.join(OUT, "manifest.json"), JSON.stringify(manifest, null, 2));

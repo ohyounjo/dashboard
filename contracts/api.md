@@ -84,13 +84,14 @@
 ```
 
 - `user`: 로그인한 사용자의 이메일과 등급(`admin` · `operator` · `user`).
+- `tabs`: **로그인한 사용자가 볼 수 있는 탭만**, 설정 순서대로. 운용자(`admin`·`operator`)는 전부, `user`는 속한 그룹들이 허용한 탭([auth.md](auth.md) "접근 제어"). 하나도 없으면 빈 배열이고 웹앱은 "접근할 수 있는 대시보드가 없습니다"를 보여 준다.
 - `app.as_of`: `"today"`이면 요청 시점 날짜(`TZ` 환경변수)로 바꿔 돌려준다. 항상 `YYYY-MM-DD`.
 - `app.logo_text`, `app.theme`: 설정에 없으면 `null`. 웹앱은 `null`이면 기본 토큰을 쓴다.
 - `superset.url`: 환경변수 `SUPERSET_PUBLIC_URL`(브라우저가 접속할 주소). 비어 있으면 `null`.
 - 섹션의 선택 필드는 설정에 없으면 `null`로 채워 **키가 항상 있다**.
 - `project`: 현재 프로젝트의 이름(위 "현재 프로젝트").
 - `embed_id`: `.state/embed.json`에서 찾은 임베드 UUID. 없거나, 현재 프로젝트가 환경변수 `PROJECT`로 넘어간 것이라 embed.json이 그 프로젝트의 것이 아니면 `null`.
-- `applied`: 모든 superset 섹션의 `embed_id`가 있으면 `true`.
+- `applied`: 돌려준 탭의 모든 superset 섹션의 `embed_id`가 있으면 `true`(남은 탭이 없으면 `true`).
 - `widgets`: 위젯 매니페스트(`web/widgets/<유형>/widget.json`, [widgets.md](widgets.md))에서 읽은 유형 목록(이름순). 이 프로젝트가 쓰지 않는 유형도 들어 있다. 웹앱은 섹션의 `type`이 이 목록의 `type`과 정확히 같을 때만 `./widgets/<type>/widget.js`를 불러온다. `superset`은 위젯이 아니므로 목록에 없다.
 - 위젯 섹션의 키는 유형의 매니페스트가 정한다(공통 키 `type`, `title` + 옵션). 위 예의 `gantt`, `kanban`은 저장소에 들어 있는 두 유형이다.
 
@@ -107,6 +108,7 @@
 | 로그인하지 않음(본문 형식보다 먼저 본다) | 401 | `unauthenticated` |
 | 본문 형식 오류 | 422 | `invalid_request` |
 | 설정에 없는 키 | 404 | `unknown_dashboard` |
+| 설정에는 있지만 볼 수 있는 탭의 superset 섹션이 참조하지 않음(`user` 등급. 운용자는 설정의 모든 대시보드) | 403 | `forbidden` |
 | 설정에는 있지만 embed.json에 없음(apply 전) | 409 | `not_applied` |
 | `GUEST_TOKEN_JWT_SECRET` 또는 `GUEST_TOKEN_JWT_AUDIENCE` 미설정(시작 시 경고 로그) | 500 | `token_unavailable` |
 
@@ -129,7 +131,7 @@ JWT(HS256, 키 `GUEST_TOKEN_JWT_SECRET`):
 
 ## GET /api/data/{dataset}
 
-로그인 필요(401 `unauthenticated`). 위젯 섹션(매니페스트에 `dataset` 옵션이 있는 유형)이 `dataset`으로 참조한 데이터셋만 허용한다. 나머지는 404 `unknown_dataset`(설정에 있는 데이터셋이어도 위젯이 참조하지 않으면 404).
+로그인 필요(401 `unauthenticated`). 위젯 섹션(매니페스트에 `dataset` 옵션이 있는 유형)이 `dataset`으로 참조한 데이터셋만 허용한다. 나머지는 404 `unknown_dataset`(설정에 있는 데이터셋이어도 위젯이 참조하지 않으면 404). `user` 등급은 **볼 수 있는 탭의** 위젯 섹션이 참조한 데이터셋만 허용하고, 다른 탭의 데이터셋도 같은 404다.
 
 ```json
 {
