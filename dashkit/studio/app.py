@@ -258,6 +258,18 @@ def _dataset_columns(name: str, schema: Any, dashboard: Any) -> tuple[dict[str, 
     return out, source
 
 
+def _dataset_metrics(dashboard: Any) -> dict[str, list[str]]:
+    """데이터셋 → 지표 이름(파일에 쓴 순서). 차트 폼의 지표 선택에 쓴다. 지표가 없는 데이터셋은 빈 목록이다."""
+    datasets = dashboard.get("datasets") if isinstance(dashboard, dict) else None
+    if not isinstance(datasets, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for key, ds in datasets.items():
+        metrics = ds.get("metrics") if isinstance(ds, dict) else None
+        out[str(key)] = [str(m) for m in metrics] if isinstance(metrics, dict) else []
+    return out
+
+
 def _config_body(name: str) -> dict[str, Any]:
     root = store.project_root(name)
     schema = store.read_raw(root, config.SCHEMA_FILE)
@@ -274,7 +286,8 @@ def _config_body(name: str) -> dict[str, Any]:
             if isinstance(t, str) and store.TABLE_RE.fullmatch(t):
                 tables[t] = {"rows": store.csv_row_count(root / "data" / f"{t}.csv"), "columns": _table_columns(spec)}
     return {"name": root.name, "schema": schema, "dashboard": dashboard, "valid": not errors, "errors": errors,
-            "columns": columns, "columns_source": source, "tables": tables, "revision": store.revision(root)}
+            "columns": columns, "columns_source": source, "metrics": _dataset_metrics(dashboard), "tables": tables,
+            "revision": store.revision(root)}
 
 
 @api.get(PREFIX + "/projects/{p}/config")

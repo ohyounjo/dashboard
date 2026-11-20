@@ -51,6 +51,10 @@ Studio는 `projects/<이름>/`의 파일을 고치고 `make apply`와 같은 일
   - 값을 바꾸면 그 값의 글자만 바뀐다(같은 줄의 주석은 남는다). 키를 지우면 그 줄(과 바로 위의 주석)이 없어진다. 새 키는 그 매핑의 끝에 붙는다.
   - 항목(탭, 섹션)을 옮기면 그 항목의 줄들이 바로 위의 주석과 함께 그대로 옮겨진다. 항목 사이의 빈 줄은 자리에 남는다.
   - 새 항목은 이웃과 같은 꼴로 쓴다: 한 줄 목록(`sections: [{ … }]`)에는 한 줄로, 여러 줄 목록에는 여러 줄로. 한 줄 목록에 여러 줄짜리 섹션을 옮겨 넣거나 새 항목 때문에 줄이 80자를 넘으면 그 목록만 여러 줄로 푼다.
+  - 항목마다 한 줄씩 쓴 목록(`charts:`·`filters:` 아래의 `- { key: …, … }`, `layout:` 아래의 `- [a, b]`)에 더하는 새 항목은, 이웃이 **모두** 한 줄이면 한 줄로 쓴다(160자 또는 가장 긴 이웃의 길이까지. 넘으면 여러 줄). 이웃에 여러 줄 항목이 섞여 있으면 새 차트·필터는 여러 줄로 쓴다.
+  - `layout.set`은 layout 전체를 받지만 통째로 다시 쓰지 않는다. 받은 layout과 파일의 layout을 **행 단위로 견줘** 내용이 같은 행은 원문 줄을 그대로 쓰고(자리만 옮긴다. 탭 안팎으로도), 달라진 행은 항목을 가장 많이 공유하는 원래 행을 골라 그 안에서 바뀐 항목만 고친다(`{ chart: a, width: 4 }`의 `4`만 바뀌고 같은 줄의 주석은 남는다). 짝이 없는 행만 새로 쓴다. 제목(header)·글(markdown)은 글자를 고쳐도 원래 항목 자리에 쓴다.
+  - 여러 줄 문자열(글 블록의 markdown 등)을 새로 쓸 때는 literal block(`|`)으로 쓴다. 그렇게 쓸 수 없는 글(첫 줄이 공백으로 시작하는 등)만 `"…\n…"`으로 쓴다.
+  - 여러 줄로 쓴 항목(예: `- markdown: |` 글 블록)을 한 줄 행·한 줄 탭(`{ label: …, rows: [[a]] }`) 안으로 옮기면 그 행·탭만 여러 줄로 풀어 쓴다(안의 바뀌지 않은 값은 원문 그대로).
 - 이 방법으로 다룰 수 없는 파일·변경(앵커·별칭·병합 키, CR 줄바꿈, 여러 줄에 걸친 `{ … }` 안의 수정 등)은 **`ruamel.yaml` round-trip**으로 파일 전체를 다시 쓴다(`dashkit/studio/roundtrip.py`). 주석과 키 순서는 남지만 모양은 표준 꼴로 바뀐다(`{ a: b }` → `{a: b}`, 줄 맞춤 공백 제거, 겹친 목록의 들여쓰기). 응답의 `written`이 파일마다 어느 쪽이었는지 알려 준다(`exact` | `roundtrip`).
 - 어느 쪽이든 다시 쓴 글을 PyYAML로 읽어 "연산을 적용한 값"과 같은지 확인한 뒤에만 저장 단계(위 1~3)로 넘어간다. 다르면 500 `cannot_write`이고 파일은 그대로다.
 
@@ -75,7 +79,7 @@ Studio에서 적용(apply)하면 그 프로젝트가 웹앱에 보인다. backen
 | `GET /studio/api/projects` | `{"projects": [{"name", "title", "valid", "errors": n}], "current": "<이름>" 또는 null, "web_url": "<미리보기 주소>"}`. `current`는 지금 웹앱에 적용된 프로젝트(`.state/embed.json`의 `project`). `title`은 읽을 수 없으면 null |
 | `POST /studio/api/projects/infer` | multipart `files`(CSV 여러 개) → `{"inference": {…}, "upload_id": "…"}`. 파일을 `projects/`에 쓰지 않는다(메모리에 1시간, 최근 3개). `inference` 형식은 `contracts/scaffold.md`. 읽을 수 없는 CSV는 422 `invalid_csv` + `errors` |
 | `POST /studio/api/projects` | `{"name", "upload_id", "inference"}` → 프로젝트 생성(`scaffold.render` + `write_project`). 201 `{"name"}`. 이름이 이미 있으면 409 `project_exists`. `inference.tables`를 고쳤으면 서버가 `suggest_dashboard`로 초안 차트를 다시 고른다(요청에 `"resuggest": true`. `inference.dashboard.app`은 유지한다). 만들 수 없으면 422 `invalid_inference` + `errors`(`problems`가 남아 있음, 검증 실패 등) |
-| `GET /studio/api/projects/{p}/config` | `{"name", "schema": {…}, "dashboard": {…}, "valid", "errors": […], "columns": {"<데이터셋>": [{"name","type"}]}, "columns_source": "db"\|"schema", "tables": {"<테이블>": {"rows": n 또는 null, "columns": [{"name","type"}]}}, "revision": "…"}`. `schema`·`dashboard`는 파일을 읽은 그대로(기본값을 채우지 않은 것. 읽을 수 없으면 null). `columns`는 지금 DB의 뷰 열이다(이 프로젝트가 적재돼 있을 때. `type`은 `/api/data`와 같은 6가지). 아니면 `table:` 데이터셋만 스키마에서 채운다(`sql:` 데이터셋은 키가 없다). `tables.<테이블>.rows`는 `data/<테이블>.csv`의 행 수, `columns[].type`은 스키마의 유형(`enum` 포함) |
+| `GET /studio/api/projects/{p}/config` | `{"name", "schema": {…}, "dashboard": {…}, "valid", "errors": […], "columns": {"<데이터셋>": [{"name","type"}]}, "columns_source": "db"\|"schema", "metrics": {"<데이터셋>": ["<지표 이름>"]}, "tables": {"<테이블>": {"rows": n 또는 null, "columns": [{"name","type"}]}}, "revision": "…"}`. `schema`·`dashboard`는 파일을 읽은 그대로(기본값을 채우지 않은 것. 읽을 수 없으면 null). `columns`는 지금 DB의 뷰 열이다(이 프로젝트가 적재돼 있을 때. `type`은 `/api/data`와 같은 6가지). 아니면 `table:` 데이터셋만 스키마에서 채운다(`sql:` 데이터셋은 키가 없다). `tables.<테이블>.rows`는 `data/<테이블>.csv`의 행 수, `columns[].type`은 스키마의 유형(`enum` 포함) |
 | `PATCH /studio/api/projects/{p}/config` | `{"ops": [연산…], "revision"?: "…"}` → 전부 적용해 검증한 뒤 저장. 200 `{"changed": ["dashboard.yaml"], "dashboard": {…}, "schema": {…}, "revision": "…", "written": {"dashboard.yaml": "exact"}}`. 검증 실패는 422 `invalid_config` + `errors`(파일은 그대로). `revision`(GET이 준 값)을 보내면 그 사이에 파일이 바뀌었을 때 409 `stale_config`로 거절한다(생략하면 보지 않는다) |
 | `POST /studio/api/projects/{p}/data/{table}/check` | multipart `file`(CSV 하나) → 검증만. 200 `{"valid", "errors": […], "diff": {added, removed, changed, unchanged, comparable, rows, …}, "rows": n}`. 검증에 실패해도 200이고 `valid: false`, `diff: null`이다. 차이는 `dashkit.plan`의 방식(적재 기록의 행 지문과 비교, `dash_reader` 계정)이고 `diff`는 `plan.md`의 `data[]` 한 항목이다(`status`, `reason`, `keys`, `columns` 포함. 적재 기록이 없으면 `status: unrecorded`). DB를 읽지 못하면 `diff: null`과 `diff_error`(이유). 파일을 쓰지 않는다. 다른 테이블의 CSV와의 참조도 함께 검증한다 |
 | `PUT /studio/api/projects/{p}/data/{table}` | multipart `file` → 검증을 통과하면 `data/<table>.csv`를 바꾼다. 200 `{"changed": ["data/<table>.csv"], "rows": n}`(내용이 같으면 `changed: []`). 실패는 422 `invalid_csv` + `errors`. 적재는 하지 않는다(적용은 apply) |
@@ -114,7 +118,23 @@ Studio에서 적용(apply)하면 그 프로젝트가 웹앱에 보인다. backen
 
 연산은 `dashkit/studio/ops.py`의 등록 표(`@op("이름")`)에 있다. 함수 하나를 더하면 연산 하나가 는다.
 
-5b단계(대시보드 배치, 필터)에서 추가한다: `chart.add`, `chart.update`, `chart.remove`, `layout.set`, `filter.add`, `filter.update`, `filter.move`, `filter.remove`.
+5b단계(대시보드 배치, 필터):
+
+| 연산 | 필드 | 결과 |
+|---|---|---|
+| `dashboard.update` | `dashboard`, `values: {title?, cross_filters?}` | 대시보드 제목·교차 필터 변경(`null`이면 지운다). 그 밖의 키는 `invalid_op` |
+| `chart.add` | `dashboard`, `chart: {key, title, dataset, viz 또는 viz_type, …필드}`, `row?`, `index?`, `width?` | 차트를 `charts`에 더하고 `layout`에 배치한다. `row`(layout 최상위 행의 자리)가 있으면 그 행의 `index` 자리(없으면 끝)에, 없으면 맨 아래에 새 행으로. `width`가 있으면 `{chart, width}` 항목으로 쓴다. 대시보드 안 탭(`tabs`) 속 행에 넣으려면 `chart.add` 뒤에 `layout.set`을 쓴다. `chart`의 값이 `null`인 필드는 쓰지 않고, `key`·`title`을 맨 앞에 쓴다. 같은 `key`가 프로젝트의 어느 대시보드에든 있거나, `row`가 탭 묶음(`{tabs}`)의 자리이거나, `row` 없이 `index`만 있으면 `invalid_op` |
+| `chart.update` | `key`, `values: {…}` | 차트 필드의 얕은 병합(`null`이면 그 필드를 지운다). 차트 키는 프로젝트 전체에서 유일하므로 `dashboard` 필드가 없다(보내면 `invalid_op`. `chart.remove`도 같다). `key`는 바꿀 수 없다(Superset 객체 UUID가 키에서 나온다). `viz`를 바꾸면 그 유형에 없는 필드는 함께 `null`로 보내야 한다(서버는 추측해서 지우지 않는다) |
+| `chart.remove` | `key` | 차트를 `charts`와 `layout`(탭 속 포함)에서 지운다. 비게 된 행은 지우고, 그래서 행이 하나도 없게 된 탭은 탭째, 탭이 하나도 없게 된 탭 묶음은 묶음째 지운다(제목·글 행이 남은 탭은 남는다). 필터의 `charts` 목록에서도 뺀다(그 목록이 비게 되면 `charts` 키를 지운다 = 모든 차트에 적용) |
+| `layout.set` | `dashboard`, `layout: […]` | `layout` 전체를 바꾼다. 형식은 dashboard.yaml의 `layout`과 같다(행 = 항목 목록. 항목은 차트 키 문자열, `{chart, width?, height?}`, `{header}`, `{markdown, width?, height?}`. 최상위 항목으로 `{tabs: [{label, rows}]}`). 배치 편집기는 끌기·너비 조절이 끝날 때마다 이 연산 하나를 보낸다. 서버는 바뀌지 않은 행의 글자를 그대로 둔다. 파일에 있던 항목(`{chart, width, height}` 등)은 **있던 키의 순서를 유지**하고 새 키만 뒤에 붙이므로, 저장된 항목의 키 순서는 보낸 것과 다를 수 있다(값은 같다. 응답의 `dashboard`가 저장된 그대로다). `layout`이 배열이 아니거나, 최상위 항목이 행(배열)·`{tabs: [{…, rows: [행…]}]}`이 아니거나, 행의 항목이 문자열·객체가 아니면 `invalid_op`. 그 밖의 형식(모르는 키, 너비 범위, 빈 행 등)은 설정 검사가 본다(422) |
+| `filter.add` | `dashboard`, `filter: {key, label, type?, dataset?, column?, multi?, default?, parent?, charts?}`, `index?` | 필터 추가(`index`를 생략하면 맨 뒤). 대시보드에 `filters`가 없으면 만든다. 값이 `null`인 필드는 쓰지 않고, `key`·`label`을 맨 앞에 쓴다. 같은 `key`가 그 대시보드에 있으면 `invalid_op` |
+| `filter.update` | `dashboard`, `key`, `values: {…}` | 필터 필드의 얕은 병합(`null`이면 지운다). `key`는 바꿀 수 없다(다른 필터의 `parent`가 가리킨다) |
+| `filter.move` | `dashboard`, `key`, `index` | 필터 순서 변경(`index`는 옮긴 뒤의 자리) |
+| `filter.remove` | `dashboard`, `key` | 필터 삭제. 다른 필터가 `parent`로 가리키고 있으면 400 `invalid_op`(먼저 그 필터의 `parent`를 지워야 한다. 같은 요청에서 `filter.update`로 `parent: null`을 앞에 보내도 된다). 마지막 필터를 지우면 `filters` 키도 지운다 |
+
+모든 연산 뒤의 검증은 5a와 같다(`config.load_project`). 차트 필드의 열·지표 이름, 행 너비 합(12칸), 모든 차트가 정확히 한 번 배치되는지, 필터 유형별 필수·금지 필드는 설정 검사가 잡고 422 `invalid_config`의 `errors`로 돌려준다.
+
+`GET /studio/api/projects/{p}/config`의 응답에 배치·필터 편집에 필요한 것을 더한다: `metrics: {"<데이터셋>": ["<지표 이름>", …]}`(차트 폼의 지표 선택용. `dashboard.datasets.<키>.metrics`의 키와 같고 파일에 쓴 순서다. 지표가 없는 데이터셋은 빈 배열, `dashboard.yaml`을 읽을 수 없으면 `{}`).
 
 ## 프레임 허용 (미리보기)
 

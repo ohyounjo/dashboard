@@ -87,6 +87,9 @@ def test_config_is_the_file_as_written(client):
     tasks = body["tables"]["tasks"]
     assert tasks["rows"] == 16 and {"name": "id", "type": "text"} in tasks["columns"]
     assert isinstance(body["revision"], str) and len(body["revision"]) == 16
+    # 데이터셋마다 지표 이름(차트 폼의 선택지). 지표가 없는 데이터셋은 빈 목록
+    assert body["metrics"] == {k: list(d.get("metrics") or {}) for k, d in raw["datasets"].items()}
+    assert any(body["metrics"].values()) and not all(body["metrics"].values())
 
 
 def test_config_of_broken_project_reports_errors(client):
@@ -98,6 +101,7 @@ def test_config_of_broken_project_reports_errors(client):
     path.write_text("tabs: [", encoding="utf-8")
     body = client.get(CONFIG).json
     assert body["valid"] is False and body["dashboard"] is None and body["schema"] is not None
+    assert body["metrics"] == {}
 
 
 def test_registry(client):
@@ -192,7 +196,7 @@ def test_section_update_is_a_shallow_merge(client):
 
 @pytest.mark.parametrize("bad,reason", [
     ({"op": "tab.nope", "key": "docs"}, "모르는 연산"),
-    ({"op": "chart.add", "dashboard": "docs", "chart": {}}, "모르는 연산"),                       # 5b 연산은 아직 없다
+    ({"op": "chart.rename", "key": "doc_table", "to": "x"}, "모르는 연산"),
     ({"op": "tab.move", "key": "nope", "index": 0}, "탭 'nope'가 없음"),
     ({"op": "tab.move", "key": "docs", "index": 4}, "범위"),
     ({"op": "tab.move", "key": "docs", "index": -1}, "범위"),
@@ -318,26 +322,349 @@ def test_hand_edit_between_requests_is_respected(client):
     assert "    label: 손으로 고친 라벨   # 손 편집" in dashboard_text(client).split("\n")
 
 
-def test_ops_registry_is_open_for_5b(monkeypatch):
-    """연산은 등록 표에 함수를 더하면 는다(5b의 chart.*, layout.set, filter.*)."""
-    assert sorted(ops.OPS) == ["app.update", "section.add", "section.move", "section.remove", "section.update",
-                               "tab.add", "tab.move", "tab.remove", "tab.update"]
+def test_ops_registry_takes_new_ops(monkeypatch):
+    """연산은 등록 표에 함수를 더하면 는다."""
+    assert sorted(ops.OPS) == [
+        "app.update", "chart.add", "chart.remove", "chart.update", "dashboard.update",
+        "filter.add", "filter.move", "filter.remove", "filter.update", "layout.set",
+        "section.add", "section.move", "section.remove", "section.update",
+        "tab.add", "tab.move", "tab.remove", "tab.update"]
     monkeypatch.setattr(ops, "OPS", dict(ops.OPS))
     monkeypatch.setattr(ops, "OP_FILES", dict(ops.OP_FILES))
 
-    @ops.op("filter.remove")
-    def filter_remove(doc, item):
-        filters = doc["dashboards"][item["dashboard"]]["filters"]
-        filters.pop(next(i for i, f in enumerate(filters) if f["key"] == item["key"]))
+    @ops.op("filter.drop_first")
+    def filter_drop_first(doc, item):
+        doc["dashboards"][item["dashboard"]]["filters"].pop(0)
 
     text = (ROOT / "projects" / "devtracker" / "dashboard.yaml").read_text(encoding="utf-8")
-    op_list = ops.check_ops([{"op": "filter.remove", "dashboard": "issues", "key": "f_issue_status"}])
+    name = next(k for k, d in yaml.safe_load(text)["dashboards"].items() if len(d.get("filters", [])) > 1)
+    first = yaml.safe_load(text)["dashboards"][name]["filters"][0]["key"]
+    op_list = ops.check_ops([{"op": "filter.drop_first", "dashboard": name}])
     new, how = store.edit_yaml(text, lambda doc: ops.apply_ops(doc, op_list))
     assert how == "exact"
-    assert [line for line in text.split("\n") if line not in new.split("\n")] == [
-        "      - { key: f_issue_status, label: 상태, type: select, multi: true, dataset: issues, column: status }"]
+    gone = [line for line in text.split("\n") if line not in new.split("\n")]
+    assert len(gone) == 1 and f"key: {first}," in gone[0]
     with pytest.raises(ValueError):
-        ops.op("filter.remove")(filter_remove)
+        ops.op("filter.drop_first")(filter_drop_first)
+
+
+# ---------------------------------------------------------------- 5b: 대시보드 배치, 필터
+
+GALLERY = "chart-gallery"
+
+
+def raw_dashboard(client: Client, project: str = "devtracker") -> dict:
+    return yaml.safe_load(dashboard_text(client, project))
+
+
+def dashboard_with(doc: dict, need) -> str:
+    """조건에 맞는 첫 대시보드의 키(예시 파일의 내용이 바뀌어도 맞게 내용으로 찾는다)."""
+    return next(k for k, d in doc["dashboards"].items() if need(d))
+
+
+def row_charts(row: list) -> list[str]:
+    return [i if isinstance(i, str) else i.get("chart") for i in row]
+
+
+def test_all_5b_ops_in_one_request(client):
+    doc = raw_dashboard(client)
+    name = dashboard_with(doc, lambda d: len(d.get("filters", [])) >= 2 and len(d["charts"]) == 1)
+    d = doc["dashboards"][name]
+    base = d["charts"][0]
+    filters = [f["key"] for f in d["filters"]]
+    chart = {**base, "key": "added_one", "title": "더한 차트", "description": None}
+    r = patch(
+        client,
+        {"op": "dashboard.update", "dashboard": name, "values": {"title": "고친 제목", "cross_filters": True}},
+        {"op": "chart.add", "dashboard": name, "chart": chart, "row": 0, "index": 0, "width": 5},
+        {"op": "chart.add", "dashboard": name, "chart": {**base, "key": "added_two", "title": "둘째"}},
+        {"op": "chart.update", "key": "added_two", "values": {"title": "둘째(고침)", "row_limit": 3, "search": None}},
+        {"op": "layout.set", "dashboard": name,
+         "layout": [[{"header": "머리"}], ["added_two"], [{"chart": "added_one", "width": 4}, {"chart": base["key"], "width": 8}]]},
+        {"op": "filter.add", "dashboard": name, "index": 0,
+         "filter": {"key": "f_when", "label": "기간", "type": "time_range", "default": "Last year", "charts": ["added_one", "added_two"]}},
+        {"op": "filter.update", "dashboard": name, "key": filters[0], "values": {"label": "고친 라벨", "multi": None}},
+        {"op": "filter.move", "dashboard": name, "key": filters[-1], "index": 0},
+        {"op": "filter.remove", "dashboard": name, "key": filters[1]},
+        {"op": "chart.remove", "key": "added_one"},
+    )
+    assert r.status == 200, r.text
+    assert r.json["changed"] == ["dashboard.yaml"] and r.json["written"] == {"dashboard.yaml": "exact"}
+    got = r.json["dashboard"]["dashboards"][name]
+    assert got == raw_dashboard(client)["dashboards"][name]
+    assert (got["title"], got["cross_filters"]) == ("고친 제목", True)
+    assert [c["key"] for c in got["charts"]] == [base["key"], "added_two"]
+    two = got["charts"][1]
+    assert list(two)[:2] == ["key", "title"] and two["title"] == "둘째(고침)" and two["row_limit"] == 3 and "search" not in two
+    # added_one이 빠졌다: 행에서, 필터의 charts에서
+    assert got["layout"] == [[{"header": "머리"}], ["added_two"], [{"chart": base["key"], "width": 8}]]
+    kept = [k for k in filters if k != filters[1]]
+    assert [f["key"] for f in got["filters"]] == [filters[-1], "f_when", *[k for k in kept if k != filters[-1]]]
+    when = next(f for f in got["filters"] if f["key"] == "f_when")
+    assert when == {"key": "f_when", "label": "기간", "type": "time_range", "default": "Last year", "charts": ["added_two"]}
+    first = next(f for f in got["filters"] if f["key"] == filters[0])
+    assert first["label"] == "고친 라벨" and "multi" not in first
+    # 다른 대시보드는 그대로
+    assert {k: v for k, v in r.json["dashboard"]["dashboards"].items() if k != name} == \
+        {k: v for k, v in doc["dashboards"].items() if k != name}
+    check_project(client, "devtracker")
+
+
+def test_chart_add_places_the_chart(client):
+    doc = raw_dashboard(client)
+    name = dashboard_with(doc, lambda d: len(d["layout"]) >= 2 and all(isinstance(r, list) for r in d["layout"]))
+    d = doc["dashboards"][name]
+    base = next(c for c in d["charts"] if c["key"] == row_charts(d["layout"][0])[0])
+    last = len(d["layout"]) - 1
+    r = patch(client,
+              {"op": "chart.add", "dashboard": name, "chart": {**base, "key": "n_end", "title": "맨 아래"}},
+              {"op": "chart.add", "dashboard": name, "chart": {**base, "key": "n_wide", "title": "너비"}, "width": 6},
+              {"op": "chart.add", "dashboard": name, "chart": {**base, "key": "n_row", "title": "행 끝"}, "row": last},
+              {"op": "chart.add", "dashboard": name, "chart": {**base, "key": "n_at", "title": "행 안"}, "row": last, "index": 1})
+    assert r.status == 200 and r.json["written"] == {"dashboard.yaml": "exact"}, r.text
+    got = r.json["dashboard"]["dashboards"][name]
+    assert [c["key"] for c in got["charts"]] == [*[c["key"] for c in d["charts"]], "n_end", "n_wide", "n_row", "n_at"]
+    assert got["layout"][:last] == d["layout"][:last]
+    old = d["layout"][last]
+    assert got["layout"][last] == [old[0], "n_at", *old[1:], "n_row"]
+    assert got["layout"][last + 1:] == [["n_end"], [{"chart": "n_wide", "width": 6}]]
+    check_project(client, "devtracker")
+
+
+def test_chart_ops_find_the_chart_in_any_dashboard(client):
+    doc = raw_dashboard(client)
+    names = list(doc["dashboards"])
+    key = doc["dashboards"][names[-1]]["charts"][0]["key"]
+    r = patch(client, {"op": "chart.update", "key": key, "values": {"title": "다른 대시보드의 차트"}})
+    assert r.status == 200
+    assert r.json["dashboard"]["dashboards"][names[-1]]["charts"][0]["title"] == "다른 대시보드의 차트"
+    # 차트 키는 프로젝트 전체에서 유일하다: 다른 대시보드의 키로는 더할 수 없다
+    r = patch(client, {"op": "chart.add", "dashboard": names[0], "chart": {**doc["dashboards"][names[-1]]["charts"][0]}})
+    assert (r.status, r.json["detail"]) == (400, "invalid_op") and "이미 있음" in r.json["message"]
+
+
+def test_chart_remove_cleans_layout_tabs_and_filter_scopes(client):
+    doc = raw_dashboard(client, GALLERY)
+    name = dashboard_with(doc, lambda d: any(isinstance(e, dict) for e in d["layout"]) and
+                          any(f.get("charts") for f in d.get("filters", [])))
+    d = doc["dashboards"][name]
+    group = next(e for e in d["layout"] if isinstance(e, dict))
+    lone_tab = next(t for t in group["tabs"] if len(t["rows"]) == 1 and len(t["rows"][0]) == 1)
+    in_tab = row_charts(lone_tab["rows"][0])[0]
+    scoped = next(f for f in d["filters"] if f.get("charts") and len(f["charts"]) == 1)
+    r = patch(client, {"op": "chart.remove", "key": in_tab}, {"op": "chart.remove", "key": scoped["charts"][0]}, project=GALLERY)
+    assert r.status == 200 and r.json["written"] == {"dashboard.yaml": "exact"}, r.text
+    got = r.json["dashboard"]["dashboards"][name]
+    gone = {in_tab, scoped["charts"][0]}
+    assert [c["key"] for c in got["charts"]] == [c["key"] for c in d["charts"] if c["key"] not in gone]
+    new_group = next(e for e in got["layout"] if isinstance(e, dict))
+    # 행이 없어진 탭은 탭째 없어진다. 남은 탭과 다른 행은 그대로
+    assert new_group["tabs"] == [t for t in group["tabs"] if t is not lone_tab]
+    flat = [c for e in got["layout"] for row in ([e] if isinstance(e, list) else [r for t in e["tabs"] for r in t["rows"]])
+            for c in row_charts(row) if c]
+    assert sorted(flat) == sorted(c["key"] for c in got["charts"])
+    # 그 차트만 가리키던 필터는 charts 키가 없어진다(모든 차트에 적용)
+    after = next(f for f in got["filters"] if f["key"] == scoped["key"])
+    assert "charts" not in after and {k: v for k, v in scoped.items() if k != "charts"} == after
+    check_project(client, GALLERY)
+
+    # 제목(header) 행이 남은 탭은 남는다(차트 행만 없어진다)
+    rest = [c for t in new_group["tabs"] for row in t["rows"] for c in row_charts(row) if c]
+    r = patch(client, *[{"op": "chart.remove", "key": k} for k in rest], project=GALLERY)
+    assert r.status == 200, r.text
+    left = next(e for e in r.json["dashboard"]["dashboards"][name]["layout"] if isinstance(e, dict))
+    assert [t["label"] for t in left["tabs"]] == [t["label"] for t in new_group["tabs"]]
+    assert all("header" in i for t in left["tabs"] for row in t["rows"] for i in row)
+    check_project(client, GALLERY)
+
+
+def test_chart_remove_drops_a_tab_group_left_without_tabs(client):
+    doc = raw_dashboard(client)
+    name = dashboard_with(doc, lambda d: len(d["charts"]) >= 3)
+    d = doc["dashboards"][name]
+    keys = [c["key"] for c in d["charts"]]
+    layout = [keys[2:], {"tabs": [{"label": "하나", "rows": [[keys[0]]]}, {"label": "둘", "rows": [[keys[1]]]}]}]
+    r = patch(client, {"op": "layout.set", "dashboard": name, "layout": layout})
+    assert r.status == 200 and r.json["dashboard"]["dashboards"][name]["layout"] == layout, r.text
+    r = patch(client, {"op": "chart.remove", "key": keys[0]})
+    assert r.status == 200 and r.json["dashboard"]["dashboards"][name]["layout"] == [keys[2:], {"tabs": [layout[1]["tabs"][1]]}]
+    r = patch(client, {"op": "chart.remove", "key": keys[1]})
+    assert r.status == 200 and r.json["dashboard"]["dashboards"][name]["layout"] == [keys[2:]], r.text
+    check_project(client, "devtracker")
+
+
+def test_layout_set_replaces_the_whole_layout(client):
+    doc = raw_dashboard(client, GALLERY)
+    name = dashboard_with(doc, lambda d: any(isinstance(e, dict) for e in d["layout"]))
+    old = doc["dashboards"][name]["layout"]
+    group = next(e for e in old if isinstance(e, dict))
+    rows = [e for e in old if isinstance(e, list)]
+    # 탭 순서를 뒤집고, 첫 탭 이름을 바꾸고, 최상위 행 순서를 뒤집는다
+    new = [*reversed(rows), {"tabs": [{**t, "label": t["label"] + "!"} if i == 0 else t for i, t in enumerate(reversed(group["tabs"]))]}]
+    r = patch(client, {"op": "layout.set", "dashboard": name, "layout": new}, project=GALLERY)
+    assert r.status == 200 and r.json["written"] == {"dashboard.yaml": "exact"}, r.text
+    assert r.json["dashboard"]["dashboards"][name]["layout"] == new
+    check_project(client, GALLERY)
+    # 같은 layout을 다시 보내면 바뀌는 것이 없다
+    r = patch(client, {"op": "layout.set", "dashboard": name, "layout": new}, project=GALLERY)
+    assert r.status == 200 and r.json["changed"] == []
+    # 원래대로 되돌리면 값이 같다
+    r = patch(client, {"op": "layout.set", "dashboard": name, "layout": old}, project=GALLERY)
+    assert r.status == 200 and raw_dashboard(client, GALLERY) == doc
+
+
+def test_filter_remove_refuses_while_another_filter_points_at_it(client):
+    doc = raw_dashboard(client, GALLERY)
+    name = dashboard_with(doc, lambda d: any("parent" in f for f in d.get("filters", [])))
+    child = next(f for f in doc["dashboards"][name]["filters"] if "parent" in f)
+    before = tree(client.projects)
+    r = patch(client, {"op": "filter.remove", "dashboard": name, "key": child["parent"]}, project=GALLERY)
+    assert (r.status, r.json["detail"], r.json["op_index"]) == (400, "invalid_op", 0)
+    assert child["key"] in r.json["message"] and "parent" in r.json["message"]
+    assert tree(client.projects) == before
+    r = patch(client, {"op": "filter.update", "dashboard": name, "key": child["key"], "values": {"parent": None}},
+              {"op": "filter.remove", "dashboard": name, "key": child["parent"]}, project=GALLERY)
+    assert r.status == 200 and r.json["written"] == {"dashboard.yaml": "exact"}, r.text
+    got = r.json["dashboard"]["dashboards"][name]["filters"]
+    assert child["parent"] not in [f["key"] for f in got]
+    assert "parent" not in next(f for f in got if f["key"] == child["key"])
+    check_project(client, GALLERY)
+
+
+def test_first_filter_creates_the_key_and_last_removal_drops_it(client):
+    doc = raw_dashboard(client)
+    name = dashboard_with(doc, lambda d: "filters" not in d)
+    before = dashboard_text(client)
+    r = patch(client, {"op": "filter.add", "dashboard": name, "filter": {"label": "기간", "key": "f_new", "type": "time_range",
+                                                                        "default": None}})
+    assert r.status == 200, r.text
+    assert r.json["dashboard"]["dashboards"][name]["filters"] == [{"key": "f_new", "label": "기간", "type": "time_range"}]
+    r = patch(client, {"op": "filter.remove", "dashboard": name, "key": "f_new"})
+    assert r.status == 200 and "filters" not in r.json["dashboard"]["dashboards"][name]
+    assert dashboard_text(client) == before
+
+
+def test_5b_ops_mix_with_5a_ops(client):
+    doc = raw_dashboard(client)
+    name = next(iter(doc["dashboards"]))
+    base = doc["dashboards"][name]["charts"][0]
+    r = patch(
+        client,
+        {"op": "app.update", "values": {"title": "섞은 요청"}},
+        {"op": "chart.add", "dashboard": name, "chart": {**base, "key": "mixed_chart", "title": "섞음"}},
+        {"op": "tab.add", "tab": {"key": "extra", "label": "더한 탭", "icon": "grid"}, "index": 0},
+        {"op": "section.add", "tab": "extra", "section": {"type": "superset", "dashboard": name}},
+        {"op": "dashboard.update", "dashboard": name, "values": {"title": "섞은 대시보드"}},
+        {"op": "tab.move", "key": doc["tabs"][-1]["key"], "index": 1},
+    )
+    assert r.status == 200 and r.json["written"] == {"dashboard.yaml": "exact"}, r.text
+    got = r.json["dashboard"]
+    assert got["app"]["title"] == "섞은 요청" and got["dashboards"][name]["title"] == "섞은 대시보드"
+    assert [t["key"] for t in got["tabs"]][:2] == ["extra", doc["tabs"][-1]["key"]]
+    assert got["dashboards"][name]["layout"][-1] == ["mixed_chart"]
+    project = check_project(client, "devtracker")
+    assert "mixed_chart" in [c["key"] for _d, c in config.charts(project)]
+
+
+def _first(doc: dict, need=lambda d: True) -> str:
+    return dashboard_with(doc, need)
+
+
+@pytest.mark.parametrize("make,reason", [
+    (lambda d, f: {"op": "dashboard.update", "dashboard": "nope", "values": {}}, "대시보드 'nope'가 없음"),
+    (lambda d, f: {"op": "dashboard.update", "dashboard": d, "values": {"charts": []}}, "바꿀 수 없는 키"),
+    (lambda d, f: {"op": "dashboard.update", "dashboard": d}, "`values`이 필요함"),
+    (lambda d, f: {"op": "chart.add", "dashboard": d, "chart": {"title": "x"}}, "chart.key"),
+    (lambda d, f: {"op": "chart.add", "dashboard": d, "chart": []}, "객체"),
+    (lambda d, f: {"op": "chart.add", "dashboard": "nope", "chart": {"key": "x"}}, "대시보드 'nope'가 없음"),
+    (lambda d, f: {"op": "chart.add", "dashboard": d, "chart": {"key": "x"}, "row": 99}, "범위"),
+    (lambda d, f: {"op": "chart.add", "dashboard": d, "chart": {"key": "x"}, "index": 0}, "`row`와 함께"),
+    (lambda d, f: {"op": "chart.add", "dashboard": d, "chart": {"key": "x"}, "row": 0, "index": 99}, "범위"),
+    (lambda d, f: {"op": "chart.add", "dashboard": d, "chart": {"key": "x"}, "width": "6"}, "정수"),
+    (lambda d, f: {"op": "chart.add", "dashboard": d, "chart": {"key": "x"}, "height": 60}, "모르는 필드"),
+    (lambda d, f: {"op": "chart.update", "key": "nope", "values": {}}, "차트 'nope'가 없음"),
+    (lambda d, f: {"op": "chart.update", "key": f["chart"], "values": {"key": "renamed"}}, "key는 바꿀 수 없음"),
+    (lambda d, f: {"op": "chart.update", "key": f["chart"], "dashboard": d, "values": {}}, "모르는 필드"),
+    (lambda d, f: {"op": "chart.remove", "key": "nope"}, "차트 'nope'가 없음"),
+    (lambda d, f: {"op": "chart.remove", "key": 3}, "문자열"),
+    (lambda d, f: {"op": "layout.set", "dashboard": d}, "`layout`이 필요함"),
+    (lambda d, f: {"op": "layout.set", "dashboard": d, "layout": {"rows": []}}, "배열"),
+    (lambda d, f: {"op": "layout.set", "dashboard": d, "layout": ["chart_key"]}, "`layout`[0]"),
+    (lambda d, f: {"op": "layout.set", "dashboard": d, "layout": [[["nested"]]]}, "`layout`[0][0]"),
+    (lambda d, f: {"op": "layout.set", "dashboard": d, "layout": [[3]]}, "`layout`[0][0]"),
+    (lambda d, f: {"op": "layout.set", "dashboard": d, "layout": [{"tabs": [{"label": "x"}]}]}, "tabs[0].rows"),
+    (lambda d, f: {"op": "layout.set", "dashboard": d, "layout": [{"tabs": ["x"]}]}, "tabs[0]"),
+    (lambda d, f: {"op": "layout.set", "dashboard": d,
+                   "layout": [{"tabs": [{"label": "x", "rows": [{"tabs": []}]}]}]}, "탭 안에 탭"),
+    (lambda d, f: {"op": "filter.add", "dashboard": d, "filter": {"label": "x"}}, "filter.key"),
+    (lambda d, f: {"op": "filter.add", "dashboard": d, "filter": {"key": f["filter"], "label": "x"}}, "이미 있음"),
+    (lambda d, f: {"op": "filter.add", "dashboard": d, "filter": {"key": "x", "label": "x"}, "index": 99}, "범위"),
+    (lambda d, f: {"op": "filter.update", "dashboard": d, "key": "nope", "values": {}}, "필터 'nope'가 없음"),
+    (lambda d, f: {"op": "filter.update", "dashboard": d, "key": f["filter"], "values": {"key": "x"}}, "key는 바꿀 수 없음"),
+    (lambda d, f: {"op": "filter.update", "key": f["filter"], "values": {}}, "`dashboard`이 필요함"),
+    (lambda d, f: {"op": "filter.move", "dashboard": d, "key": f["filter"], "index": 99}, "범위"),
+    (lambda d, f: {"op": "filter.move", "dashboard": d, "key": f["filter"]}, "`index`이 필요함"),
+    (lambda d, f: {"op": "filter.remove", "dashboard": d, "key": "nope"}, "필터 'nope'가 없음"),
+])
+def test_invalid_5b_op_saves_nothing(client, make, reason):
+    doc = raw_dashboard(client)
+    name = _first(doc, lambda d: d.get("filters"))
+    found = {"chart": doc["dashboards"][name]["charts"][0]["key"], "filter": doc["dashboards"][name]["filters"][0]["key"]}
+    before = tree(client.projects)
+    r = patch(client, {"op": "dashboard.update", "dashboard": name, "values": {"title": "먼저 적용될 뻔한 변경"}}, make(name, found))
+    assert (r.status, r.json["detail"]) == (400, "invalid_op"), r.text
+    assert r.json["op_index"] == 1 and r.json["message"].startswith("ops[1]") and reason in r.json["message"], r.json
+    assert tree(client.projects) == before
+
+
+@pytest.mark.parametrize("make,expect", [
+    # 차트: 필수 필드, 없는 데이터셋·지표·열, 유형에 없는 필드
+    (lambda n, d: [{"op": "chart.add", "dashboard": n, "chart": {"key": "x", "title": "x"}}], "charts["),
+    (lambda n, d: [{"op": "chart.add", "dashboard": n, "chart": {**d["charts"][0], "key": "Bad Key"}}], "key"),
+    (lambda n, d: [{"op": "chart.add", "dashboard": n, "chart": {**d["charts"][0], "key": "x", "dataset": "nowhere"}}], "nowhere"),
+    (lambda n, d: [{"op": "chart.add", "dashboard": n, "chart": {
+        "key": "x", "title": "x", "viz": "big_number_total", "dataset": d["charts"][0]["dataset"], "metric": "no_such_metric"}}],
+     "no_such_metric"),
+    (lambda n, d: [{"op": "chart.update", "key": d["charts"][0]["key"], "values": {"viz": "no_such_viz"}}], "charts[0]"),
+    (lambda n, d: [{"op": "chart.update", "key": d["charts"][0]["key"], "values": {"title": None}}], "charts[0]"),
+    (lambda n, d: [{"op": "chart.update", "key": d["charts"][0]["key"], "values": {"no_such_field": 1}}], "charts[0]"),
+    (lambda n, d: [{"op": "chart.remove", "key": c["key"]} for c in d["charts"]], "charts"),
+    # 배치: 빠진 차트, 두 번 놓인 차트, 없는 차트, 12칸 초과, 혼자가 아닌 제목
+    (lambda n, d: [{"op": "layout.set", "dashboard": n, "layout": [[d["charts"][0]["key"]]]},
+                   {"op": "chart.add", "dashboard": n, "chart": {**d["charts"][0], "key": "x"}},
+                   {"op": "layout.set", "dashboard": n, "layout": [[d["charts"][0]["key"]]]}], "'x'가 layout에 배치되지 않음"),
+    (lambda n, d: [{"op": "layout.set", "dashboard": n, "layout": [*d["layout"], [d["charts"][0]["key"]]]}], "2번 배치됨"),
+    (lambda n, d: [{"op": "layout.set", "dashboard": n, "layout": [*d["layout"], ["ghost"]]}], "'ghost'"),
+    (lambda n, d: [{"op": "chart.add", "dashboard": n, "chart": {**d["charts"][0], "key": "x"}, "width": 13}], "layout"),
+    (lambda n, d: [{"op": "chart.add", "dashboard": n, "chart": {**d["charts"][0], "key": "x"}, "width": 7},
+                   {"op": "chart.add", "dashboard": n, "chart": {**d["charts"][0], "key": "y"},
+                    "row": len(d["layout"]), "width": 6}], "행 너비가 12칸을 넘음"),
+    (lambda n, d: [{"op": "layout.set", "dashboard": n, "layout": [[{"header": "머리"}, *d["layout"][0]], *d["layout"][1:]]}],
+     "한 행에 혼자"),
+    (lambda n, d: [{"op": "layout.set", "dashboard": n, "layout": []}], "layout"),
+    (lambda n, d: [{"op": "layout.set", "dashboard": n, "layout": [*d["layout"], {"tabs": []}]}], "layout"),
+    # 필터: 유형별 필수·금지 필드, 없는 parent, 기본값 형식
+    (lambda n, d: [{"op": "filter.add", "dashboard": n, "filter": {"key": "f_x", "label": "x", "type": "select"}}], "filters["),
+    (lambda n, d: [{"op": "filter.add", "dashboard": n, "filter": {"key": "f_x", "label": "x", "type": "time_range",
+                                                                   "dataset": d["charts"][0]["dataset"]}}], "time_range 필터에는"),
+    (lambda n, d: [{"op": "filter.update", "dashboard": n, "key": d["filters"][0]["key"], "values": {"parent": "ghost"}}], "'ghost'"),
+    (lambda n, d: [{"op": "filter.update", "dashboard": n, "key": d["filters"][0]["key"], "values": {"label": None}}], "filters[0]"),
+    (lambda n, d: [{"op": "filter.update", "dashboard": n, "key": d["filters"][0]["key"], "values": {"charts": ["ghost"]}}], "'ghost'"),
+    (lambda n, d: [{"op": "filter.add", "dashboard": n, "filter": {"key": "f_x", "label": "x", "type": "time_grain",
+                                                                   "dataset": d["charts"][0]["dataset"], "default": "P7Y"}}], "default"),
+    (lambda n, d: [{"op": "dashboard.update", "dashboard": n, "values": {"title": None}}], "title"),
+    (lambda n, d: [{"op": "dashboard.update", "dashboard": n, "values": {"cross_filters": "yes"}}], "cross_filters"),
+])
+def test_invalid_5b_result_is_422_and_file_is_untouched(client, make, expect):
+    doc = raw_dashboard(client)
+    name = _first(doc, lambda d: d.get("filters"))
+    before = tree(client.projects)
+    r = patch(client, *make(name, doc["dashboards"][name]))
+    assert (r.status, r.json["detail"]) == (422, "invalid_config"), r.text
+    assert r.json["errors"] and all(e.startswith("dashboard.yaml:") for e in r.json["errors"])
+    assert any(expect in e for e in r.json["errors"]), r.json["errors"]
+    assert tree(client.projects) == before
+    assert client.get("/studio/api/changes").json == {"files": []}
 
 
 # ---------------------------------------------------------------- 프로젝트 마법사

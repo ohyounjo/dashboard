@@ -48,7 +48,39 @@ const UI_ICONS = {
   sliders: [p("M4 7h9M17 7h3M4 17h3M11 17h9"), c(15, 7, 2), c(9, 17, 2)],
   layers: [p("M12 3 3 8l9 5 9-5z"), p("M3 12.5l9 5 9-5M3 17l9 5 9-5")],
   info: [c(12, 12, 9), p("M12 11v6M12 7.5v.5")],
+  filter: [p("M4 5h16l-6 7.5V19l-4-2v-4.5z")],
+  pencil: [p("M4 20l1-4L16.5 4.5l3 3L8 19z"), p("M14.5 6.5l3 3")],
+  left: [p("M19 12H5M11 6l-6 6 6 6")],
+  right: [p("M5 12h14M13 6l6 6-6 6")],
+  heading: [p("M5 5v14M13 5v14M5 12h8"), p("M17 11l2.5-2V19")],
+  tabset: [p("M3 9h18v10H3z"), p("M3 9V5h6v4M9 5h6v4")],
+  code: [p("M8.5 7 3.5 12l5 5M15.5 7l5 5-5 5")],
+  // 차트 유형 그림(배치 화면의 카드와 팔레트)
+  vizLine: [p("M4 20h16"), p("M4 15l5-6 4 3 7-8")],
+  vizArea: [p("M4 20V14l5-5 4 3 7-7v15z")],
+  vizPie: [c(12, 12, 9), p("M12 3v9l7.6 4.6")],
+  vizNumber: [p("M9.5 4 7.5 20M16.5 4l-2 16M4.5 9.5h16M3.5 14.5h16")],
+  vizDots: [p("M4 4v16h16"), c(9, 14, 1.4), c(13, 9, 1.4), c(17, 12, 1.4), c(16.5, 6, 1.4)],
+  vizCells: [r(3, 3, 5, 5, 1), r(9.5, 3, 5, 5, 1), r(16, 3, 5, 5, 1), r(3, 9.5, 5, 5, 1), r(9.5, 9.5, 5, 5, 1), r(16, 9.5, 5, 5, 1), r(3, 16, 5, 5, 1), r(9.5, 16, 5, 5, 1), r(16, 16, 5, 5, 1)],
+  vizFunnel: [p("M3.5 5h17l-3 5h-11zM7.5 12.5h9l-2.2 4H9.7zM10.5 19h3")],
+  vizGauge: [p("M4 17a8 8 0 0 1 16 0"), p("M12 17l4.5-6")],
+  vizRadar: [p("M12 3l8.5 6.2-3.2 10H6.7L3.5 9.2z"), p("M12 8l3.8 2.8-1.4 4.5H9.6l-1.4-4.5z")],
+  vizBlocks: [r(3, 4, 10, 16), r(13, 4, 8, 9), r(13, 13, 8, 7)],
+  vizFlow: [p("M4 6c8 0 8 12 16 12M4 12c8 0 8-6 16-6M4 18c6 0 8-3 16-3")],
+  vizBox: [p("M12 3v4M12 17v4M9.5 3h5M9.5 21h5M7 12h10"), r(7, 7, 10, 10)],
+  vizWords: [p("M4 17 7.5 7l3.5 10M5.3 13.5h4.4M14 17v-6M14 13.5c.6-1.6 3.6-1.6 3.6.5V17M20 9v8")],
 };
+
+// 축약 차트 유형 → 그림. registry에는 그림이 없어서 여기서 정한다. 표에 없는 유형(새로 추가한 유형)은 기본 그림(chart)이다.
+const VIZ_ICONS = {
+  line: "vizLine", mixed: "vizLine", area: "vizArea", bar: "chart", histogram: "chart", waterfall: "chart",
+  big_number: "vizNumber", big_number_total: "vizNumber", gauge: "vizGauge",
+  pie: "vizPie", sunburst: "vizPie", funnel: "vizFunnel", radar: "vizRadar", treemap: "vizBlocks",
+  scatter: "vizDots", bubble: "vizDots", heatmap: "vizCells", box_plot: "vizBox",
+  table: "table", pivot_table: "table", sankey: "vizFlow", word_cloud: "vizWords",
+};
+/** 차트 유형의 그림 이름(icon()에 넘긴다). viz가 없으면(원본 방식 차트) code. */
+export const vizIconName = (viz) => (viz ? VIZ_ICONS[viz] || "chart" : "code");
 
 const NS = "http://www.w3.org/2000/svg";
 

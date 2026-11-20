@@ -152,12 +152,63 @@ def test_strings_are_in_one_file():
     assert keys - used == set(), f"쓰이지 않는 문구 키: {sorted(keys - used)}"
 
 
-def test_only_5a_screens():
-    # 5b단계(대시보드 배치, 필터)의 연산은 아직 보내지 않는다
+OPS_5A = {"app.update", "tab.add", "tab.update", "tab.move", "tab.remove",
+          "section.add", "section.update", "section.move", "section.remove"}
+OPS_5B = {"dashboard.update", "chart.add", "chart.update", "chart.remove", "layout.set",
+          "filter.add", "filter.update", "filter.move", "filter.remove"}
+
+
+def test_sends_only_contract_ops():
+    # 화면이 보내는 연산은 contracts/studio.md의 5a·5b 표에 있는 것뿐이고, 표의 연산을 모두 쓴다
     code = "\n".join(_without_comments(_read(f)) for f in _js_files())
     ops = set(re.findall(r"""op:\s*["']([a-z]+\.[a-z]+)["']""", code))
-    assert ops == {"app.update", "tab.add", "tab.update", "tab.move", "tab.remove",
-                   "section.add", "section.update", "section.move", "section.remove"}
+    assert ops == OPS_5A | OPS_5B
+    contract = _read(ROOT / "contracts" / "studio.md")
+    for name in sorted(ops):
+        assert f"| `{name}` |" in contract, f"계약의 연산 표에 없는 연산: {name}"
+
+
+def test_5b_screens_are_registered():
+    shell = _read(STUDIO / "app.js")
+    for module, screen in (("view-layout.js", "layout"), ("view-filters.js", "filters")):
+        assert (STUDIO / module).is_file()
+        assert f'from "./{module}"' in shell, f"app.js가 {module}을 import해야 함"
+        assert re.search(rf'id:\s*"{screen}"', shell), f"SCREENS에 {screen} 화면이 없음"
+
+
+def test_layout_grid_uses_classes_not_inline_styles():
+    # 12칸 격자의 칸 수는 .span-N 클래스로만 정한다(CSP: style 속성을 쓰지 않는다)
+    css = _read(STUDIO / "studio.css")
+    for n in range(1, 13):
+        assert re.search(rf"\.span-{n}\s*\{{\s*grid-column:\s*span {n}\s*\}}", css), f".span-{n} 없음"
+    for f in _js_files():
+        code = _without_comments(_read(f))
+        assert not re.search(r"\.style\b", code), f"{f.name}: 요소의 style을 직접 고치지 않는다"
+    layout = _without_comments(_read(STUDIO / "view-layout.js"))
+    assert "span-${" in layout
+    # 건드리지 않은 칸의 꼴을 지키는 규칙은 layout-model.js 한 곳에 있다(문자열 칸 ↔ { chart, width })
+    assert "layout.set" in layout and "setSize" in layout
+
+
+def test_no_live_region_attribute():
+    # 결과 알림은 role="status"로 한다
+    for f in [*_js_files(), STUDIO / "index.html"]:
+        assert "aria-" + "live" not in _read(f), f"{f.name}: role=\"status\"를 쓴다"
+
+
+def test_views_lock_the_container_while_saving():
+    """저장 중에는 컨테이너를 inert로 잠그고, 화면을 떠났더라도 끝나면 반드시 푼다(리뷰 지적 회귀)."""
+    kit = _without_comments(_read(STUDIO / "screen-kit.js"))
+    assert "container.inert = true" in kit and "container.inert = false" in kit
+    # 성공·실패 두 경로 모두 생존 검사보다 먼저 잠금을 푼다
+    assert len(re.findall(r"busy = false; unlock\(\);\s*return isAlive\(\)", kit)) == 2
+    for name in ("view-layout.js", "view-filters.js"):
+        code = _without_comments(_read(STUDIO / name))
+        assert "saver(container, ctx, () => alive)" in code, f"{name}: screen-kit의 saver로 저장한다"
+        assert "ctx.patch(" not in code, f"{name}: ctx.patch를 직접 부르지 않는다(잠금을 거친다)"
+        for m in re.finditer(r"await save\.send\([^\n]*\n([^\n]*)", code):
+            assert "if (!alive || !res) return;" in m.group(1), f"{name}: await 뒤에 생존 검사가 없음"
+        assert re.search(r"save\.send\(", code)
 
 
 def test_views_release_listeners_on_the_shared_container():
@@ -168,7 +219,7 @@ def test_views_release_listeners_on_the_shared_container():
     dom = (root / "dom.js").read_text(encoding="utf-8")
     assert "signal: off.signal" in dom and "off.abort()" in dom, "fileDrop은 리스너를 떼는 함수를 돌려줘야 함"
     views = sorted(root.glob("view-*.js"))
-    assert len(views) >= 4
+    assert len(views) >= 6
     for path in views:
         text = path.read_text(encoding="utf-8")
         # 모든 화면: 떠난 뒤 끝난 요청이 같이 쓰는 컨테이너를 다시 그리지 않게 destroy와 생존 검사를 둔다

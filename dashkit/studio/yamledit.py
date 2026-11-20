@@ -13,6 +13,11 @@
 - 항목(매핑의 `키: 값`, 시퀀스의 `- 값`)의 몸통은 키/`-`에서 값의 마지막 줄 끝까지다(같은 줄의 주석 포함).
 - 앞 항목과의 사이에 있는 줄(빈 줄, 주석)은 뒤 항목의 것이다. 그 가운데 맨 앞의 빈 줄들은 "자리"에 남고
   (순서를 바꿔도 빈 줄 배치가 유지된다), 주석 줄부터는 항목을 따라 움직인다.
+
+새로 쓰는 것:
+- 새 항목은 이웃과 같은 꼴로 쓴다. 이웃이 모두 한 줄 컬렉션인 목록에는 한 줄로(160자 또는 가장 긴 이웃까지), 아니면 80자까지만 한 줄로.
+- 여러 줄 문자열은 literal block(`|`)으로 쓴다(_literal).
+- 한 줄 컬렉션 안으로 block 항목이 옮겨져 오면 그 컬렉션만 block으로 풀어 쓴다(_open, _unfold).
 """
 from __future__ import annotations
 
@@ -160,10 +165,44 @@ def flow_text(value: Any) -> str:
     return scalar_text(value)
 
 
-def _inline(value: Any) -> str | None:
-    """컬렉션을 한 줄로 쓸 수 있으면 그 글, 길면 None."""
+def _inline(value: Any, limit: int = INLINE_LIMIT) -> str | None:
+    """컬렉션을 한 줄로 쓸 수 있으면 그 글, 길면(또는 여러 줄 문자열이 들어 있으면) None."""
+    if _has_multiline(value):
+        return None
     text = flow_text(value)
-    return text if len(text) <= INLINE_LIMIT and "\n" not in text else None
+    return text if len(text) <= limit and "\n" not in text else None
+
+
+def _has_multiline(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_has_multiline(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_has_multiline(v) for v in value)
+    return isinstance(value, str) and "\n" in value
+
+
+def _literal(value: str, col: int) -> str | None:
+    """여러 줄 문자열을 literal block(`|`)으로 쓴 글(내용은 col + 2에 들여쓴다). 그렇게 쓸 수 없는 글이면 None."""
+    body = value[:-1] if value.endswith("\n") else value
+    lines = body.split("\n")
+    if not lines[0].strip() or lines[0] != lines[0].lstrip() or value.endswith("\n\n"):
+        return None             # 들여쓰기 표시가 필요한 글, 끝의 빈 줄 여러 개
+    pad = " " * (col + 2)
+    text = ("|" if value.endswith("\n") else "|-") + "".join("\n" + (pad + line if line else "") for line in lines)
+    try:
+        back = yaml.safe_load(" " * col + "k: " + text + "\n")
+    except yaml.YAMLError:
+        return None
+    return text if isinstance(back, dict) and back.get("k") == value and isinstance(back["k"], str) else None
+
+
+def _scalar_entry(head: str, value: Any, col: int) -> str:
+    """`키:` 또는 `-` 뒤에 새 스칼라를 붙인다. 여러 줄 문자열은 될 수 있으면 literal block으로 쓴다."""
+    if isinstance(value, str) and "\n" in value:
+        literal = _literal(value, col)
+        if literal is not None:
+            return f"{head} {literal}"
+    return f"{head} {scalar_text(value)}"
 
 
 def block_text(value: Any, col: int) -> str:
@@ -179,13 +218,14 @@ def block_text(value: Any, col: int) -> str:
     return ("\n" + pad).join(lines)
 
 
-def _fresh_entry(head: str, value: Any, col: int, *, compact: bool, force_block: bool = False) -> str:
-    """`키:` 또는 `-` 뒤에 새 값을 붙인 항목(첫 줄은 들여쓰지 않는다)."""
+def _fresh_entry(head: str, value: Any, col: int, *, compact: bool, force_block: bool = False,
+                 limit: int = INLINE_LIMIT) -> str:
+    """`키:` 또는 `-` 뒤에 새 값을 붙인 항목(첫 줄은 들여쓰지 않는다). limit은 한 줄로 쓰는 길이 상한."""
     if _is_scalar(value):
-        return f"{head} {scalar_text(value)}"
+        return _scalar_entry(head, value, col)
     if not value:
         return f"{head} {flow_text(value)}"
-    inline = None if force_block else _inline(value)
+    inline = None if force_block else _inline(value, limit)
     if inline is not None:
         return f"{head} {inline}"
     if compact and isinstance(value, dict):          # `- 키: 값` (다음 키는 col + 2)
@@ -403,6 +443,11 @@ class _Renderer:
             raise Unsupported("block 컬렉션이 비게 됨")
         seps = [_split_trivia(e.trivia)[0] for e in origin.entries]
         block_items = any(e.value.block for e in origin.entries)
+        # 이웃이 모두 한 줄 컬렉션(`- { … }`, `- [ … ]`)인 목록: 새 항목도 한 줄로 쓴다(상한: 160자 또는 가장 긴 이웃)
+        limit = INLINE_LIMIT
+        if origin.kind == "seq" and all(e.value.kind != "scalar" and e.value.flow
+                                        and "\n" not in text[e.value.start:e.value.end] for e in origin.entries):
+            limit = max(2 * INLINE_LIMIT, max(e.value.end - e.value.start for e in origin.entries))
         chunks: list[tuple[str, str]] = []
         for j, (key, val, e) in enumerate(self._match(value, origin)):
             sep = seps[j] if j < len(seps) else (seps[-1] if len(seps) > 1 else "")
@@ -410,10 +455,11 @@ class _Renderer:
                 head = (scalar_text(key) + ":") if origin.kind == "map" else "-"
                 force_block = origin.kind == "seq" and block_items and isinstance(val, dict)
                 chunks.append((sep, _fresh_entry(head, plain(val), col, compact=origin.kind == "seq",
-                                                 force_block=force_block)))
+                                                 force_block=force_block, limit=limit)))
                 continue
             if e.parent.flow:        # flow 시퀀스에 있던 항목을 block 시퀀스로 옮김
-                chunks.append((sep, "- " + self.inline(val, e.value)))
+                chunks.append((sep, self._open("-", "", val, e.value, col) if self._has_block(val)
+                               else "- " + self.inline(val, e.value)))
                 continue
             shift = col - e.parent.column
             above = _shift(_split_trivia(e.trivia)[1], shift, first=True)
@@ -451,7 +497,7 @@ class _Renderer:
             self._check_flow(vo)
             matched = self._match(val, vo)
             line = None
-            if not any(m is not None and m.value.block for _k, _v, m in matched):
+            if not self._has_block(val):
                 line = self._join_flow(vo, matched)
                 fresh = any(m is None and not _is_scalar(v) for _k, v, m in matched)
                 if fresh and len(line) > INLINE_LIMIT:
@@ -459,15 +505,30 @@ class _Renderer:
             if line is not None:
                 return head + line + tail
             return key_text + tail + self._unfold(matched, e.parent.column + shift + 2)
+        if tracked and self._has_block(val):
+            return self._open(key_text, tail, val, vo, e.parent.column + shift)
         if tracked:
             return head + self.inline(val, vo) + tail
         # 값을 새로 쓴다. 키(또는 `-`)는 원문 그대로 둔다
+        if isinstance(val, str) and "\n" in val and vo.kind == "scalar":
+            literal = _literal(val, e.parent.column + shift)
+            if literal is not None:      # 여러 줄 글은 literal block으로. 키 줄의 주석은 남긴다
+                nl = text.find("\n", vo.start)
+                first = text[vo.start:len(text) if nl < 0 else nl]
+                comment = ""
+                if first[:1] in ("|", ">"):
+                    found = re.search(r"\s+#.*$", first)
+                    comment = found.group(0) if found else ""
+                elif "\n" not in text[e.head_start:vo.end]:
+                    comment = tail
+                indicator, rest = literal.split("\n", 1)
+                return f"{head if chr(10) not in head else key_text + ' '}{indicator}{comment}\n{rest}"
         if _is_scalar(val) and vo.kind == "scalar" and "\n" not in text[e.head_start:vo.end]:
             if vo.start == vo.end and not head.endswith(" "):
                 head += " "
             return head + scalar_text(val) + tail          # 같은 줄의 주석은 남는다
         if _is_scalar(val):
-            return f"{key_text} {scalar_text(val)}"
+            return _scalar_entry(key_text, val, e.parent.column + shift)
         # 값의 종류가 바뀜(스칼라 → 컬렉션 등)
         return _fresh_entry(key_text, plain(val), e.parent.column + shift, compact=e.parent.kind == "seq")
 
@@ -483,9 +544,51 @@ class _Renderer:
             elif m.parent.block:
                 shift = col - m.parent.column
                 out += "\n" + _shift(_split_trivia(m.trivia)[1], shift, first=True) + pad + self.entry(v, m, shift)
+            elif self._has_block(v):
+                out += "\n" + pad + self._open("-", "", v, m.value, col)
             else:
                 out += "\n" + pad + "- " + self.inline(v, m.value)
         return out
+
+    def _has_block(self, val: Any) -> bool:
+        """컬렉션 안(깊이 무관)에 block으로 쓰인 원문 항목이 들어 있는가. 그러면 한 줄(flow)로 쓸 수 없다."""
+        children = val.values() if isinstance(val, dict) else val if isinstance(val, list) else ()
+        return any(isinstance(c, (TMap, TSeq)) and c.origin is not None and (c.origin.block or self._has_block(c))
+                   or (isinstance(c, (dict, list)) and self._has_block(c)) for c in children)
+
+    def _open(self, head: str, tail: str, val: Any, origin: Origin, col: int) -> str:
+        """한 줄 컬렉션(flow)을 block으로 풀어 쓴 항목. head는 `키:` 또는 `-`(col에 놓인다), tail은 그 줄 끝의 주석.
+        block 항목이 안으로 옮겨져 한 줄로 쓸 수 없을 때만 쓴다. 안의 바뀌지 않은 값은 원문 글자 그대로다."""
+        if not (isinstance(val, (TMap, TSeq)) and val.origin is origin):
+            return _fresh_entry(head, plain(val), col, compact=head == "-", force_block=True)
+        self._check_flow(origin)
+        text = self.text
+        matched = self._match(val, origin)
+        child = col + 2
+        indent = "\n" + " " * child
+        if origin.kind == "seq":
+            body = self._unfold(matched, child)
+            if head == "-" and not tail.strip() and body.startswith(indent + "- "):
+                return "- " + body[len(indent):]              # `- - 항목`
+            return head + tail + body
+        lines: list[str] = []
+        for key, v, m in matched:
+            if m is None:
+                lines.append(_fresh_entry(scalar_text(key) + ":", plain(v), child, compact=False))
+            elif self._has_block(v):
+                lines.append(self._open(text[m.head_start:m.key_end] + ":", "", v, m.value, child))
+            else:
+                pair = text[m.head_start:m.value.start]
+                if m.value.start == m.value.end and not pair.endswith(" "):
+                    pair += " "
+                lines.append(pair + self.inline(v, m.value))
+        if head != "-":
+            return head + tail + indent + indent.join(lines)
+        if tail.strip():
+            if "\n" in lines[0]:
+                raise Unsupported("풀어 쓴 항목의 주석을 둘 자리가 없음")
+            lines[0] += tail
+        return "- " + indent.join(lines)
 
     def _check_flow(self, origin: Origin) -> None:
         whole = self.text[origin.start:origin.end]
