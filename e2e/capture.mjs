@@ -32,10 +32,12 @@ const AUTH_PAGES = [
   { key: "_signup", label: "가입 화면", path: "/signup.html" },
   { key: "_forgot", label: "비밀번호 찾기 화면", path: "/forgot.html" },
 ];
-// 로그인한 채로 찍는 운용 화면(캡처용 계정은 admin이다)
+// 로그인한 채로 찍는 운용 화면·내 정보(캡처용 계정은 admin이다)
 const ADMIN_PAGES = [
+  { key: "_admin-users", label: "운용: 사용자", path: "/admin/#users" },
   { key: "_admin-groups", label: "운용: 그룹", path: "/admin/#groups" },
   { key: "_admin-outbox", label: "운용: 테스트 메일함", path: "/admin/#outbox" },
+  { key: "_account", label: "내 정보", path: "/account.html" },
 ];
 
 // 로그인해서 세션 쿠키 값을 돌려준다. 로그인 기능이 없는 버전이면 null.

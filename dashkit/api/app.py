@@ -33,6 +33,7 @@ from ..auth import store as auth_store
 from ..auth.guard import Guard
 from ..auth.routes import Principal, require_user
 from ..auth.routes import router as auth_router
+from ..auth.routes import me_router
 from . import data
 from .errors import ApiError
 from .state import Current, CurrentState, default_state_dir
@@ -103,6 +104,7 @@ app = FastAPI(title="dashkit", openapi_url=None, lifespan=lifespan)
 app.add_middleware(Guard)
 app.include_router(auth_router)
 app.include_router(admin_routes.router)
+app.include_router(me_router)
 admin_routes.set_project_provider(lambda: ctx.current().project)
 
 

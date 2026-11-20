@@ -208,12 +208,14 @@ def logout(request: Request, response: Response):
 TOKEN_TTL = {"verify_email": 24 * 60, "reset_password": 30, "invite": 72 * 60}     # 분
 
 
-def issue_token(user_id: str, purpose: str) -> str:
-    """일회용 토큰(256비트, DB에는 SHA-256만). 같은 사용자·같은 용도의 이전 토큰은 무효가 된다."""
+def issue_token(user_id: str, purpose: str, **guard) -> str:
+    """일회용 토큰(256비트, DB에는 SHA-256만). 같은 사용자·같은 용도의 이전 토큰은 무효가 된다.
+    guard(roles, statuses, end_sessions)는 store.create_token에 그대로 넘긴다(잠근 뒤 대상 계정을 다시 본다)."""
     from datetime import timedelta
 
     token = sessions.new_token()
-    store.create_token(user_id, purpose, sessions.token_hash(token), store.now() + timedelta(minutes=TOKEN_TTL[purpose]))
+    store.create_token(user_id, purpose, sessions.token_hash(token),
+                       store.now() + timedelta(minutes=TOKEN_TTL[purpose]), **guard)
     return token
 
 
@@ -351,4 +353,51 @@ def password_reset(body: ResetRequest, request: Request):
     action = "auth.invite_accepted" if owner["purpose"] == "invite" else "auth.password_reset"
     store.record_audit(action, actor_id=owner["user_id"], actor_email=owner["email"], target_type="user",
                        target_id=owner["user_id"], target_label=owner["email"], ip=client_ip(request))
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------- 내 정보(/api/me, 모든 등급)
+
+me_router = APIRouter(prefix="/api")
+
+
+@me_router.get("/me")
+def get_me(principal: Principal = Depends(require_session)):
+    """비밀번호 변경이 필요한 계정도 읽는다(변경 화면이 쓴다)."""
+    user = store.user_detail(principal.id)
+    if user is None:
+        raise _unauthenticated()
+    return {"email": user["email"], "role": user["role"], "created_at": user["created_at"],
+            "last_login_at": user["last_login_at"], "groups": user["groups"],
+            "must_change_password": user["must_change_password"]}
+
+
+class PasswordChange(BaseModel):
+    current: StrictStr = Field(max_length=1024)
+    new: StrictStr = Field(max_length=1024)
+
+
+@me_router.post("/me/password", status_code=204)
+def change_my_password(body: PasswordChange, request: Request, principal: Principal = Depends(require_session)):
+    """현재 비밀번호 확인(401 invalid_credentials) → 정책(422 weak_password) → 바꾸고 지금 세션만 남긴다."""
+    user = store.user_by_id(principal.id)
+    if user is None or user.password_hash is None:
+        raise _unauthenticated()
+    if not passwords.verify(user.password_hash, body.current):
+        raise _invalid_credentials()
+    reason = passwords.policy_violation(body.new, user.email)
+    if reason:
+        raise weak_password(reason)
+    if passwords.verify(user.password_hash, body.new):
+        raise weak_password("same_as_current")
+    # 사용자 행을 잠근 한 트랜잭션에서, 검증한 해시와 이 세션이 그대로일 때만 바꾸고 이 세션만 남긴다
+    # (그 사이 운용자의 임시 비밀번호·재설정이 있었으면 그것을 덮어쓰지 않는다)
+    failed = store.change_own_password(user.id, user.password_hash, principal.session_id or "",
+                                       passwords.hash_password(body.new))
+    if failed == "session":
+        raise _unauthenticated()
+    if failed == "changed":
+        raise _invalid_credentials()
+    store.record_audit("auth.password_changed", actor_id=user.id, actor_email=user.email, target_type="user",
+                       target_id=user.id, target_label=user.email, ip=client_ip(request))
     return Response(status_code=204)
