@@ -1,6 +1,7 @@
 /* 로그인 전 화면(login.html 등). 토큰은 styles.css의 것을 그대로 쓴다. */
 .auth-page { min-height: 100vh; min-height: 100dvh }
-.auth { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+/* styles.css의 main(레일 자리 여백·최대 너비)을 쓰지 않는다 */
+.auth { margin: 0; max-width: none; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
   padding: max(24px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(24px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)) }
 .auth-card { width: 100%; max-width: 400px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 28px 28px 22px;
   display: flex; flex-direction: column; gap: 14px }
