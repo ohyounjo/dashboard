@@ -319,16 +319,18 @@ function addScreen(t, alive, onClose) {
 function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFileTab }) {
   const path = `${tablePath(t.name)}/batches`;
   let state = { src: null, opts: {}, preview: null };
+  // 요청 세대 번호. 미리보기·넣기를 새로 시작할 때마다 오르고, 늦게 온 앞 요청의 응답은 버린다
+  let gen = 0;
   const busy = (text) => out.replaceChildren(h("div", { class: "sk-note", role: "status", text }));
   const settle = (el) => { out.replaceChildren(el); el.tabIndex = -1; el.focus({ preventScroll: false }); };
 
-  async function send(src, { dry, columns, force }) {
+  async function send(src, { dry, columns, force }, prev = null) {
     const extra = { ...(columns ? { columns } : {}), ...(force ? { force: true } : {}) };
     if (src.kind === "rows") return api("POST", path, { rows: src.rows, method: src.method, dry_run: dry, ...extra });
     let r = null;
-    if (!dry && state.preview && state.preview.upload_id) {
+    if (!dry && prev && prev.upload_id) {
       try {
-        r = await api("POST", path, { upload_id: state.preview.upload_id, ...extra });
+        r = await api("POST", path, { upload_id: prev.upload_id, ...extra });
       } catch (err) {
         if (!(err instanceof ApiFail && err.detail === "upload_expired")) throw err;
         r = null;          // 잡아 둔 파일이 없어졌다 → 같은 파일을 다시 올려 넣는다(미리보기는 이미 봤다)
@@ -349,6 +351,7 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
   }
 
   async function preview(src, opts = {}) {
+    const my = ++gen;
     state = { src, opts, preview: null };
     onCells([]);
     busy(src.kind === "file" ? D.uploading : D.previewing);
@@ -356,28 +359,31 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
     try {
       r = await send(src, { dry: true, ...opts });
     } catch (err) {
-      if (alive()) failed(err, "preview");
+      if (alive() && my === gen) failed(err, "preview");
       return;
     }
-    if (!alive() || !r) return;
+    if (!alive() || !r || my !== gen) return;
     state.preview = r;
     const b = (r.batches || [])[0] || {};
     onCells(b.errors || []);
-    const commitBtn = r.ok ? btn(D.insert, () => commit(), "primary") : null;
+    // 넣기 버튼은 이 미리보기에 쓴 입력·옵션·업로드에 묶는다(그 뒤 입력이 바뀌어도 본 것만 넣는다)
+    const shown = { src, opts, preview: r };
+    const commitBtn = r.ok ? btn(D.insert, () => commit(shown.src, shown.opts, shown.preview), "primary") : null;
     settle(resultBox(r, { preview: true, actions: [commitBtn, btn(D.cancel, () => { onCells([]); out.replaceChildren(); })] }));
   }
 
-  async function commit(src = state.src, opts = state.opts) {
-    state = { ...state, src, opts };
+  async function commit(src = state.src, opts = state.opts, prev = null) {
+    const my = ++gen;
+    state = { src, opts, preview: prev };
     busy(D.inserting);
     let r;
     try {
-      r = await send(src, { dry: false, ...opts });
+      r = await send(src, { dry: false, ...opts }, prev);
     } catch (err) {
-      if (alive()) failed(err, "commit");
+      if (alive() && my === gen) failed(err, "commit");
       return null;
     }
-    if (!alive() || !r) return null;
+    if (!alive() || !r || my !== gen) return null;
     onCells([]);
     const b = (r.batches || [])[0] || {};
     const undo = b.file ? btn(D.undoJust, () => undoBatch(b.file, undo)) : null;
@@ -415,7 +421,7 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
     if (err instanceof ApiFail && err.detail === "duplicate_file") {
       actions.push(btn(D.forceInsert, () => {
         const opts = { ...state.opts, force: true };
-        if (step === "preview") preview(state.src, opts); else commit(state.src, opts);
+        if (step === "preview") preview(state.src, opts); else commit(state.src, opts, state.preview);
       }, "primary"));
     }
     if (err instanceof ApiFail && err.detail === "too_many_rows" && toFileTab) actions.push(btn(D.toFileTab, toFileTab));
