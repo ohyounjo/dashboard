@@ -254,13 +254,24 @@ def signup(body: SignupRequest, request: Request):
         store.record_audit("auth.signup", actor_id=user.id, actor_email=email, target_type="user",
                            target_id=user.id, target_label=email, ip=client_ip(request))
         mailer.send_quietly(email, "verify_email", mailer.link("verify.html", issue_token(user.id, "verify_email")))
-    elif user.status == "pending":
-        # 인증 전 계정에 다시 가입: 새 비밀번호와 새 인증 링크(이전 링크는 무효)
-        store.set_pending_password(user.id, password_hash)
-        mailer.send_quietly(email, "verify_email", mailer.link("verify.html", issue_token(user.id, "verify_email")))
+    elif user.status == "pending" and _resign_pending(user.id, password_hash, email):
+        pass
     else:
         mailer.send_quietly(email, "already_registered", None)
     return ACCEPTED
+
+
+def _resign_pending(user_id: str, password_hash: str, email: str) -> bool:
+    """인증 전 계정에 다시 가입: 새 비밀번호와 새 인증 링크(이전 링크는 무효)를 한 트랜잭션으로 정한다.
+    그 사이 인증돼 pending이 아니면 아무것도 바꾸지 않고 False(호출자는 '이미 가입된 주소' 메일을 보낸다)."""
+    from datetime import timedelta
+
+    token = sessions.new_token()
+    if not store.resign_pending(user_id, password_hash, sessions.token_hash(token),
+                                store.now() + timedelta(minutes=TOKEN_TTL["verify_email"])):
+        return False
+    mailer.send_quietly(email, "verify_email", mailer.link("verify.html", token))
+    return True
 
 
 class TokenRequest(BaseModel):

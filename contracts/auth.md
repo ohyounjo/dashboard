@@ -190,7 +190,7 @@
    | 그 주소의 계정 | 동작 | 응답 |
    |---|---|---|
    | 없음 | `pending`·`signup` 계정을 만들고 인증 메일(`verify_email`, 24시간) | 202 |
-   | `pending`(인증 전) | 비밀번호를 새 값으로 바꾸고 새 인증 메일(이전 링크 무효) | 202 |
+   | `pending`(인증 전) | 비밀번호를 새 값으로 바꾸고 새 인증 메일(이전 링크 무효). 상태 확인·비밀번호·토큰 교체를 사용자 행을 잠근 한 트랜잭션으로 한다(`store.resign_pending`). 그 사이 인증돼 `pending`이 아니면 아래 줄처럼 처리한다 | 202 |
    | `invited`·`active`·`suspended` | 아무것도 바꾸지 않고 "이미 가입된 주소입니다" 메일(`already_registered`) | 202 |
 
 3. 인증 링크는 `/verify.html#token=…`이다. 화면이 `POST /api/auth/verify`를 부르면 계정이 `active`가 되고(`email_verified_at`) 기본 그룹에 들어간다. 토큰이 없거나·만료됐거나·이미 쓰였거나·계정이 `pending`이 아니면 410 `token_expired`.
@@ -202,7 +202,7 @@
 1. `POST /api/auth/password/forgot`은 계정이 있든 없든 202다. `active` 계정에만 재설정 메일(`reset_password`, 30분, 한 번만)을 보낸다. 새로 요청하면 이전 링크는 무효다. 정지된 계정은 받지 않는다.
 2. 링크(`/reset.html#token=…`)의 화면이 `POST /api/auth/password/reset`을 부른다. 토큰의 용도와 계정 상태가 맞아야 한다(`reset_password`는 `active`, `invite`는 `invited`. 아니면 410 `token_expired`).
 3. 정책 위반은 422 `weak_password`이고 **토큰은 그대로 남는다**(다시 입력할 수 있다).
-4. 성공하면 토큰을 지우고, 새 비밀번호(`password_changed_at`), `must_change_password` 끄기, 실패 횟수·잠금 지우기, 그 사용자의 **모든 세션 삭제**. 초대(`invite`)면 계정이 `active`가 되고 기본 그룹에 들어간다(링크를 가진 것이 메일 수신 확인이다). 이 모두를 **한 트랜잭션**으로 한다(`store.use_reset_token`). 중간에 실패하면 토큰·비밀번호·세션이 모두 그대로다. 메일 인증(토큰 소비와 활성화)도 한 트랜잭션이다(`store.use_verify_token`).
+4. 성공하면 토큰을 지우고, 새 비밀번호(`password_changed_at`), `must_change_password` 끄기, 실패 횟수·잠금 지우기, 그 사용자의 **모든 세션 삭제**. 초대(`invite`)면 계정이 `active`가 되고 기본 그룹에 들어간다(링크를 가진 것이 메일 수신 확인이다). 이 모두를 **한 트랜잭션**으로 한다(`store.use_reset_token`). 중간에 실패하면 토큰·비밀번호·세션이 모두 그대로다. 메일 인증(토큰 소비와 활성화)도 한 트랜잭션이다(`store.use_verify_token`). 재설정·인증·다시 가입·토큰 발급은 모두 그 사용자 행을 먼저 잠가(`SELECT … FOR UPDATE`) 서로 겹치지 않는다.
 
 ### 일회용 토큰
 

@@ -503,11 +503,21 @@ def record_audit(action: str, *, actor_id: str | None = None, actor_email: str |
 
 # ---------------------------------------------------------------- 계정 상태·비밀번호·잠금
 
-def set_pending_password(user_id: str, password_hash: str) -> None:
-    """메일 인증 전(pending) 계정에 다시 가입했을 때 비밀번호를 바꾼다(인증 전이라 아직 아무도 쓰지 않은 계정)."""
-    with connection() as conn:
-        conn.execute("UPDATE dashkit_auth.users SET password_hash = %s WHERE id = %s AND status = 'pending'",
-                     (password_hash, user_id))
+def resign_pending(user_id: str, password_hash: str, token_hash: bytes, expires_at: datetime) -> bool:
+    """인증 전(pending) 계정에 다시 가입: 한 트랜잭션에서 사용자 행을 잠그고, 아직 pending일 때만 비밀번호를 바꾸고
+    이전 인증 토큰을 지우고 새 토큰을 넣는다. 그 사이 인증돼 pending이 아니면 아무것도 바꾸지 않고 False.
+    메일 인증(use_verify_token)도 같은 행 잠금을 먼저 잡으므로 둘은 겹치지 않는다."""
+    done = False
+    with connection() as conn, conn.transaction() as tx:
+        row = conn.execute("SELECT status FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user_id,)).fetchone()
+        if not row or row["status"] != "pending":
+            raise psycopg.Rollback(tx)
+        conn.execute("UPDATE dashkit_auth.users SET password_hash = %s WHERE id = %s", (password_hash, user_id))
+        conn.execute("DELETE FROM dashkit_auth.tokens WHERE user_id = %s AND purpose = 'verify_email'", (user_id,))
+        conn.execute("""INSERT INTO dashkit_auth.tokens (user_id, purpose, token_hash, expires_at)
+                        VALUES (%s, 'verify_email', %s, %s)""", (user_id, token_hash, expires_at))
+        done = True
+    return done
 
 
 def _activate(conn: psycopg.Connection, user_id: str, from_status: str) -> bool:
@@ -549,6 +559,7 @@ def use_reset_token(token_id: str, user_id: str, purpose: str, password_hash: st
     그 사용자의 모든 세션 삭제. 토큰이 이미 쓰였거나 상태가 맞지 않으면 아무것도 바꾸지 않고 False."""
     done = False
     with connection() as conn, conn.transaction() as tx:
+        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user_id,))
         if not conn.execute("DELETE FROM dashkit_auth.tokens WHERE id = %s AND user_id = %s AND purpose = %s",
                             (token_id, user_id, purpose)).rowcount:
             raise psycopg.Rollback(tx)
@@ -564,6 +575,8 @@ def use_verify_token(token_id: str, user_id: str) -> bool:
     """메일 인증을 한 트랜잭션으로: 토큰을 지우고 pending → active·기본 그룹. 아니면 아무것도 바꾸지 않고 False."""
     done = False
     with connection() as conn, conn.transaction() as tx:
+        # 다시 가입(resign_pending)과 겹치지 않게 사용자 행을 먼저 잠근다
+        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user_id,))
         if not conn.execute("DELETE FROM dashkit_auth.tokens WHERE id = %s AND user_id = %s AND purpose = 'verify_email'",
                             (token_id, user_id)).rowcount:
             raise psycopg.Rollback(tx)

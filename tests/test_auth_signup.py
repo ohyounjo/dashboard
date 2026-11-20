@@ -236,6 +236,38 @@ def test_reset_is_all_or_nothing(cleanup):
     assert store.use_verify_token(str(token_id), uid) is False                           # 용도가 다른 토큰은 못 쓴다
 
 
+def test_resignup_and_verify_do_not_interleave(cleanup):
+    """인증 전 계정에 다시 가입하는 것과 옛 링크로 인증하는 것이 겹치지 않는다(같은 사용자 행 잠금).
+    옛 링크가 먼저면 처음 비밀번호로 활성화되고 다시 가입은 비밀번호를 바꾸지 못한다. 다시 가입이 먼저면 옛 링크는 410."""
+    import threading
+    from datetime import timedelta
+
+    from dashkit.auth import passwords, sessions
+
+    email = random_email("resign")
+    cleanup.append(email)
+    auth_post("/api/auth/signup", {"email": email, "password": PASSWORD})
+    old = token_of(outbox(email)[0])
+    uid = user_id(email)
+    # 1) 인증이 사용자 행 잠금을 기다린다
+    done = threading.Event()
+    with db.auth_conn() as conn:
+        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (uid,))
+        t = threading.Thread(target=lambda: (auth_post("/api/auth/verify", {"token": old}), done.set()))
+        t.start()
+        assert not done.wait(1.5)
+        conn.rollback()
+    assert done.wait(10)
+    t.join()
+    # 2) 옛 링크로 인증된 뒤에는 다시 가입이 비밀번호를 바꾸지 못한다(트랜잭션 안에서 상태를 다시 본다)
+    assert store.resign_pending(uid, passwords.hash_password(NEW_PASSWORD), sessions.token_hash(sessions.new_token()),
+                                store.now() + timedelta(hours=1)) is False
+    assert auth_post("/api/auth/signup", {"email": email, "password": NEW_PASSWORD})[0] == 202
+    assert login(email, PASSWORD)
+    assert auth_post("/api/auth/login", {"email": email, "password": NEW_PASSWORD})[0] == 401
+    assert outbox(email)[0]["kind"] == "already_registered"
+
+
 # ---------------------------------------------------------------- 기본 그룹
 
 def test_new_accounts_join_default_groups_when_they_become_active(cleanup):
