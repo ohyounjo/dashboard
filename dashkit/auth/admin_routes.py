@@ -15,8 +15,8 @@ from pydantic import BaseModel, Field, StrictBool, StrictStr
 
 from .. import config
 from ..api.errors import ApiError
-from . import emails, store
-from .routes import Principal, client_ip, require_operator
+from . import emails, mailer, passwords, store
+from .routes import Principal, check_new_email, client_ip, issue_token, require_operator
 
 router = APIRouter(prefix="/api/admin")
 
@@ -313,3 +313,330 @@ def get_outbox(page_no: int = PageNo, size: int = PageSize, actor: Principal = D
               "created_at": r["created_at"], "role": r["role"]} for r in rows]
     start = (page_no - 1) * size
     return {"items": items[start:start + size], "total": len(items)}
+
+
+# ---------------------------------------------------------------- 사용자
+
+
+BULK_INVITE_MAX = 200
+
+
+def _user_not_found() -> ApiError:
+    return ApiError(404, "unknown_user", "없는 사용자입니다")
+
+
+def _load_target(user_id: str) -> dict[str, Any]:
+    user = store.user_detail(user_id)
+    if user is None:
+        raise _user_not_found()
+    return user
+
+
+def _public_user(u: dict[str, Any]) -> dict[str, Any]:
+    keys = ("id", "email", "role", "status", "locked", "groups", "created_at", "login_count", "last_login_at", "source")
+    return {k: u[k] for k in keys}
+
+
+def _detail(u: dict[str, Any]) -> dict[str, Any]:
+    return {**_public_user(u), "created_by": u.get("created_by"), "created_by_email": u.get("created_by_email"),
+            "password_changed_at": u["password_changed_at"], "failed_count": u["failed_count"],
+            "locked_until": u["locked_until"], "email_verified_at": u["email_verified_at"],
+            "must_change_password": u["must_change_password"]}
+
+
+def _check_groups(group_ids: list[str]) -> list[dict[str, Any]]:
+    ids = list(dict.fromkeys(group_ids))
+    found = store.groups_by_ids(ids)
+    if len(found) != len(ids):
+        raise ApiError(404, "unknown_group", "없는 그룹이 들어 있습니다")
+    return found
+
+
+def _mail_unavailable() -> ApiError:
+    return ApiError(503, "mail_unavailable", "메일을 보낼 수 없습니다(AUTH_MAIL_MODE=smtp는 구현되지 않음)")
+
+
+def _ensure_mail() -> None:
+    try:
+        mailer.ensure_available()
+    except mailer.MailUnavailable:
+        raise _mail_unavailable() from None
+
+
+def _send_invite(user_id: str, email: str, token: str | None = None) -> None:
+    """초대 메일. token이 없으면 새로 발급한다(이전 초대 링크 무효)."""
+    try:
+        mailer.get().send(email, "invite", mailer.link("reset.html", token or issue_token(user_id, "invite")))
+    except mailer.MailUnavailable:
+        raise _mail_unavailable() from None
+
+
+def _create_invited(email: str, role: str, actor: Principal, group_ids: list[str]) -> store.User:
+    """계정·그룹·초대 토큰을 한 트랜잭션으로 만들고 초대 메일을 보낸다. store.Conflict: 같은 이메일."""
+    from datetime import timedelta
+
+    from . import sessions
+    from .routes import TOKEN_TTL
+
+    token = sessions.new_token()
+    user = store.create_invited_user(email, role, actor.id, group_ids, sessions.token_hash(token),
+                                     store.now() + timedelta(minutes=TOKEN_TTL["invite"]))
+    _send_invite(user.id, email, token)
+    return user
+
+
+def _last_admin() -> ApiError:
+    return ApiError(409, "last_admin", "마지막 활성 admin입니다")
+
+
+def _protect_admins(actor: Principal, target: dict[str, Any], *, removes_admin: bool) -> None:
+    """마지막 admin·자기 자신 보호(3절). removes_admin: 이 변경으로 target이 활성 admin이 아니게 되는지.
+
+    마지막 활성 admin을 먼저 본다(활성 admin이 하나뿐이면 행위자는 그 자신이므로, 그 경우 사유는 last_admin이다).
+    """
+    if removes_admin and target["role"] == "admin" and target["status"] == "active":
+        if store.active_admins() == [target["id"]]:
+            raise _last_admin()
+    if target["id"] == actor.id:
+        raise ApiError(409, "self_target", "자기 자신에게는 할 수 없습니다")
+
+
+@router.get("/users")
+def list_users(page_no: int = PageNo, size: int = PageSize, sort: str | None = SortKey,
+               _actor: Principal = Depends(require_operator)):
+    items = [_public_user(u) for u in store.list_users()]
+    return page(items, page_no, size, sort, {
+        "email": lambda u: u["email"], "role": lambda u: ("admin", "operator", "user").index(u["role"]),
+        "status": lambda u: u["status"], "created_at": lambda u: u["created_at"],
+        "login_count": lambda u: u["login_count"], "last_login_at": lambda u: u["last_login_at"],
+        "source": lambda u: u["source"], "groups": lambda u: len(u["groups"]),
+    }, "email")
+
+
+@router.get("/users/{user_id}")
+def get_user(user_id: str, _actor: Principal = Depends(require_operator)):
+    return _detail(_load_target(user_id))
+
+
+class UserCreate(BaseModel):
+    email: StrictStr = Field(max_length=320)
+    role: StrictStr = "user"
+    group_ids: list[StrictStr] = Field(default_factory=list, max_length=200)
+
+
+@router.post("/users", status_code=201)
+def create_user(body: UserCreate, request: Request, actor: Principal = Depends(require_operator)):
+    """임의 가입·초대. 상태는 invited이고 비밀번호는 없다. 초대 메일(72시간)의 링크에서 비밀번호를 정하면 active."""
+    if body.role not in ("admin", "operator", "user"):
+        raise ApiError(422, "invalid_request", "등급은 admin · operator · user 중 하나입니다")
+    if body.role != "user" and actor.role != "admin":
+        raise ApiError(403, "forbidden", "운용진은 일반사용자만 만들 수 있습니다")
+    email = check_new_email(body.email)
+    groups = _check_groups(body.group_ids)
+    _ensure_mail()
+    try:
+        user = _create_invited(email, body.role, actor, [g["id"] for g in groups])
+    except store.Conflict:
+        raise ApiError(409, "user_exists", "이미 있는 이메일입니다") from None
+    audit(request, actor, "user.create", target_type="user", target_id=user.id, target_label=email,
+          detail={"role": body.role, "groups": [g["name"] for g in groups]})
+    return _detail(_load_target(user.id))
+
+
+class BulkInvite(BaseModel):
+    emails: list[StrictStr] = Field(max_length=1000)
+    group_ids: list[StrictStr] = Field(default_factory=list, max_length=200)
+
+
+@router.post("/users/bulk-invite")
+def bulk_invite(body: BulkInvite, request: Request, actor: Principal = Depends(require_operator)):
+    """주소마다 created · exists · invalid_email · email_domain_not_allowed. 일부가 실패해도 나머지는 만든다. 등급은 user."""
+    raw = [e.strip() for e in body.emails if e.strip()]
+    seen: dict[str, None] = {}
+    for e in raw:
+        seen.setdefault(e.lower(), None)
+    if not seen:
+        raise ApiError(422, "invalid_request", "이메일이 없습니다")
+    if len(seen) > BULK_INVITE_MAX:
+        raise ApiError(422, "too_many_emails", f"한 번에 {BULK_INVITE_MAX}개까지 초대할 수 있습니다")
+    groups = _check_groups(body.group_ids)
+    _ensure_mail()
+    results = []
+    for e in seen:
+        try:
+            email = check_new_email(e)
+        except ApiError as exc:
+            results.append({"email": e, "result": exc.detail})
+            continue
+        try:
+            user = _create_invited(email, "user", actor, [g["id"] for g in groups])
+        except store.Conflict:
+            results.append({"email": email, "result": "exists"})
+            continue
+        audit(request, actor, "user.create", target_type="user", target_id=user.id, target_label=email,
+              detail={"role": "user", "groups": [g["name"] for g in groups], "bulk": True})
+        results.append({"email": email, "result": "created"})
+    return {"results": results}
+
+
+class UserPatch(BaseModel):
+    role: StrictStr | None = None
+    status: StrictStr | None = None
+    group_ids: list[StrictStr] | None = Field(None, max_length=200)
+
+
+@router.patch("/users/{user_id}")
+def patch_user(user_id: str, body: UserPatch, request: Request, actor: Principal = Depends(require_operator)):
+    target = _load_target(user_id)
+    ensure_can_manage(actor, [target])
+    if body.role is not None and body.role != target["role"]:
+        if actor.role != "admin":
+            raise ApiError(403, "forbidden", "등급은 admin만 바꿀 수 있습니다")
+        if body.role not in ("admin", "operator", "user"):
+            raise ApiError(422, "invalid_request", "등급은 admin · operator · user 중 하나입니다")
+        _protect_admins(actor, target, removes_admin=target["role"] == "admin")
+    if body.status is not None and body.status != target["status"]:
+        if body.status not in ("active", "suspended") or target["status"] not in ("active", "suspended"):
+            raise ApiError(409, "invalid_status", "정지와 해제는 활성·정지 계정 사이에서만 됩니다")
+        if body.status == "suspended":
+            _protect_admins(actor, target, removes_admin=True)
+    groups = _check_groups(body.group_ids) if body.group_ids is not None else None
+
+    if body.role is not None and body.role != target["role"]:
+        try:   # 마지막 활성 admin인지는 같은 트랜잭션에서 활성 admin 행을 잠그고 다시 본다(동시 변경 대비)
+            store.set_role(user_id, body.role, guard_admin=target["role"] == "admin")
+        except store.LastAdmin:
+            raise _last_admin() from None
+        audit(request, actor, "user.role", target_type="user", target_id=user_id, target_label=target["email"],
+              detail={"from": target["role"], "to": body.role})
+    if body.status is not None and body.status != target["status"]:
+        try:
+            store.set_status(user_id, body.status, guard_admin=body.status == "suspended" and target["role"] == "admin")
+        except store.LastAdmin:
+            raise _last_admin() from None
+        audit(request, actor, "user.suspend" if body.status == "suspended" else "user.unsuspend",
+              target_type="user", target_id=user_id, target_label=target["email"])
+    if groups is not None:
+        added, removed = store.set_user_groups(user_id, [g["id"] for g in groups], actor.id)
+        if added or removed:
+            names = {g["id"]: g["name"] for g in groups + target["groups"]}
+            audit(request, actor, "user.groups", target_type="user", target_id=user_id, target_label=target["email"],
+                  detail={"added": [names.get(i, i) for i in added], "removed": [names.get(i, i) for i in removed]})
+    return _detail(_load_target(user_id))
+
+
+@router.delete("/users/{user_id}", status_code=204)
+def delete_user(user_id: str, request: Request, actor: Principal = Depends(require_operator)):
+    """계정 행, 그룹 구성원 연결, 세션, 토큰, 테스트 메일을 지운다(FK). 접속 통계의 행은 사용자 연결만 끊긴다."""
+    target = _load_target(user_id)
+    ensure_can_manage(actor, [target])
+    _protect_admins(actor, target, removes_admin=True)
+    try:
+        deleted = store.delete_user(user_id, guard_admin=target["role"] == "admin")
+    except store.LastAdmin:
+        raise _last_admin() from None
+    if not deleted:
+        raise _user_not_found()
+    audit(request, actor, "user.delete", target_type="user", target_id=user_id, target_label=target["email"],
+          detail={"role": target["role"], "status": target["status"]})
+    return Response(status_code=204)
+
+
+class ResetPassword(BaseModel):
+    method: StrictStr
+
+
+@router.post("/users/{user_id}/reset-password")
+def reset_user_password(user_id: str, body: ResetPassword, request: Request,
+                        actor: Principal = Depends(require_operator)):
+    """mail: 재설정 메일(5-3과 같다) → 204. temporary: 임시 비밀번호(16자)를 응답에 한 번만 → 200 {password}.
+    어느 쪽이든 그 사용자의 세션을 즉시 지운다. 임시 비밀번호는 감사 로그·서버 로그에 남기지 않는다."""
+    if body.method not in ("mail", "temporary"):
+        raise ApiError(422, "invalid_request", "method는 mail 또는 temporary입니다")
+    target = _load_target(user_id)
+    ensure_can_manage(actor, [target])
+    if body.method == "mail":
+        if target["status"] != "active":
+            raise ApiError(409, "invalid_status", "활성 계정만 재설정 메일을 받습니다")
+        _ensure_mail()
+        store.delete_user_sessions(user_id)          # 세션을 먼저 끊는다(메일이 실패해도 기존 로그인은 끊겨 있다)
+        try:
+            mailer.get().send(target["email"], "reset_password",
+                              mailer.link("reset.html", issue_token(user_id, "reset_password")))
+        except mailer.MailUnavailable:
+            raise _mail_unavailable() from None
+        audit(request, actor, "user.reset_password", target_type="user", target_id=user_id,
+              target_label=target["email"], detail={"method": "mail"})
+        return Response(status_code=204)
+    if target["status"] not in ("active", "suspended"):
+        raise ApiError(409, "invalid_status", "초대·인증 전 계정은 임시 비밀번호를 받을 수 없습니다")
+    temporary = passwords.temporary_password()
+    # 임시 비밀번호와 세션 삭제를 한 트랜잭션으로
+    store.set_password(user_id, passwords.hash_password(temporary), must_change=True, end_sessions=True)
+    audit(request, actor, "user.reset_password", target_type="user", target_id=user_id,
+          target_label=target["email"], detail={"method": "temporary"})
+    return {"password": temporary}
+
+
+@router.post("/users/{user_id}/resend-invite", status_code=204)
+def resend_invite(user_id: str, request: Request, actor: Principal = Depends(require_operator)):
+    target = _load_target(user_id)
+    ensure_can_manage(actor, [target])
+    if target["status"] != "invited":
+        raise ApiError(409, "invalid_status", "초대 상태인 계정만 다시 보낼 수 있습니다")
+    _ensure_mail()
+    _send_invite(user_id, target["email"])
+    audit(request, actor, "user.invite_resent", target_type="user", target_id=user_id, target_label=target["email"])
+    return Response(status_code=204)
+
+
+@router.post("/users/{user_id}/unlock", status_code=204)
+def unlock_user(user_id: str, request: Request, actor: Principal = Depends(require_operator)):
+    target = _load_target(user_id)
+    ensure_can_manage(actor, [target])
+    store.unlock_user(user_id)
+    audit(request, actor, "user.unlock", target_type="user", target_id=user_id, target_label=target["email"])
+    return Response(status_code=204)
+
+
+@router.post("/users/{user_id}/logout-all", status_code=204)
+def logout_all(user_id: str, request: Request, actor: Principal = Depends(require_operator)):
+    target = _load_target(user_id)
+    ensure_can_manage(actor, [target])
+    n = store.delete_user_sessions(user_id)
+    audit(request, actor, "user.logout_all", target_type="user", target_id=user_id, target_label=target["email"],
+          detail={"sessions": n})
+    return Response(status_code=204)
+
+
+class BulkGroups(BaseModel):
+    user_ids: list[StrictStr] = Field(max_length=1000)
+    add: list[StrictStr] = Field(default_factory=list, max_length=200)
+    remove: list[StrictStr] = Field(default_factory=list, max_length=200)
+
+
+@router.post("/users/bulk-groups", status_code=204)
+def bulk_groups(body: BulkGroups, request: Request, actor: Principal = Depends(require_operator)):
+    """고른 사용자들을 그룹에 더하고 뺀다. 없는 사용자·그룹이 있거나 operator가 user 아닌 계정을 고르면 아무것도 바꾸지 않는다."""
+    ids = list(dict.fromkeys(body.user_ids))
+    targets = store.users_by_ids(ids)
+    if len(targets) != len(ids):
+        raise _user_not_found()
+    ensure_can_manage(actor, targets)
+    add = _check_groups(body.add)
+    remove = _check_groups(body.remove)
+    if {g["id"] for g in add} & {g["id"] for g in remove}:
+        raise ApiError(422, "invalid_request", "같은 그룹을 더하고 뺄 수 없습니다")
+    for g in add:
+        added, _ = store.change_group_members(g["id"], [t["id"] for t in targets], [], actor.id)
+        if added:
+            emails_of = {t["id"]: t["email"] for t in targets}
+            audit(request, actor, "group.members", target_type="group", target_id=g["id"], target_label=g["name"],
+                  detail={"added": [emails_of[i] for i in added], "removed": [], "bulk": True})
+    for g in remove:
+        _, removed = store.change_group_members(g["id"], [], [t["id"] for t in targets], actor.id)
+        if removed:
+            emails_of = {t["id"]: t["email"] for t in targets}
+            audit(request, actor, "group.members", target_type="group", target_id=g["id"], target_label=g["name"],
+                  detail={"added": [], "removed": [emails_of[i] for i in removed], "bulk": True})
+    return Response(status_code=204)

@@ -66,6 +66,22 @@
 .a-key { color: var(--muted); font-size: 11.5px }
 .pill.tone { color: var(--tone); background: var(--tone-bg) }
 
+.a-table th.pick, .a-table td.pick { width: 36px; padding-right: 0 }
+.a-table td.pick input, .a-table th.pick input { width: 16px; height: 16px; accent-color: var(--primary) }
+.a-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; margin-top: 12px; background: var(--primary-soft); border-radius: 10px }
+.a-note { color: var(--muted); font-size: 12.5px; margin: 0 }
+.a-label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 8px }
+.check-list.cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px 14px }
+.a-infos { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin: 0; font-size: 13px }
+.a-info { display: contents }
+.a-info dt { color: var(--muted) }
+.a-info dd { margin: 0; overflow-wrap: anywhere }
+.a-inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px }
+.a-inline:first-child { margin-top: 0 }
+.a-secret { font-family: var(--font-mono); font-size: 15px; padding: 4px 10px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); user-select: all }
+.pills { display: inline-flex; flex-wrap: wrap; gap: 4px }
+.pill .icon { width: 12px; height: 12px }
+.danger-zone { border-color: var(--bad-bg) }
 @media (max-width: 800px) {
   .a-grid, .a-form { grid-template-columns: minmax(0, 1fr) }
 }

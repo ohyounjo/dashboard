@@ -38,6 +38,10 @@ class Conflict(Exception):
     """유일 제약 위반(이미 있는 이메일·그룹 이름 등)."""
 
 
+class LastAdmin(Exception):
+    """이 변경으로 활성 admin이 없어진다(마지막 활성 admin)."""
+
+
 def now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -210,8 +214,21 @@ def create_user(email: str, *, role: str, status: str, source: str, password_has
     return User.from_row(row)
 
 
-def delete_user(user_id: str) -> bool:
-    with connection() as conn:
+def _guard_last_admin(conn: psycopg.Connection, user_id: str) -> None:
+    """(트랜잭션 안) 활성 admin 행을 모두 잠그고, user_id가 그중 마지막 하나면 LastAdmin.
+    두 admin이 동시에 서로를 정지·강등·삭제해도 한쪽은 이 잠금을 기다린 뒤 줄어든 수를 보고 거절된다."""
+    rows = conn.execute(
+        "SELECT id FROM dashkit_auth.users WHERE role = 'admin' AND status = 'active' ORDER BY id FOR UPDATE"
+    ).fetchall()
+    if [str(r["id"]) for r in rows] == [user_id]:
+        raise LastAdmin()
+
+
+def delete_user(user_id: str, *, guard_admin: bool = False) -> bool:
+    """guard_admin이면 같은 트랜잭션에서 마지막 활성 admin인지 다시 본다(LastAdmin)."""
+    with connection() as conn, conn.transaction():
+        if guard_admin:
+            _guard_last_admin(conn, user_id)
         cur = conn.execute("DELETE FROM dashkit_auth.users WHERE id = %s", (user_id,))
         return cur.rowcount > 0
 
@@ -698,3 +715,124 @@ def cleanup(pending_days: int, outbox_days: int) -> dict[str, int]:
         out["tokens"] = conn.execute("DELETE FROM dashkit_auth.tokens WHERE expires_at <= now()").rowcount
         out["sessions"] = conn.execute("DELETE FROM dashkit_auth.sessions WHERE expires_at <= now()").rowcount
     return out
+
+
+# ---------------------------------------------------------------- 사용자 관리(운용)
+
+_LIST_COLS = """u.id, u.email, u.role, u.status, u.source, u.created_at, u.last_login_at, u.login_count,
+                u.failed_count, u.locked_until, u.must_change_password, u.email_verified_at, u.password_changed_at,
+                (u.locked_until IS NOT NULL AND u.locked_until > now()) AS locked,
+                coalesce((SELECT json_agg(json_build_object('id', g.id, 'name', g.name) ORDER BY g.name)
+                            FROM dashkit_auth.group_members m JOIN dashkit_auth.groups g ON g.id = m.group_id
+                           WHERE m.user_id = u.id), '[]'::json) AS groups"""
+
+
+def _user_row(row: dict[str, Any]) -> dict[str, Any]:
+    row = dict(row)
+    row["id"] = str(row["id"])
+    row["groups"] = [{"id": str(g["id"]), "name": g["name"]} for g in (row.get("groups") or [])]
+    if "created_by" in row and row["created_by"] is not None:
+        row["created_by"] = str(row["created_by"])
+    return row
+
+
+def list_users() -> list[dict[str, Any]]:
+    with connection() as conn:
+        rows = conn.execute(f"SELECT {_LIST_COLS} FROM dashkit_auth.users u ORDER BY u.email").fetchall()
+    return [_user_row(r) for r in rows]
+
+
+def user_detail(user_id: str) -> dict[str, Any] | None:
+    if not is_uuid(user_id):
+        return None
+    with connection() as conn:
+        row = conn.execute(
+            f"""SELECT {_LIST_COLS}, u.created_by, c.email AS created_by_email
+                  FROM dashkit_auth.users u LEFT JOIN dashkit_auth.users c ON c.id = u.created_by
+                 WHERE u.id = %s""",
+            (user_id,),
+        ).fetchone()
+    return _user_row(row) if row else None
+
+
+def users_by_ids(ids: list[str]) -> list[dict[str, Any]]:
+    ids = [i for i in ids if is_uuid(i)]
+    if not ids:
+        return []
+    with connection() as conn:
+        rows = conn.execute("SELECT id, email, role, status FROM dashkit_auth.users WHERE id = ANY(%s::uuid[])",
+                            (ids,)).fetchall()
+    return [{**r, "id": str(r["id"])} for r in rows]
+
+
+def active_admins() -> list[str]:
+    with connection() as conn:
+        rows = conn.execute("SELECT id FROM dashkit_auth.users WHERE role = 'admin' AND status = 'active'").fetchall()
+    return [str(r["id"]) for r in rows]
+
+
+def groups_by_ids(ids: list[str]) -> list[dict[str, Any]]:
+    ids = [i for i in ids if is_uuid(i)]
+    if not ids:
+        return []
+    with connection() as conn:
+        rows = conn.execute("SELECT id, name FROM dashkit_auth.groups WHERE id = ANY(%s::uuid[])", (ids,)).fetchall()
+    return [{"id": str(r["id"]), "name": r["name"]} for r in rows]
+
+
+def set_role(user_id: str, role: str, *, guard_admin: bool = False) -> None:
+    """등급 변경. 그 사용자의 세션과 쓰지 않은 일회용 토큰을 함께 지운다(user일 때 발급돼 operator가 볼 수 있었던 링크가
+    승급 뒤에 쓰이지 않게). guard_admin이면 같은 트랜잭션에서 마지막 활성 admin인지 다시 본다."""
+    with connection() as conn, conn.transaction():
+        if guard_admin:
+            _guard_last_admin(conn, user_id)
+        conn.execute("UPDATE dashkit_auth.users SET role = %s WHERE id = %s", (role, user_id))
+        conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s", (user_id,))
+        conn.execute("DELETE FROM dashkit_auth.tokens WHERE user_id = %s", (user_id,))
+
+
+def set_status(user_id: str, status: str, *, guard_admin: bool = False) -> None:
+    """active ↔ suspended. 정지하면 세션을 지운다(그룹 구성·접속 기록·비밀번호는 그대로).
+    guard_admin이면 같은 트랜잭션에서 마지막 활성 admin인지 다시 본다."""
+    with connection() as conn, conn.transaction():
+        if guard_admin:
+            _guard_last_admin(conn, user_id)
+        conn.execute("UPDATE dashkit_auth.users SET status = %s WHERE id = %s", (status, user_id))
+        if status == "suspended":
+            conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s", (user_id,))
+
+
+def unlock_user(user_id: str) -> None:
+    with connection() as conn:
+        conn.execute("UPDATE dashkit_auth.users SET failed_count = 0, locked_until = NULL WHERE id = %s", (user_id,))
+
+
+def set_user_groups(user_id: str, group_ids: list[str], added_by: str | None) -> tuple[list[str], list[str]]:
+    """그 사용자의 그룹을 통째로 바꾼다. (더한 그룹 id, 뺀 그룹 id)."""
+    with connection() as conn, conn.transaction():
+        before = {str(r["group_id"]) for r in conn.execute(
+            "SELECT group_id FROM dashkit_auth.group_members WHERE user_id = %s FOR UPDATE", (user_id,)).fetchall()}
+        after = set(group_ids)
+        for gid in before - after:
+            conn.execute("DELETE FROM dashkit_auth.group_members WHERE user_id = %s AND group_id = %s", (user_id, gid))
+        for gid in after - before:
+            conn.execute("INSERT INTO dashkit_auth.group_members (group_id, user_id, added_by) VALUES (%s, %s, %s)",
+                         (gid, user_id, added_by))
+    return sorted(after - before), sorted(before - after)
+
+
+def create_invited_user(email: str, role: str, created_by: str, group_ids: list[str],
+                        token_hash: bytes, expires_at: datetime) -> User:
+    """임의 가입·초대를 한 트랜잭션으로: invited 계정, 그룹, 초대 토큰. Conflict: 같은 이메일이 있다."""
+    with connection() as conn, conn.transaction():
+        row = conn.execute(
+            f"""INSERT INTO dashkit_auth.users (email, role, status, source, created_by)
+                VALUES (%s, %s, 'invited', 'invite', %s) RETURNING {_USER_COLS}""",
+            (email, role, created_by),
+        ).fetchone()
+        for gid in group_ids:
+            conn.execute("""INSERT INTO dashkit_auth.group_members (group_id, user_id, added_by) VALUES (%s, %s, %s)
+                            ON CONFLICT DO NOTHING""", (gid, row["id"], created_by))
+        conn.execute("""INSERT INTO dashkit_auth.tokens (user_id, purpose, token_hash, expires_at)
+                        VALUES (%s, 'invite', %s, %s)""", (row["id"], token_hash, expires_at))
+    return User.from_row(row)

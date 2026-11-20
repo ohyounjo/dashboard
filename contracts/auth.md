@@ -17,6 +17,23 @@
 
 이 문서에서 **운용자**는 `admin`과 `operator`를 함께 가리킨다.
 
+| 할 수 있는 일 | admin | operator | user |
+|---|---|---|---|
+| 대시보드 보기 | 전부 | 전부 | 속한 그룹이 허용한 탭 |
+| 내 정보 보기, 내 비밀번호 변경 | ✓ | ✓ | ✓ |
+| 사용자 목록·상세 보기 | ✓ | ✓ | |
+| 일반사용자 임의 가입·초대, 리셋, 정지, 삭제, 잠금 해제, 모든 기기 로그아웃, 그룹 지정 | ✓ | ✓ | |
+| 그룹 만들기·편집·삭제 | ✓ | ✓ | |
+| 테스트 메일함 보기 | 전부 | `user` 계정 앞으로 간 메일만 | |
+| 등급 변경, `user` 외 등급으로 초대 | ✓ | | |
+| operator·admin 계정의 리셋, 정지, 삭제, 잠금 해제, 모든 기기 로그아웃, 그룹 지정 | ✓ | | |
+
+서버에서 검사한다(화면에서 버튼을 숨기는 것은 편의일 뿐이다).
+
+- operator는 `user` 등급만 다룬다. operator·admin 계정을 대상으로 한 변경 요청은 403 `forbidden`. 이 제한은 **그 계정의 인증 수단을 얻을 수 있는 모든 경로**(테스트 메일함의 링크 등)에 똑같이 적용한다.
+- 활성 상태인 admin이 한 명뿐이면 그 계정은 삭제·정지·강등할 수 없다(409 `last_admin`). 이 판정을 먼저 한다(활성 admin이 하나뿐이면 그 일을 하려는 사람은 그 자신이다). 변경하는 트랜잭션 안에서 활성 admin 행을 모두 잠그고(`SELECT … FOR UPDATE`) 다시 확인하므로 두 admin이 동시에 서로를 정지·강등·삭제해도 활성 admin이 0명이 되지 않는다.
+- 자기 자신은 삭제·정지·강등할 수 없다(409 `self_target`).
+
 | 상태 | 뜻 | 로그인 |
 |---|---|---|
 | `pending` | 스스로 가입했고 메일 인증 전 | 불가(비밀번호가 맞으면 403 `email_not_verified`) |
@@ -159,6 +176,33 @@
 - 같은 그룹의 허용 탭 저장·삭제는 부모 `groups` 행을 먼저 잠가(`SELECT … FOR UPDATE`) 순서를 세운다. 동시에 저장해도 결과는 어느 한 요청의 목록이다.
 - `label`은 그 프로젝트 설정의 탭 라벨이고 없는 탭이면 `null`. `current`는 현재 프로젝트의 것인지, `exists`는 그 프로젝트 설정에 지금 있는지.
 
+### 사용자
+
+| 메서드·경로 | 본문 → 결과 |
+|---|---|
+| `GET /users` | → 목록. 항목 `{id, email, role, status, locked, groups: [{id, name}], created_at, login_count, last_login_at, source}`(`locked`: 지금 잠겨 있는지, `source`: `signup`(직접)·`invite`(초대)). 정렬 `email`(기본)·`role`(admin→operator→user)·`status`·`groups`(그룹 수)·`created_at`·`login_count`·`last_login_at`·`source` |
+| `GET /users/{id}` | → 위 항목 + `created_by`, `created_by_email`(초대한 사람), `password_changed_at`, `failed_count`, `locked_until`, `email_verified_at`, `must_change_password`. 해시는 싣지 않는다 |
+| `POST /users` | `{email, role?, group_ids?}` → 201 상세. 임의 가입·초대: `invited`·`invite` 계정(비밀번호 없음), 그룹, 초대 토큰을 한 트랜잭션으로 만들고 초대 메일(`invite`, 72시간). `role`의 기본은 `user`이고 다른 등급은 admin만(403 `forbidden`). 422 `invalid_email`·`email_domain_not_allowed`, 404 `unknown_group`, 409 `user_exists`, 503 `mail_unavailable`(smtp 모드. 계정을 만들기 전에 거절) |
+| `POST /users/bulk-invite` | `{emails: [...], group_ids?}` → 200 `{results: [{email, result}]}`. 주소마다 `created` · `exists` · `invalid_email` · `email_domain_not_allowed`(입력 순서, 대소문자 무시로 중복 제거). 일부가 실패해도 나머지는 만든다. 등급은 항상 `user`. 한 번에 200개까지(넘으면 422 `too_many_emails`) |
+| `PATCH /users/{id}` | `{role?, status?, group_ids?}` → 200 상세. `role`은 admin만. `status`는 `active`↔`suspended`만(다른 상태이거나 다른 값이면 409 `invalid_status`). `group_ids`는 그 사용자의 그룹을 통째로 바꾼다 |
+| `DELETE /users/{id}` | → 204. 계정 행, 그룹 구성원 연결, 세션, 토큰, 테스트 메일을 지운다. 접속 통계의 행은 사용자 연결만 끊는다(`user_id = NULL`). 같은 이메일로 다시 가입할 수 있다(새 계정) |
+| `POST /users/{id}/reset-password` | `{method: "mail" \| "temporary"}`. `mail`: 세션을 먼저 지우고 재설정 메일(`active`만, 아니면 409 `invalid_status`) → 204. `temporary`: 임의 비밀번호 16자를 만들어 **응답에 한 번만** → 200 `{password}`(`active`·`suspended`만). 계정에 `must_change_password`가 켜진다(비밀번호와 세션 삭제는 한 트랜잭션). 어느 쪽이든 그 사용자의 세션을 즉시 전부 지운다. 임시 비밀번호는 감사 로그와 서버 로그에 남기지 않는다 |
+| `POST /users/{id}/resend-invite` | → 204. `invited`만(아니면 409 `invalid_status`). 새 링크(이전 링크 무효) |
+| `POST /users/{id}/unlock` | → 204. 실패 횟수와 잠금을 지운다 |
+| `POST /users/{id}/logout-all` | → 204. 그 사용자의 모든 세션을 지운다 |
+| `POST /users/bulk-groups` | `{user_ids, add: [group_id], remove: [group_id]}` → 204. 없는 사용자(404 `unknown_user`)·그룹(404 `unknown_group`)이 있거나, operator가 user 아닌 계정을 고르면(403) 아무것도 바꾸지 않는다 |
+
+- 위 변경 경로는 모두 "operator는 `user`만" 규칙을 따른다. 정지·강등·삭제는 마지막 admin·자기 자신 보호를 따른다.
+- **등급 변경** 때는 그 사용자의 세션과 **쓰지 않은 일회용 토큰(재설정·초대·메일 인증)** 을 함께 지운다. `user`일 때 발급돼 operator가 볼 수 있었던 링크가 승급 뒤에 쓰이지 않게 한다.
+- **정지**하면 세션을 즉시 지운다. 그룹 구성, 접속 기록, 비밀번호는 그대로다. 해제하면 `active`로 돌아간다.
+
+## 내 정보 (`/api/me`, 로그인 필요)
+
+| 메서드·경로 | 본문 → 결과 |
+|---|---|
+| `GET /api/me` | → `{email, role, created_at, last_login_at, groups: [{id, name}], must_change_password}`. 비밀번호 변경이 필요한 계정도 읽는다(`require_session`) |
+| `POST /api/me/password` | `{current, new}` → 204. 현재 비밀번호가 틀리면 401 `invalid_credentials`, 정책 위반 422 `weak_password`(현재와 같으면 `reason: "same_as_current"`). 바꾸면 `must_change_password`를 끄고 **지금 세션만 남기고** 나머지 세션을 지운다. 비밀번호 변경이 필요한 계정도 부를 수 있다 |
+
 ## 감사 로그
 
 `audit_log` 표에 남긴다(`store.record_audit`). 항목은 시각, 한 사람(id와 이메일 사본), 동작 코드, 대상(종류, id, 이름 사본), 변경 내용(`detail`, JSON), IP다. 이메일·이름을 사본으로 남겨 계정이나 그룹이 지워진 뒤에도 읽을 수 있다. `detail`에 비밀번호·토큰·해시를 넣지 않는다(키 이름에 `password`·`token`·`hash`·`secret`이 들어간 항목은 저장 전에 버린다).
@@ -174,11 +218,20 @@
 | `auth.password_reset_requested` | 비밀번호 찾기(재설정 메일을 보냈을 때) | `{}` |
 | `auth.password_reset` | 재설정 링크로 비밀번호 변경 | `{}` |
 | `auth.invite_accepted` | 초대 링크로 비밀번호 설정 | `{}` |
+| `auth.password_changed` | 내 정보에서 비밀번호 변경 | `{}` |
+| `user.create` | 운용자의 임의 가입·초대(일괄 초대는 주소마다 한 줄) | `{role, groups: [이름], bulk?}` |
+| `user.invite_resent` | 초대 재발송 | `{}` |
+| `user.reset_password` | 운용자의 리셋 | `{"method": "mail" \| "temporary"}`(임시 비밀번호는 없다) |
+| `user.suspend` · `user.unsuspend` | 정지 · 해제 | `{}` |
+| `user.delete` | 삭제. 대상 이름 사본은 이메일 | `{role, status}` |
+| `user.role` | 등급 변경 | `{from, to}` |
+| `user.unlock` · `user.logout_all` | 잠금 해제 · 모든 기기 로그아웃 | `{}` · `{sessions}` |
+| `user.groups` | 사용자 상세에서 그룹 변경 | `{added: [이름], removed: [이름]}` |
 | `group.create` | 그룹 생성 | `{description, is_default}` |
 | `group.update` | 그룹 이름·설명·기본 그룹 변경(바뀐 것이 있을 때) | `{<필드>: {"from", "to"}}` |
 | `group.delete` | 그룹 삭제 | `{"members": <구성원 수>}` |
 | `group.tabs` | 허용 탭 변경(바뀐 것이 있을 때) | `{project, added: [...], removed: [...]}` |
-| `group.members` | 구성원 변경(바뀐 것이 있을 때) | `{added: [이메일], removed: [이메일]}` |
+| `group.members` | 구성원 변경(바뀐 것이 있을 때. 일괄 그룹 지정은 그룹마다 한 줄, `bulk: true`) | `{added: [이메일], removed: [이메일]}` |
 
 ## 계정 흐름
 
@@ -335,5 +388,6 @@ class Mailer(Protocol):
 | `web/login.html` + `web/auth.js` + `web/auth.css` | 이메일, 비밀번호, 로그인 버튼, "가입하기"·"비밀번호를 잊으셨나요?" 링크. 실패·정지·미인증(인증 메일 다시 보내기 버튼)·잠금 안내. 성공하면 `?next=`로 간다. `next`는 브라우저와 같은 URL 파서(`new URL(next, 지금 출처)`)로 읽어 출처가 지금 출처와 같을 때만 그 경로·쿼리·해시를 쓰고, 아니면(다른 출처, 탭·줄바꿈·역슬래시를 섞은 우회, 로그인 전 화면) `/`로 간다(`web/common.js`의 `safeNext`, 테스트 `tests/js/`). `?reason=expired`면 "로그인이 만료되었습니다", `?reason=logout`이면 "로그아웃했습니다" |
 | `web/index.html`(웹앱 셸) | `/api/app`이 401이면 `/login.html?next=<지금 주소>`로 보낸다. 섹션의 guest token·데이터 요청이 401이면 `?reason=expired`를 붙여 보낸다. 레일 아래(테마 버튼 위)에 사용자 메뉴: 이메일, 등급, 로그아웃 |
 | `web/common.js` | 셸과 로그인 화면이 함께 쓰는 도우미(요소 생성, `next` 검사, JSON POST) |
-| `web/index.html` 사용자 메뉴 | 운용자에게만 "운용"(`/admin/`) 링크. user 계정의 탭이 하나도 없으면 "접근할 수 있는 대시보드가 없습니다. 운용자에게 요청하세요." |
-| `web/admin/`(`index.html`, `admin.js`, `admin.css`) | 운용 화면. 주소의 `#` 뒤로 메뉴를 고른다. 시작할 때 `/api/app`의 `user.role`이 운용자가 아니면(또는 API가 403 `forbidden`이면) 웹앱(`/`)으로 돌려보내고, 401이면 로그인 화면으로 보낸다. 테스트 모드면 위에 메일 테스트 모드 띠. 메뉴: **테스트 메일함**(`#outbox`, 테스트 모드에서만: 받는 사람·등급, 종류, 시각, 링크 열기, 다시 불러오기), **그룹**(`#groups`: 목록, 정렬, 50개씩, 그룹 만들기 / `#group/<id>`: 이름·설명·기본 그룹, 현재 프로젝트의 탭 체크 목록, 다른 프로젝트·없는 탭 묶음과 항목별 빼기(그 항목만), 구성원 목록과 빼기, 이메일로 추가(쉼표·줄바꿈 구분, 찾지 못한 주소 안내), 삭제 확인) |
+| `web/account.html` + `web/account.js` | 내 정보: 이메일, 등급, 가입일, 최근 접속일, 속한 그룹, 비밀번호 바꾸기(현재 비밀번호 확인). 로그인 응답의 `must_change_password`가 `true`이거나 웹앱·운용 화면이 403 `password_change_required`를 받으면 여기로 온다. 그동안은 "임시 비밀번호로 로그인했습니다" 안내만 있고 대시보드로 가는 링크는 숨긴다 |
+| `web/index.html` 사용자 메뉴 | 모두에게 "내 정보"(`/account.html`), 운용자에게만 "운용"(`/admin/`) 링크. user 계정의 탭이 하나도 없으면 "접근할 수 있는 대시보드가 없습니다. 운용자에게 요청하세요." |
+| `web/admin/`(`index.html`, `admin.js`, `admin.css`) | 운용 화면. 주소의 `#` 뒤로 메뉴를 고른다. 시작할 때 `/api/app`의 `user.role`이 운용자가 아니면(또는 API가 403 `forbidden`이면) 웹앱(`/`)으로 돌려보내고, 401이면 로그인 화면으로 보낸다. 테스트 모드면 위에 메일 테스트 모드 띠. 메뉴(기본은 사용자): **사용자**(`#users`: 표(이메일, 등급, 상태와 잠금 표시, 그룹, 가입일, 접속 횟수, 최근 접속일, 가입 경로), 열 제목으로 정렬, 50명씩, 체크박스로 여러 명을 골라 그룹에 넣기·빼기, "사용자 추가"(이메일·등급·그룹, operator에게는 user 외 등급이 꺼져 있음)·"일괄 초대"(붙여 넣기, 주소마다 결과) / `#user/<id>`: 상세 항목, 그룹 편집, 등급 변경(admin만), 재설정 메일, 임시 비밀번호(한 번만 표시, 복사), 초대 재발송, 잠금 해제, 모든 기기 로그아웃, 정지·해제, 삭제(이메일을 다시 입력해야 한다)), **테스트 메일함**(`#outbox`, 테스트 모드에서만: 받는 사람·등급, 종류, 시각, 링크 열기, 다시 불러오기), **그룹**(`#groups`: 목록, 정렬, 50개씩, 그룹 만들기 / `#group/<id>`: 이름·설명·기본 그룹, 현재 프로젝트의 탭 체크 목록, 다른 프로젝트·없는 탭 묶음과 항목별 빼기(그 항목만), 구성원 목록과 빼기, 이메일로 추가(쉼표·줄바꿈 구분, 찾지 못한 주소 안내), 삭제 확인) |

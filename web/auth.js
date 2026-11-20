@@ -114,7 +114,7 @@ function loginPage() {
     }
     setBusy(submit, true, A.loginSubmitting);
     const r = await send("/api/auth/login", { email: email.value.trim(), password: password.value });
-    if (r && r.ok) { location.replace(next); return; }
+    if (r && r.ok) { location.replace(r.body.must_change_password ? "/account.html" : next); return; }
     setBusy(submit, false, A.loginSubmit);
     if (!r) { showMessage(A.errors.network); return; }
     const detail = r.body.detail;

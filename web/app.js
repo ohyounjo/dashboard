@@ -375,6 +375,10 @@ async function boot() {
   try {
     const res = await fetch("/api/app", { cache: "no-store", headers: { Accept: "application/json" } });
     if (res.status === 401) { toLogin(); return; }
+    // 임시 비밀번호로 로그인한 계정은 비밀번호를 바꾸는 화면으로만 간다
+    if (res.status === 403 && (await res.clone().json().catch(() => ({}))).detail === "password_change_required") {
+      leaving = true; location.replace("/account.html"); return;
+    }
     if (!res.ok) throw new Error(String(res.status));
     cfg = await res.json();
     if (!cfg || !cfg.app || !Array.isArray(cfg.tabs)) throw new Error("shape");
@@ -403,7 +407,7 @@ function renderUserMenu(user) {
     leaving = true;
     location.replace(loginUrl("/", "logout"));
   });
-  const actions = [];
+  const actions = [h("a", { href: "/account.html" }, icon("user"), S.myInfo)];
   // 운용 화면 링크는 운용자에게만 보인다(권한은 API가 지킨다)
   if (user.role === "admin" || user.role === "operator") actions.push(h("a", { href: "/admin/" }, icon("users"), S.adminLink));
   actions.push(logout);

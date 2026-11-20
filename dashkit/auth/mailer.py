@@ -68,6 +68,12 @@ class SmtpMailer:
         raise MailUnavailable("AUTH_MAIL_MODE=smtp의 발송은 구현되지 않았습니다(dashkit/auth/mailer.py의 SmtpMailer)")
 
 
+def ensure_available() -> None:
+    """운용자 경로(초대 등)는 보내기 전에 확인한다. 보낼 수 없으면 MailUnavailable(계정을 만들기 전에 알린다)."""
+    if auth_settings.get().mail_mode != "test":
+        raise MailUnavailable("AUTH_MAIL_MODE=smtp의 발송은 구현되지 않았습니다")
+
+
 def get() -> Mailer:
     return OutboxMailer() if auth_settings.get().mail_mode == "test" else SmtpMailer()
 

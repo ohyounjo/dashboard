@@ -26,6 +26,14 @@
 .auth-links:empty { display: none }
 .auth-links a { color: var(--primary); text-decoration: none; font-weight: 500 }
 .auth-links a:hover { text-decoration: underline }
+.auth-card.wide { max-width: 520px }
+.auth-card h2 { margin: 6px 0 0; font-size: 16px }
+.auth-back { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 500; align-self: flex-start }
+.auth-back:hover { color: var(--fg) }
+.auth-back .icon { width: 16px; height: 16px }
+.auth-info { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin: 0; font-size: 13.5px; padding-bottom: 14px; border-bottom: 1px solid var(--line) }
+.auth-info dt { color: var(--muted) }
+.auth-info dd { margin: 0; overflow-wrap: anywhere }
 @media (max-width: 600px) {
   .auth { justify-content: flex-start; padding-top: max(32px, env(safe-area-inset-top, 0px)) }
   .auth-card { padding: 22px 18px 18px; border-radius: 10px }

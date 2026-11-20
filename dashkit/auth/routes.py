@@ -352,3 +352,44 @@ def password_reset(body: ResetRequest, request: Request):
     store.record_audit(action, actor_id=owner["user_id"], actor_email=owner["email"], target_type="user",
                        target_id=owner["user_id"], target_label=owner["email"], ip=client_ip(request))
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------- 내 정보(/api/me, 모든 등급)
+
+me_router = APIRouter(prefix="/api")
+
+
+@me_router.get("/me")
+def get_me(principal: Principal = Depends(require_session)):
+    """비밀번호 변경이 필요한 계정도 읽는다(변경 화면이 쓴다)."""
+    user = store.user_detail(principal.id)
+    if user is None:
+        raise _unauthenticated()
+    return {"email": user["email"], "role": user["role"], "created_at": user["created_at"],
+            "last_login_at": user["last_login_at"], "groups": user["groups"],
+            "must_change_password": user["must_change_password"]}
+
+
+class PasswordChange(BaseModel):
+    current: StrictStr = Field(max_length=1024)
+    new: StrictStr = Field(max_length=1024)
+
+
+@me_router.post("/me/password", status_code=204)
+def change_my_password(body: PasswordChange, request: Request, principal: Principal = Depends(require_session)):
+    """현재 비밀번호 확인(401 invalid_credentials) → 정책(422 weak_password) → 바꾸고 지금 세션만 남긴다."""
+    user = store.user_by_id(principal.id)
+    if user is None or user.password_hash is None:
+        raise _unauthenticated()
+    if not passwords.verify(user.password_hash, body.current):
+        raise _invalid_credentials()
+    reason = passwords.policy_violation(body.new, user.email)
+    if reason:
+        raise weak_password(reason)
+    if passwords.verify(user.password_hash, body.new):
+        raise weak_password("same_as_current")
+    # 새 비밀번호와 다른 세션 삭제를 한 트랜잭션으로(지금 세션만 남긴다)
+    store.set_password(user.id, passwords.hash_password(body.new), end_sessions=True, keep_session=principal.session_id)
+    store.record_audit("auth.password_changed", actor_id=user.id, actor_email=user.email, target_type="user",
+                       target_id=user.id, target_label=user.email, ip=client_ip(request))
+    return Response(status_code=204)
