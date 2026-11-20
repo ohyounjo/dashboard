@@ -293,3 +293,23 @@ def put_group_members(group_id: str, body: GroupMembersPut, request: Request,
         audit(request, actor, "group.members", target_type="group", target_id=group_id, target_label=group["name"],
               detail={"added": [emails_of[i] for i in added], "removed": [emails_of[i] for i in removed]})
     return {"not_found": not_found}
+
+
+# ---------------------------------------------------------------- 테스트 메일함
+
+@router.get("/outbox")
+def get_outbox(page_no: int = PageNo, size: int = PageSize, actor: Principal = Depends(require_operator)):
+    """테스트 모드 전용(그 밖에는 404). operator에게는 받는 계정의 **지금** 등급이 user인 메일만 돌려준다.
+
+    비밀번호 찾기는 로그인 없이 아무 주소로나 요청할 수 있으므로, 이 제한이 없으면 operator가 admin 주소로 찾기를
+    요청하고 여기서 링크를 가져가 admin 계정을 차지할 수 있다(3절의 제한 우회).
+    """
+    from . import settings as auth_settings
+
+    if auth_settings.get().mail_mode != "test":
+        raise ApiError(404, "not_found", "테스트 메일함은 메일 테스트 모드에서만 있습니다")
+    rows = store.outbox_list(None if actor.role == "admin" else "user")
+    items = [{"id": r["id"], "to_email": r["to_email"], "kind": r["kind"], "link": r["link"],
+              "created_at": r["created_at"], "role": r["role"]} for r in rows]
+    start = (page_no - 1) * size
+    return {"items": items[start:start + size], "total": len(items)}

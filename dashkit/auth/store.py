@@ -499,3 +499,137 @@ def record_audit(action: str, *, actor_id: str | None = None, actor_email: str |
             (actor_id, actor_email, action, target_type, target_id, target_label,
              json.dumps(clean, ensure_ascii=False, default=str), clean_ip(ip)),
         )
+
+
+# ---------------------------------------------------------------- 계정 상태·비밀번호·잠금
+
+def set_pending_password(user_id: str, password_hash: str) -> None:
+    """메일 인증 전(pending) 계정에 다시 가입했을 때 비밀번호를 바꾼다(인증 전이라 아직 아무도 쓰지 않은 계정)."""
+    with connection() as conn:
+        conn.execute("UPDATE dashkit_auth.users SET password_hash = %s WHERE id = %s AND status = 'pending'",
+                     (password_hash, user_id))
+
+
+def activate_user(user_id: str, from_status: str) -> bool:
+    """from_status(pending|invited) → active. 메일 인증 시각을 남기고 기본 그룹(is_default)에 넣는다.
+    다른 상태였으면 아무것도 바꾸지 않고 False."""
+    with connection() as conn, conn.transaction():
+        cur = conn.execute(
+            """UPDATE dashkit_auth.users SET status = 'active', email_verified_at = coalesce(email_verified_at, now())
+                WHERE id = %s AND status = %s""",
+            (user_id, from_status),
+        )
+        if not cur.rowcount:
+            return False
+        conn.execute(
+            """INSERT INTO dashkit_auth.group_members (group_id, user_id)
+               SELECT id, %s FROM dashkit_auth.groups WHERE is_default ON CONFLICT DO NOTHING""",
+            (user_id,),
+        )
+    return True
+
+
+def set_password(user_id: str, password_hash: str, *, must_change: bool = False) -> None:
+    """새 비밀번호. 비밀번호 변경일을 남기고 실패 횟수·잠금을 지운다."""
+    with connection() as conn:
+        conn.execute(
+            """UPDATE dashkit_auth.users
+                  SET password_hash = %s, password_changed_at = now(), must_change_password = %s,
+                      failed_count = 0, locked_until = NULL
+                WHERE id = %s""",
+            (password_hash, must_change, user_id),
+        )
+
+
+def record_login_failure(user_id: str, threshold: int, lock_minutes: int) -> datetime | None:
+    """실패 횟수를 1 올린다. threshold에 닿으면 lock_minutes 동안 잠그고(횟수는 0부터 다시) 잠금 끝 시각을 돌려준다."""
+    with connection() as conn:
+        row = conn.execute(
+            """UPDATE dashkit_auth.users
+                  SET failed_count = CASE WHEN failed_count + 1 >= %(n)s THEN 0 ELSE failed_count + 1 END,
+                      locked_until = CASE WHEN failed_count + 1 >= %(n)s THEN now() + make_interval(mins => %(m)s)
+                                          ELSE locked_until END
+                WHERE id = %(id)s
+            RETURNING failed_count, locked_until, (locked_until > now() AND failed_count = 0) AS just_locked""",
+            {"n": threshold, "m": lock_minutes, "id": user_id},
+        ).fetchone()
+    return row["locked_until"] if row and row["just_locked"] else None
+
+
+# ---------------------------------------------------------------- 일회용 토큰
+
+def create_token(user_id: str, purpose: str, token_hash: bytes, expires_at: datetime) -> None:
+    """같은 사용자·같은 용도의 이전 토큰을 지우고 새로 넣는다(이전 링크는 무효)."""
+    with connection() as conn, conn.transaction():
+        conn.execute("DELETE FROM dashkit_auth.tokens WHERE user_id = %s AND purpose = %s", (user_id, purpose))
+        conn.execute(
+            "INSERT INTO dashkit_auth.tokens (user_id, purpose, token_hash, expires_at) VALUES (%s, %s, %s, %s)",
+            (user_id, purpose, token_hash, expires_at),
+        )
+
+
+def token_owner(token_hash: bytes, purposes: tuple[str, ...]) -> dict[str, Any] | None:
+    """만료되지 않은 토큰의 {token_id, purpose, user_id, email, role, status}. 지우지 않는다."""
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT t.id AS token_id, t.purpose, u.id AS user_id, u.email, u.role, u.status
+                 FROM dashkit_auth.tokens t JOIN dashkit_auth.users u ON u.id = t.user_id
+                WHERE t.token_hash = %s AND t.purpose = ANY(%s::text[]) AND t.expires_at > now()""",
+            (token_hash, list(purposes)),
+        ).fetchone()
+    if not row:
+        return None
+    return {**row, "token_id": str(row["token_id"]), "user_id": str(row["user_id"])}
+
+
+def consume_token(token_id: str) -> bool:
+    """토큰을 지운다(한 번만 쓴다). 이미 지워졌으면(동시에 두 번 쓰려 함) False."""
+    with connection() as conn:
+        return conn.execute("DELETE FROM dashkit_auth.tokens WHERE id = %s", (token_id,)).rowcount > 0
+
+
+def delete_user_tokens(user_id: str) -> int:
+    with connection() as conn:
+        return conn.execute("DELETE FROM dashkit_auth.tokens WHERE user_id = %s", (user_id,)).rowcount
+
+
+# ---------------------------------------------------------------- 테스트 메일함(outbox)
+
+def outbox_add(to_email: str, kind: str, link: str | None) -> bool:
+    """받는 계정이 있을 때만 쌓는다(user_id로 읽는 사람의 등급 제한을 판정한다)."""
+    with connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO dashkit_auth.outbox (user_id, to_email, kind, link)
+               SELECT id, email, %s, %s FROM dashkit_auth.users WHERE email = %s""",
+            (kind, link, to_email),
+        )
+        return cur.rowcount > 0
+
+
+def outbox_list(only_role: str | None, limit: int = 1000) -> list[dict[str, Any]]:
+    """최근 순. only_role을 주면 받는 계정의 **지금** 등급이 그것인 행만."""
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT o.id, o.to_email, o.kind, o.link, o.created_at, u.role
+                 FROM dashkit_auth.outbox o JOIN dashkit_auth.users u ON u.id = o.user_id
+                WHERE (%s::text IS NULL OR u.role = %s::text)
+                ORDER BY o.created_at DESC, o.id DESC LIMIT %s""",
+            (only_role, only_role, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------- 보존 기간 정리
+
+def cleanup(pending_days: int, outbox_days: int) -> dict[str, int]:
+    """인증 전 계정·오래된 테스트 메일·만료된 토큰과 세션을 지운다. 지운 행 수."""
+    out: dict[str, int] = {}
+    with connection() as conn:
+        out["pending_users"] = conn.execute(
+            "DELETE FROM dashkit_auth.users WHERE status = 'pending' AND created_at < now() - make_interval(days => %s)",
+            (pending_days,)).rowcount
+        out["outbox"] = conn.execute(
+            "DELETE FROM dashkit_auth.outbox WHERE created_at < now() - make_interval(days => %s)", (outbox_days,)).rowcount
+        out["tokens"] = conn.execute("DELETE FROM dashkit_auth.tokens WHERE expires_at <= now()").rowcount
+        out["sessions"] = conn.execute("DELETE FROM dashkit_auth.sessions WHERE expires_at <= now()").rowcount
+    return out

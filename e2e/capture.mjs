@@ -29,10 +29,13 @@ const SESSION_COOKIE = "dashkit_session";
 // 로그인 전 화면. 탭과 같은 표로 비교되도록 manifest의 tabs에 넣는다(키는 탭 키와 겹치지 않게 _로 시작)
 const AUTH_PAGES = [
   { key: "_login", label: "로그인 화면", path: "/login.html" },
+  { key: "_signup", label: "가입 화면", path: "/signup.html" },
+  { key: "_forgot", label: "비밀번호 찾기 화면", path: "/forgot.html" },
 ];
 // 로그인한 채로 찍는 운용 화면(캡처용 계정은 admin이다)
 const ADMIN_PAGES = [
   { key: "_admin-groups", label: "운용: 그룹", path: "/admin/#groups" },
+  { key: "_admin-outbox", label: "운용: 테스트 메일함", path: "/admin/#outbox" },
 ];
 
 // 로그인해서 세션 쿠키 값을 돌려준다. 로그인 기능이 없는 버전이면 null.

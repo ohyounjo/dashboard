@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field, StrictStr
 
 from ..api.errors import ApiError
-from . import emails, passwords, sessions, store
+from . import emails, limits, maintenance, mailer, passwords, sessions, store
 from . import settings as auth_settings
 
 log = logging.getLogger("dashkit.auth")
@@ -26,7 +26,17 @@ log = logging.getLogger("dashkit.auth")
 ROLES = ("admin", "operator", "user")
 OPERATOR_ROLES = ("admin", "operator")
 
-router = APIRouter(prefix="/api/auth")
+def rate_limit(request: Request) -> None:
+    """인증 경로의 POST는 IP당 1분에 20번(429 rate_limited, Retry-After)."""
+    if request.method != "POST":
+        return
+    ip = client_ip(request) or "unknown"
+    if not limits.auth_rate.hit(ip):
+        raise ApiError(429, "rate_limited", "요청이 너무 많습니다. 잠시 뒤에 다시 시도하세요",
+                       headers={"Retry-After": str(limits.auth_rate.retry_after(ip))})
+
+
+router = APIRouter(prefix="/api/auth", dependencies=[Depends(rate_limit)])
 
 
 @dataclass(frozen=True)
@@ -120,23 +130,45 @@ def _invalid_credentials() -> ApiError:
     return ApiError(401, "invalid_credentials", "이메일 또는 비밀번호가 올바르지 않습니다")
 
 
+def _locked() -> ApiError:
+    return ApiError(423, "account_locked", "로그인에 여러 번 실패해 잠시 잠겼습니다")
+
+
 def _audit_login(request: Request, action: str, email: str, user_id: str | None = None, **detail) -> None:
     store.record_audit(action, actor_id=user_id, actor_email=email[:320] or None, target_type="user",
                        target_id=user_id, target_label=email[:320] or None, detail=detail, ip=client_ip(request))
 
 
+def _fail_login(request: Request, email: str, user: store.User | None, reason: str) -> ApiError:
+    """실패를 센다. 연속 5번이면 15분 잠그고 423. 없는 계정도 같은 횟수에서 같은 응답이다."""
+    _audit_login(request, "auth.login_failed", email, user.id if user else None, reason=reason)
+    if user is None:
+        just_locked = limits.ghosts.fail(email)
+    else:
+        just_locked = store.record_login_failure(user.id, limits.LOGIN_FAILURE_LIMIT, limits.LOCK_MINUTES) is not None
+        if just_locked:
+            _audit_login(request, "auth.locked", email, user.id, minutes=limits.LOCK_MINUTES)
+    return _locked() if just_locked else _invalid_credentials()
+
+
 @router.post("/login")
 def login(body: LoginRequest, request: Request, response: Response):
     cfg = auth_settings.get()
+    maintenance.maybe_run()
     email = emails.normalize(body.email)
     user = store.user_by_email(email) if emails.valid(email) else None
+    now = store.now()
+    # 잠긴 주소는 비밀번호와 상관없이 423(없는 계정도 같은 횟수에서 잠긴 것처럼 답한다)
+    if (user is not None and user.locked_until is not None and user.locked_until > now) or \
+            (user is None and limits.ghosts.locked(email)):
+        passwords.verify_dummy(body.password)
+        _audit_login(request, "auth.login_failed", email, user.id if user else None, reason="locked")
+        raise _locked()
     if user is None or user.password_hash is None:
         passwords.verify_dummy(body.password)       # 없는 계정도 같은 비용(응답 시간)
-        _audit_login(request, "auth.login_failed", email, user.id if user else None, reason="no_password" if user else "unknown_account")
-        raise _invalid_credentials()
+        raise _fail_login(request, email, None if user is None else user, "no_password" if user else "unknown_account")
     if not passwords.verify(user.password_hash, body.password):
-        _audit_login(request, "auth.login_failed", email, user.id, reason="wrong_password")
-        raise _invalid_credentials()
+        raise _fail_login(request, email, user, "wrong_password")
     # 비밀번호가 맞은 뒤에만 상태를 알려 준다(상태로 계정 존재 여부를 알아낼 수 없다)
     if user.status == "pending":
         _audit_login(request, "auth.login_failed", email, user.id, reason="email_not_verified")
@@ -145,11 +177,10 @@ def login(body: LoginRequest, request: Request, response: Response):
         _audit_login(request, "auth.login_failed", email, user.id, reason="account_suspended")
         raise ApiError(403, "account_suspended", "정지된 계정입니다")
     if user.status != "active":
-        _audit_login(request, "auth.login_failed", email, user.id, reason="not_active")
-        raise _invalid_credentials()
+        raise _fail_login(request, email, user, "not_active")
     new_hash = passwords.hash_password(body.password) if passwords.needs_rehash(user.password_hash) else None
     token = sessions.new_token()
-    store.create_session(user.id, sessions.token_hash(token), sessions.expires_at(store.now(), cfg),
+    store.create_session(user.id, sessions.token_hash(token), sessions.expires_at(now, cfg),
                          client_ip(request), request.headers.get("user-agent"))
     store.record_login_success(user.id, new_hash)
     _audit_login(request, "auth.login", user.email, user.id)
@@ -167,3 +198,145 @@ def logout(request: Request, response: Response):
     sessions.clear_cookie(response, auth_settings.get())
     response.status_code = 204
     return None
+
+
+# ---------------------------------------------------------------- 가입·메일 인증·비밀번호 찾기
+
+TOKEN_TTL = {"verify_email": 24 * 60, "reset_password": 30, "invite": 72 * 60}     # 분
+
+
+def issue_token(user_id: str, purpose: str) -> str:
+    """일회용 토큰(256비트, DB에는 SHA-256만). 같은 사용자·같은 용도의 이전 토큰은 무효가 된다."""
+    from datetime import timedelta
+
+    token = sessions.new_token()
+    store.create_token(user_id, purpose, sessions.token_hash(token), store.now() + timedelta(minutes=TOKEN_TTL[purpose]))
+    return token
+
+
+def weak_password(reason: str) -> ApiError:
+    return ApiError(422, "weak_password", "비밀번호 정책에 맞지 않습니다", extra={"reason": reason})
+
+
+def check_new_email(raw: str) -> str:
+    """정규화한 주소. 형식 422 invalid_email, 도메인 422 email_domain_not_allowed."""
+    email = emails.normalize(raw)
+    if not emails.valid(email):
+        raise ApiError(422, "invalid_email", "이메일 형식이 올바르지 않습니다")
+    if not auth_settings.get().domain_allowed(email):
+        raise ApiError(422, "email_domain_not_allowed", "가입할 수 없는 메일 도메인입니다")
+    return email
+
+
+class SignupRequest(BaseModel):
+    email: StrictStr = Field(max_length=320)
+    password: StrictStr = Field(max_length=1024)
+
+
+ACCEPTED = {"status": "accepted"}
+
+
+@router.post("/signup", status_code=202)
+def signup(body: SignupRequest, request: Request):
+    """항상 같은 202다. 이미 있는 주소면 그 주소로 '이미 가입된 주소' 메일을 보낸다(가입 화면으로 계정 존재를 알 수 없다)."""
+    maintenance.maybe_run()
+    email = check_new_email(body.email)
+    reason = passwords.policy_violation(body.password, email)
+    if reason:
+        raise weak_password(reason)
+    password_hash = passwords.hash_password(body.password)       # 어느 길이든 같은 비용
+    user = store.user_by_email(email)
+    if user is None:
+        try:
+            user = store.create_user(email, role="user", status="pending", source="signup", password_hash=password_hash)
+        except store.Conflict:          # 동시에 같은 주소로 가입
+            return ACCEPTED
+        store.record_audit("auth.signup", actor_id=user.id, actor_email=email, target_type="user",
+                           target_id=user.id, target_label=email, ip=client_ip(request))
+        mailer.send_quietly(email, "verify_email", mailer.link("verify.html", issue_token(user.id, "verify_email")))
+    elif user.status == "pending":
+        # 인증 전 계정에 다시 가입: 새 비밀번호와 새 인증 링크(이전 링크는 무효)
+        store.set_pending_password(user.id, password_hash)
+        mailer.send_quietly(email, "verify_email", mailer.link("verify.html", issue_token(user.id, "verify_email")))
+    else:
+        mailer.send_quietly(email, "already_registered", None)
+    return ACCEPTED
+
+
+class TokenRequest(BaseModel):
+    token: StrictStr = Field(max_length=200)
+
+
+def _token_expired() -> ApiError:
+    return ApiError(410, "token_expired", "링크가 만료되었거나 이미 쓰였습니다. 다시 요청하세요")
+
+
+@router.post("/verify", status_code=204)
+def verify(body: TokenRequest, request: Request):
+    if not sessions.plausible_token(body.token):
+        raise _token_expired()
+    owner = store.token_owner(sessions.token_hash(body.token), ("verify_email",))
+    if owner is None or owner["status"] != "pending" or not store.consume_token(owner["token_id"]):
+        raise _token_expired()
+    if not store.activate_user(owner["user_id"], "pending"):
+        raise _token_expired()
+    store.record_audit("auth.verify_email", actor_id=owner["user_id"], actor_email=owner["email"], target_type="user",
+                       target_id=owner["user_id"], target_label=owner["email"], ip=client_ip(request))
+    return Response(status_code=204)
+
+
+class EmailRequest(BaseModel):
+    email: StrictStr = Field(max_length=320)
+
+
+@router.post("/verify/resend", status_code=202)
+def verify_resend(body: EmailRequest):
+    email = emails.normalize(body.email)
+    user = store.user_by_email(email) if emails.valid(email) else None
+    if user is not None and user.status == "pending":
+        mailer.send_quietly(email, "verify_email", mailer.link("verify.html", issue_token(user.id, "verify_email")))
+    return ACCEPTED
+
+
+@router.post("/password/forgot", status_code=202)
+def password_forgot(body: EmailRequest, request: Request):
+    """계정이 있든 없든 202. active 계정에만 재설정 메일(30분, 한 번)을 보낸다. 정지된 계정은 받지 않는다."""
+    email = emails.normalize(body.email)
+    user = store.user_by_email(email) if emails.valid(email) else None
+    if user is not None and user.status == "active":
+        mailer.send_quietly(email, "reset_password", mailer.link("reset.html", issue_token(user.id, "reset_password")))
+        store.record_audit("auth.password_reset_requested", actor_id=user.id, actor_email=email, target_type="user",
+                           target_id=user.id, target_label=email, ip=client_ip(request))
+    return ACCEPTED
+
+
+class ResetRequest(BaseModel):
+    token: StrictStr = Field(max_length=200)
+    password: StrictStr = Field(max_length=1024)
+
+
+@router.post("/password/reset", status_code=204)
+def password_reset(body: ResetRequest, request: Request):
+    """재설정(reset_password)과 초대 수락(invite) 공용. 성공하면 그 사용자의 모든 세션을 지우고 잠금을 푼다."""
+    if not sessions.plausible_token(body.token):
+        raise _token_expired()
+    owner = store.token_owner(sessions.token_hash(body.token), ("reset_password", "invite"))
+    allowed_status = {"reset_password": "active", "invite": "invited"}
+    if owner is None or owner["status"] != allowed_status[owner["purpose"]]:
+        raise _token_expired()
+    reason = passwords.policy_violation(body.password, owner["email"])
+    if reason:
+        raise weak_password(reason)          # 토큰은 그대로 두고 다시 입력하게 한다
+    password_hash = passwords.hash_password(body.password)
+    if not store.consume_token(owner["token_id"]):
+        raise _token_expired()
+    store.set_password(owner["user_id"], password_hash)
+    if owner["purpose"] == "invite":
+        store.activate_user(owner["user_id"], "invited")
+        action = "auth.invite_accepted"
+    else:
+        action = "auth.password_reset"
+    store.delete_user_sessions(owner["user_id"])
+    store.record_audit(action, actor_id=owner["user_id"], actor_email=owner["email"], target_type="user",
+                       target_id=owner["user_id"], target_label=owner["email"], ip=client_ip(request))
+    return Response(status_code=204)
