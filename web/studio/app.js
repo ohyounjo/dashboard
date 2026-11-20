@@ -7,13 +7,17 @@ import { h, $, fill, button, iconButton, badge, alertBox, stateBox, skeleton } f
 import { mount as mountWizard } from "./view-wizard.js";
 import { mount as mountData } from "./view-data.js";
 import { mount as mountTabs } from "./view-tabs.js";
+import { mount as mountLayout } from "./view-layout.js";
+import { mount as mountFilters } from "./view-filters.js";
 import { mount as mountApp } from "./view-app.js";
 
 const THEME_KEY = "studio-theme";          // localStorage 키(수동 테마 선택)
 const PREVIEW_KEY = "studio-preview";      // localStorage 키(미리보기 접기)
-const SCREENS = [                          // 5a단계의 화면(프로젝트 안)
+const SCREENS = [                          // 프로젝트 안의 화면(왼쪽 메뉴 순서)
   { id: "data", label: S.screenData, iconName: "database", mount: mountData },
   { id: "tabs", label: S.screenTabs, iconName: "layers", mount: mountTabs },
+  { id: "layout", label: S.screenLayout, iconName: "grid", mount: mountLayout },
+  { id: "filters", label: S.screenFilters, iconName: "filter", mount: mountFilters },
   { id: "app", label: S.screenApp, iconName: "sliders", mount: mountApp },
 ];
 const DEFAULT_SCREEN = "tabs";
@@ -56,9 +60,10 @@ function describeError(e) {
   if (e.network) return { title: S.errNetworkTitle, body: S.errNetworkBody, errors: [] };
   const coded = e.detail && S.errByDetail[e.detail];
   const body = [e.message !== e.detail ? e.message : null, e.detail ? S.errCode(e.detail) : null].filter(Boolean).join(" ");
-  if (coded) return { title: coded, body, errors: e.errors, detail: e.detail };
-  if (e.status === 422) return { title: S.errInvalid, body, errors: e.errors };
-  return { title: S.errServer(e.status), body, errors: e.errors };
+  const errors = e.errors.filter((line) => line !== e.message);   // invalid_op: errors[0]이 message와 같다 → 한 번만 보여 준다
+  if (coded) return { title: coded, body, errors, detail: e.detail };
+  if (e.status === 422) return { title: S.errInvalid, body, errors };
+  return { title: S.errServer(e.status), body, errors };
 }
 
 /* ---------------- 테마 ---------------- */

@@ -212,6 +212,94 @@ input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; accent-
 .drop-into { outline: 2px dashed var(--primary); outline-offset: -2px }
 .list-actions { display: grid; gap: 8px; justify-items: start }
 
+/* 대시보드 배치: 12칸 격자. 칸 수는 .span-N 클래스로만 정한다(인라인 style 없음) */
+.head-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 10px 16px; align-items: end; margin-bottom: 14px }
+.head-form .alert { grid-column: 1 / -1; margin: 0 }
+.dash-pick { display: grid; gap: 4px; min-width: 0 }
+.lay-grid { display: grid; gap: 16px; align-items: start }
+.lay-grid > .inspector { position: static; max-height: none; overflow: visible }
+@container (min-width: 900px) {
+  .lay-grid { grid-template-columns: minmax(0, 1fr) minmax(300px, 360px) }
+  .lay-grid > .inspector { position: sticky; top: 0; max-height: calc(100vh - 92px); max-height: calc(100dvh - 92px); overflow-y: auto }
+}
+.lay-col { display: grid; gap: 12px; min-width: 0 }
+.is-busy .lay-col, .is-busy .head-form { opacity: .6; pointer-events: none }
+.chip-group { display: grid; gap: 2px }
+.chip-group-name { font-size: 12px; color: var(--muted); font-weight: 700 }
+.chip .icon { color: var(--fg) }
+.lay-board { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 2px 10px; min-width: 0 }
+.lay-rows { display: grid; min-width: 0 }
+.lay-gap { height: 10px; border-radius: 5px }
+.is-dragging-any .lay-gap { background: var(--surface-2) }
+.lay-gap.drop-into { background: var(--primary); outline: 0 }
+.lay-row { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 8px; min-width: 0; border-radius: 8px }
+.span-1 { grid-column: span 1 }
+.span-2 { grid-column: span 2 }
+.span-3 { grid-column: span 3 }
+.span-4 { grid-column: span 4 }
+.span-5 { grid-column: span 5 }
+.span-6 { grid-column: span 6 }
+.span-7 { grid-column: span 7 }
+.span-8 { grid-column: span 8 }
+.span-9 { grid-column: span 9 }
+.span-10 { grid-column: span 10 }
+.span-11 { grid-column: span 11 }
+.span-12 { grid-column: span 12 }
+.lay-card { position: relative; display: flex; align-items: flex-start; gap: 8px; min-width: 0; min-height: 66px; padding: 8px 14px 18px 8px; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); cursor: grab; text-align: left }
+.lay-card:hover { border-color: var(--primary) }
+.lay-card.is-selected { border-color: var(--primary); background: var(--primary-soft); box-shadow: inset 3px 0 0 var(--primary) }
+.lay-card.is-header { background: transparent; border-style: dashed; min-height: 40px; padding-bottom: 8px; align-items: center }
+.lay-card.is-header .lay-title { font-size: 15px }
+.lay-card.is-text { background: var(--surface) }
+.lay-card.is-pending { border-style: dashed; border-color: var(--warn); background: var(--warn-bg); cursor: default }
+.lay-card.is-resizing { border-color: var(--primary); cursor: ew-resize }
+.lay-ico { width: 28px; height: 28px; border-radius: 7px; background: var(--surface); border: 1px solid var(--line); display: grid; place-items: center; flex-shrink: 0 }
+.lay-ico .icon { width: 16px; height: 16px }
+.lay-main { display: grid; gap: 1px; min-width: 0; flex: 1; line-height: 1.35 }
+.lay-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px }
+.lay-sub { display: flex; flex-wrap: wrap; gap: 0 6px; font-size: 12px; min-width: 0; overflow: hidden; max-height: 2.7em }
+.lay-sub > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100% }
+.lay-width { position: absolute; right: 14px; bottom: 3px; font-size: 11px; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; line-height: 1.4 }
+.lay-width[data-auto] { border-style: dashed }
+.lay-handle { position: absolute; top: 0; right: 0; bottom: 0; width: 10px; cursor: ew-resize; touch-action: none }
+.lay-handle::after { content: ""; position: absolute; top: 25%; bottom: 25%; right: 3px; width: 3px; border-radius: 2px; background: var(--line) }
+.lay-card:hover .lay-handle::after, .lay-card:focus-visible .lay-handle::after, .is-resizing .lay-handle::after { background: var(--primary) }
+.drop-left { box-shadow: -4px 0 0 0 var(--primary) }
+.drop-right { box-shadow: 4px 0 0 0 var(--primary) }
+.lay-block { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); min-width: 0 }
+.lay-block-head { display: flex; align-items: center; gap: 8px; padding: 4px 6px 4px 10px; cursor: grab; border-radius: 10px 10px 0 0; font-size: 13px; min-width: 0 }
+.lay-block-head:hover { background: var(--surface-2) }
+.lay-tabs { display: grid; gap: 8px; padding: 0 8px 8px }
+.lay-tab { border: 1px dashed var(--line); border-radius: 8px; background: var(--surface); padding: 6px 8px 0; min-width: 0 }
+.lay-tab-head { display: flex; align-items: center; gap: 6px; min-width: 0 }
+.lay-tab-label { max-width: 260px; min-height: 30px; font-weight: 700 }
+.place-moves { display: flex; flex-wrap: wrap; gap: 6px; align-items: center }
+.place-sizes { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px }
+@container (max-width: 520px) {
+  /* 좁은 화면: 격자를 한 열로 쌓는다. 끌기 대신 옵션의 버튼으로 옮기고 너비는 숫자로 고친다 */
+  .lay-row { grid-template-columns: minmax(0, 1fr) }
+  .lay-row > .lay-card { grid-column: auto }
+  .lay-handle, .lay-keys { display: none }
+  .lay-card { cursor: pointer }
+}
+
+/* 차트 폼·필터 폼 */
+.metric { display: grid; gap: 4px; min-width: 0 }
+.metric-sql, .pair { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 6px }
+.pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) }
+.add-row { display: flex; gap: 6px }
+.arr-text { line-height: 28px; overflow-wrap: anywhere }
+.arr-item.is-scalar .metric .input { min-height: 28px; padding-block: 2px }
+.check-list { display: grid; gap: 4px; max-height: 240px; overflow-y: auto }
+.check-list .field.check { flex-wrap: nowrap; align-items: flex-start }
+.check-list .field.check > input { margin-top: 3px }
+.check-list .field.check > label { min-width: 0; overflow-wrap: anywhere }
+.note-line { display: flex; gap: 6px; align-items: flex-start; font-size: 12.5px; background: var(--info-bg); border-radius: 8px; padding: 6px 10px }
+.note-line .icon { color: var(--info); width: 16px; height: 16px; margin-top: 1px }
+.sec-key { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.filter-list { border-top: 0; padding-top: 8px }
+
 /* 파일 놓기 */
 .dropzone.is-over, .is-over > .dropzone.big { outline: 2px dashed var(--primary); outline-offset: -2px; background: var(--primary-soft) }
 .dropzone.big { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 48px 20px; border: 2px dashed var(--line); border-radius: var(--radius); background: var(--surface) }

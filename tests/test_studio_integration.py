@@ -4,7 +4,9 @@
 (tools 컨테이너에서 돈다. ruamel.yaml이 필요 없다). 평소 pytest 실행에서는 건너뛴다.
 
 흐름: CSV 업로드 → 추론 → 프로젝트 생성 → apply → 웹앱이 그 프로젝트를 보여 줌 → 탭 이동(PATCH) → 재적용 없이 웹앱에 반영
-      → CSV 교체 check/PUT → apply. 끝나면 임시 프로젝트(projects/zz-studio-it)를 지우고 원래 프로젝트를 다시 적용한다.
+      → CSV 교체 check/PUT → apply
+      → (5b 완료 조건) 차트 추가 → 이동·너비 조절 → 필터 추가 → apply → Superset의 배치에 반영 → 차트 삭제 → apply → 사라짐.
+끝나면 임시 프로젝트(projects/zz-studio-it)를 지우고 원래 프로젝트를 다시 적용한다.
 """
 from __future__ import annotations
 
@@ -246,6 +248,138 @@ def test_csv_replace_check_put_apply(applied):
     assert studio("GET", f"/projects/{NAME}/plan").json["changed"] is False
     code, app = api("GET", "/api/app")
     assert app["project"] == NAME and app["applied"] is True
+
+
+# ---------------------------------------------------------------- 5b: 차트 추가·이동·너비 조절이 layout과 Superset에 반영된다
+
+ADDED = "it_added_chart"
+ADDED_FILTER = "f_it_added"
+
+
+def patch_config(*op_list: dict) -> Result:
+    return studio("PATCH", f"/projects/{NAME}/config", body={"ops": list(op_list)})
+
+
+def superset_dashboard(superset, dkey: str) -> tuple[dict, list[dict]]:
+    """Superset REST로 읽은 대시보드의 (position, native filter 목록)."""
+    dash_id = superset.find_id("dashboard", config.object_uuid(NAME, "dashboard", dkey))
+    assert dash_id is not None
+    result = superset.get(f"/api/v1/dashboard/{dash_id}").json()["result"]
+    position = json.loads(result["position_json"])
+    filters = json.loads(result["json_metadata"]).get("native_filter_configuration") or []
+    return position, filters
+
+
+def chart_nodes(position: dict) -> dict[str, dict]:
+    return {k: n for k, n in position.items() if isinstance(n, dict) and n.get("type") == "CHART"}
+
+
+def test_chart_add_move_resize_filter_reach_superset_and_removal_too(applied, superset):
+    body = studio("GET", f"/projects/{NAME}/config").json
+    assert "deals" in body["metrics"] and set(body["metrics"]) == set(body["dashboard"]["datasets"])
+    dashboards = body["dashboard"]["dashboards"]
+    embedded = [s["dashboard"] for t in body["dashboard"]["tabs"] for s in t["sections"] if s["type"] == "superset"]
+    dkey = next(k for k in dashboards if k in embedded and any(
+        isinstance(e, list) and all(isinstance(i, str) or "chart" in i for i in e) for e in dashboards[k]["layout"]))
+    before_text = (PROJECTS / NAME / "dashboard.yaml").read_text(encoding="utf-8")
+    chart_uuid = config.object_uuid(NAME, "chart", ADDED)
+    assert superset.find_id("chart", chart_uuid) is None
+
+    # 1. 차트 추가: charts에 들어가고 layout의 맨 아래 새 행에 놓인다
+    r = patch_config({"op": "chart.add", "dashboard": dkey, "chart": {
+        "key": ADDED, "title": "Studio가 더한 차트", "viz": "pie", "dataset": "deals",
+        "groupby": ["pipeline_step"], "metric": {"sql": "COUNT(*)", "label": "건수"}}})
+    assert r.status == 200 and r.json["written"] == {"dashboard.yaml": "exact"}, r.text
+    layout = r.json["dashboard"]["dashboards"][dkey]["layout"]
+    assert layout[-1] == [ADDED] and layout[:-1] == dashboards[dkey]["layout"]
+
+    # 2. 이동과 너비 조절: 첫 차트 행의 첫 차트 옆으로 옮기고 5칸 + 7칸으로
+    at = next(i for i, e in enumerate(layout) if isinstance(e, list) and all(isinstance(i, str) or "chart" in i for i in e))
+    row = layout[at]
+    neighbour = row[0] if isinstance(row[0], str) else row[0]["chart"]
+    rest = [i if isinstance(i, str) else i["chart"] for i in row[1:]]
+    new_layout = [*layout[:at], [{"chart": ADDED, "width": 5}, {"chart": neighbour, "width": 7}], *([rest] if rest else []),
+                  *layout[at + 1:-1]]
+    r = patch_config({"op": "layout.set", "dashboard": dkey, "layout": new_layout})
+    assert r.status == 200 and r.json["written"] == {"dashboard.yaml": "exact"}, r.text
+    assert r.json["dashboard"]["dashboards"][dkey]["layout"] == new_layout
+
+    # 3. 필터 추가(더한 차트에만 적용)
+    r = patch_config({"op": "filter.add", "dashboard": dkey, "filter": {
+        "key": ADDED_FILTER, "label": "단계", "type": "select", "dataset": "deals", "column": "pipeline_step",
+        "charts": [ADDED]}})
+    assert r.status == 200 and r.json["written"] == {"dashboard.yaml": "exact"}, r.text
+
+    # 파일: make check 통과, 다른 대시보드와 추론 주석은 그대로
+    project = config.load_project(NAME, PROJECTS)
+    assert project.dashboard["dashboards"][dkey]["layout"] == new_layout
+    after_text = (PROJECTS / NAME / "dashboard.yaml").read_text(encoding="utf-8")
+    assert after_text.count("# 추론: 확인 필요") == before_text.count("# 추론: 확인 필요")
+    assert {k: v for k, v in project.dashboard["dashboards"].items() if k != dkey} == \
+        {k: v for k, v in config.load_project(NAME, PROJECTS).dashboard["dashboards"].items() if k != dkey}
+    plan = studio("GET", f"/projects/{NAME}/plan").json
+    assert plan["changed"] is True, "차트·배치·필터는 적용해야 Superset에 반영된다"
+
+    # 4. 적용 → Superset에 차트가 생기고, 대시보드 position에 그 자리·그 너비로 놓인다
+    done, log = apply(NAME)
+    assert done["ok"] is True, (done, log[-10:])
+    chart_id = superset.find_id("chart", chart_uuid)
+    assert chart_id is not None
+    chart = superset.get(f"/api/v1/chart/{chart_id}").json()["result"]
+    assert chart["slice_name"] == "Studio가 더한 차트" and chart["viz_type"] == "pie"
+    position, filters = superset_dashboard(superset, dkey)
+    nodes = chart_nodes(position)
+    node = nodes[f"CHART-{ADDED}"]
+    assert node["meta"]["width"] == 5 and node["meta"]["chartId"] == chart_id
+    assert nodes[f"CHART-{neighbour}"]["meta"]["width"] == 7
+    parent = position[node["parents"][-1]]
+    assert parent["type"] == "ROW" and parent["children"] == [f"CHART-{ADDED}", f"CHART-{neighbour}"]
+    grid_rows = [c for c in position["GRID_ID"]["children"]]
+    assert grid_rows.index(parent["id"]) == at
+    added_filter = next(f for f in filters if f["id"] == f"NATIVE_FILTER-{ADDED_FILTER}")
+    assert added_filter["name"] == "단계" and added_filter["targets"][0]["column"]["name"] == "pipeline_step"
+    # charts: [더한 차트] → 그 밖의 차트는 필터 범위에서 빠진다
+    assert set(added_filter["scope"]["excluded"]) == {n["meta"]["chartId"] for k, n in nodes.items() if k != f"CHART-{ADDED}"}
+    assert chart_id not in added_filter["scope"]["excluded"] and len(nodes) > 1
+    assert studio("GET", f"/projects/{NAME}/plan").json["changed"] is False
+    code, app = api("GET", "/api/app")
+    assert code == 200 and app["project"] == NAME and app["applied"] is True
+
+    # 5. 차트 삭제: charts·layout·필터의 charts에서 빠진다 → 적용하면 Superset에서 사라진다
+    r = patch_config({"op": "chart.remove", "key": ADDED})
+    assert r.status == 200 and r.json["written"] == {"dashboard.yaml": "exact"}, r.text
+    got = r.json["dashboard"]["dashboards"][dkey]
+    assert ADDED not in [c["key"] for c in got["charts"]]
+    assert got["layout"][at] == [{"chart": neighbour, "width": 7}]
+    assert "charts" not in next(f for f in got["filters"] if f["key"] == ADDED_FILTER)
+    done, log = apply(NAME)
+    assert done["ok"] is True, (done, log[-10:])
+    assert superset.find_id("chart", chart_uuid) is None, "지운 차트는 prune으로 Superset에서 사라진다"
+    position, filters = superset_dashboard(superset, dkey)
+    assert f"CHART-{ADDED}" not in position
+    assert set(chart_nodes(position)) == {f"CHART-{c['key']}" for c in got["charts"]}
+
+    # 뒷정리: 필터를 지우고 layout을 처음대로 되돌린다(값이 처음과 같다)
+    r = patch_config({"op": "filter.remove", "dashboard": dkey, "key": ADDED_FILTER},
+                     {"op": "layout.set", "dashboard": dkey, "layout": dashboards[dkey]["layout"]})
+    assert r.status == 200, r.text
+    assert r.json["dashboard"]["dashboards"] == dashboards
+    done, _log = apply(NAME)
+    assert done["ok"] is True
+    position, filters = superset_dashboard(superset, dkey)
+    assert all(f["id"] != f"NATIVE_FILTER-{ADDED_FILTER}" for f in filters)
+
+
+def test_invalid_layout_is_refused_and_superset_stays(applied, superset):
+    body = studio("GET", f"/projects/{NAME}/config").json
+    dkey = next(iter(body["dashboard"]["dashboards"]))
+    before = (PROJECTS / NAME / "dashboard.yaml").read_bytes()
+    r = patch_config({"op": "layout.set", "dashboard": dkey, "layout": [["no_such_chart"]]})
+    assert (r.status, r.json["detail"]) == (422, "invalid_config") and any("no_such_chart" in e for e in r.json["errors"])
+    r = patch_config({"op": "layout.set", "dashboard": dkey, "layout": "rows"})
+    assert (r.status, r.json["detail"], r.json["op_index"]) == (400, "invalid_op", 0)
+    assert (PROJECTS / NAME / "dashboard.yaml").read_bytes() == before
+    assert studio("GET", f"/projects/{NAME}/plan").json["changed"] is False
 
 
 def test_failed_apply_reports_the_step_and_web_app_stays(applied):

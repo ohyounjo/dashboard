@@ -248,8 +248,10 @@ _test:
 	exit $$rc
 
 # 테스트 스택과 그 볼륨만 지운다(프로젝트 이름을 직접 지정하므로 개발 스택에는 닿지 않는다)
+# studio·tools는 프로필에 속해 있어서 프로필을 함께 줘야 그 컨테이너까지 지워진다. 남으면 다음 실행이 지워진
+# .test/ 폴더를 붙잡은 옛 Studio 컨테이너를 그대로 써서 적용이 실패한다.
 test-down:
-	$(COMPOSE) -p $(TEST_NAME) down -v --remove-orphans
+	$(COMPOSE) --profile studio --profile tools -p $(TEST_NAME) down -v --remove-orphans
 	rm -rf ./.test
 
 _test_run:

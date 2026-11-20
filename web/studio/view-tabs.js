@@ -184,6 +184,8 @@ export function mount(container, ctx) {
       listError = { title: S.lastSectionTitle, body: S.lastSectionRemove(t.label), errors: [] };
       ctx.announce(S.lastSectionTitle); render(); return;
     }
+    // 지우는 대상이 지금 고치는 것이 아니면, 고치던 초안을 버릴지 먼저 묻는다(삭제 뒤 초안을 서버 값으로 다시 읽으므로)
+    if (!(sel && sel.kind === "section" && sel.tab === tab && sel.index === index) && !leave()) return;
     if (!window.confirm(S.sectionRemoveConfirm(index + 1, t.label))) return;
     dirty = false;
     focusAfter = `tab:${tab}`;
@@ -196,6 +198,8 @@ export function mount(container, ctx) {
       listError = { title: S.lastTabTitle, body: S.lastTabBody, errors: [] };
       ctx.announce(S.lastTabTitle); render(); return;
     }
+    // 이 탭이나 이 탭의 섹션을 고치던 중이 아니면, 고치던 초안을 버릴지 먼저 묻는다
+    if (!(sel && ((sel.kind === "tab" && sel.key === key) || (sel.kind === "section" && sel.tab === key))) && !leave()) return;
     if (!window.confirm(S.tabRemoveConfirm(t.label, t.sections.length))) return;
     dirty = false;
     patch([{ op: "tab.remove", key }], { message: S.tabRemoved(t.label), onDone: () => { sel = null; pending = original = null; } });
