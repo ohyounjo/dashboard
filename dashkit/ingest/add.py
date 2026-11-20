@@ -197,6 +197,8 @@ def _commit(session: Session, prepared: list[_Prepared], *, force: bool, dry_run
     first = session.reject_unless_clean(allow_new_after=targets)
     order = table_order(project)
     rank = {t: i for i, t in enumerate(order)}
+    # 손으로 넣은 파일도 참조 순서(부모 테이블 먼저)로, 테이블 안에서는 번호순으로 반영한다(load와 같은 순서)
+    first = sorted(first, key=lambda f: (rank[f.table], f.number or 0))
     ordered = sorted(range(len(prepared)), key=lambda i: (rank[prepared[i].staged.table], i))
     # 이름 매기기(잠금 안). 같은 테이블에 여럿이면 번호를 이어서 준다
     names: dict[int, str] = {}

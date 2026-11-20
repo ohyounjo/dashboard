@@ -57,10 +57,15 @@ class StagedBatch:
     columns: dict[str, Any] = field(default_factory=dict)
     sha256: str | None = None                  # 정규형 내용의 해시(정규형 파일을 썼거나 입력이 정규형일 때)
     fatal: bool = False
+    skip_invalid: bool = False                 # 오류 행을 빼고 넣는다(빠진 행의 오류는 errors에 알리기만 한다)
+    duplicates: int = 0                        # 배치 안의 기본 키 중복(언제나 전체 거절)
 
     @property
     def ok(self) -> bool:
-        return not self.errors and not self.fatal
+        """반영해도 되는가. 오류 행을 빼고 넣는 경우에도 더 읽을 수 없는 오류와 배치 안의 키 중복은 전체 거절이다."""
+        if self.fatal or self.duplicates:
+            return False
+        return self.skip_invalid or not self.errors
 
 
 def default_value(spec: Mapping[str, Any]) -> Any:
@@ -106,7 +111,7 @@ def stage_batch(cur: psycopg.Cursor, intake: Intake, *, writer: CanonicalWriter 
     staged = StagedBatch(intake.table_name, list(intake.header), name, rows, intake.parser.where,
                          total=report.total, invalid=report.invalid, errors=list(report.errors),
                          error_count=report.error_count, normalized=dict(report.normalized),
-                         columns=dict(report.columns), fatal=report.fatal)
+                         columns=dict(report.columns), fatal=report.fatal, skip_invalid=skip_invalid)
     if staged.invalid and not skip_invalid:
         return staged
     _check_duplicates(cur, staged, intake)
@@ -128,6 +133,7 @@ def _check_duplicates(cur: psycopg.Cursor, staged: StagedBatch, intake: Intake) 
         for at in ats[1:]:
             staged.error_count += 1
             staged.invalid += 1
+            staged.duplicates += 1
             if len(staged.errors) < MAX_REPORTED:
                 staged.errors.append(f"{staged.where(at, ','.join(pk))}: 기본 키 중복 ({shown}, 처음 나온 {first_word} {first})")
 

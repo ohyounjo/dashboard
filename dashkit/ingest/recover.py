@@ -126,6 +126,8 @@ def _apply_group(project: Project, conn: psycopg.Connection, files: list[Mapping
     rank = {t: i for i, t in enumerate(order)}
     items = sorted(files, key=lambda f: rank[f["table"]])
     errors: list[str] = []
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        conn.commit()          # 앞의 조회가 연 트랜잭션을 끝낸다. 아래 블록이 저장점이 아니라 진짜 트랜잭션이 되게
     try:
         with conn.transaction():
             with conn.cursor() as cur:
@@ -146,6 +148,13 @@ def _apply_group(project: Project, conn: psycopg.Connection, files: list[Mapping
         return exc.errors or [exc.message]
     except psycopg.Error as exc:
         return [f"DB 오류: {pg_message(exc)}"]
+    # 반영이 실제로 커밋됐는지 새 조회로 확인한다(묶음 기록은 그 뒤에만 지운다)
+    with conn.cursor() as cur:
+        recorded = ledger.read(cur, {f["table"] for f in files})
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        conn.commit()
+    if not all(f["name"] in recorded.get(f["table"], {}) for f in files):
+        return ["반영을 커밋하지 못함"]
     return errors
 
 

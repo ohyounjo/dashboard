@@ -494,3 +494,58 @@ def test_inspect_cannot_read_auth_tables():
     with db.inspect_conn() as conn:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("SELECT * FROM dashkit_auth.users").fetchall()
+
+
+# ---------------------------------------------------------------- 리뷰 지적 회귀(PR 24)
+
+def test_recovery_commits_even_when_the_connection_has_an_open_transaction(tmp_path, scratch_db, fault):
+    """복구의 반영은 저장점이 아니라 진짜 커밋이어야 한다(그 뒤 접속을 되돌려도 행과 배치 기록이 남는다)."""
+    from dashkit.ingest import recover
+
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    fault("before_commit", operation.SimulatedCrash())
+    with pytest.raises(operation.SimulatedCrash):
+        add(root, scratch_db, "entries", [{"id": "E87"}])
+    operation.FAULTS.clear()
+    conn = db.owner_conn(scratch_db)
+    try:
+        locks.acquire(conn, 0)
+        conn.execute("SELECT 1")                 # 열린 트랜잭션
+        outcomes = recover.recover(load_project("ledger", root), conn, mode="online")
+        assert [o.result for o in outcomes] == ["applied"]
+        conn.rollback()
+    finally:
+        conn.close()
+    assert "E87" in {x[0] for x in rows(scratch_db, "entries")}
+    assert any(f.startswith("000011-") for _t, f, _h, _n in ledger_rows(scratch_db))
+    rebuilt_equals_current(root, scratch_db)
+
+
+def test_skip_invalid_inserts_good_rows_but_not_duplicates(tmp_path, scratch_db):
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    r = add(root, scratch_db, "entries", [{"id": "E88", "amount": "1"}, {"id": "E89", "amount": "x"}],
+            skip_invalid=True)
+    b = r["batches"][0]
+    assert b["rows"]["inserted"] == 1 and b["rows"]["invalid"] == 1 and b["errors"] == ["rows[1].amount: 숫자가 아님 'x'"]
+    assert "E88" in {x[0] for x in rows(scratch_db, "entries")} and "E89" not in {x[0] for x in rows(scratch_db, "entries")}
+    expect_error("invalid_rows", add, root, scratch_db, "entries", [{"id": "E90"}, {"id": "E90"}], skip_invalid=True)
+    rebuilt_equals_current(root, scratch_db)
+
+
+def test_hand_placed_files_are_applied_parents_first(tmp_path, scratch_db):
+    """자식 테이블이 부모보다 먼저 선언돼 있어도 손으로 넣은 파일은 참조 순서로 반영한다(load와 같다)."""
+    def child_first(doc):
+        t = doc["tables"]
+        doc["tables"] = {"events": t["events"], **{k: v for k, v in t.items() if k != "events"}}
+    root = make_project(tmp_path, edit=child_first)
+    load(load_project("ledger", root), dbname=scratch_db)
+    data = root / "ledger" / "data"
+    (data / "entries" / "000050-hand.csv").write_text("id\nE91\n", encoding="utf-8")
+    (data / "events" / "000050-hand.csv").write_text("id,entry_id\n91,E91\n", encoding="utf-8")
+    r = ingest("ledger", [Item("events", {"kind": "rows", "rows": [{"id": 92, "entry_id": "E1"}]}),
+                          Item("entries", {"kind": "rows", "rows": [{"id": "E92"}]})],
+               projects_dir=root, dbname=scratch_db)
+    assert [f["table"] for f in r["applied_first"]] == ["entries", "events"]
+    rebuilt_equals_current(root, scratch_db)
