@@ -29,7 +29,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 
 ## 요청 보호
 
-- `dashkit/auth/guard.py`를 그대로 쓴다: 상태를 바꾸는 요청은 `Origin`이 웹앱 출처여야 하고(`Sec-Fetch-Site: cross-site` 거절), 본문은 `application/json`이다. 업로드 경로(`…/tables/{t}/batches`, `/batches`, `…/tables/infer`)만 `multipart/form-data`도 받는다(그 경로를 더하는 단계에서 이 표에 적는다).
+- `dashkit/auth/guard.py`를 그대로 쓴다: 상태를 바꾸는 요청은 `Origin`이 웹앱 출처여야 하고(`Sec-Fetch-Site: cross-site` 거절), 본문은 `application/json`이다. 업로드 경로(`POST /tables/{t}/batches`, `POST /batches`, `POST /tables/infer`)만 `multipart/form-data`도 받는다(출처 검사는 같다). 업로드 규칙(파일 이름 `<이름>.csv`, 경로 문자 금지)은 [studio.md](studio.md)와 같고, 올린 파일의 이름은 경로로 쓰지 않는다.
 - 응답은 모두 `Cache-Control: no-store`, 오류는 `{"detail", "message"}`(+ `errors` 등)로 [api.md](api.md)와 같다.
 - 경로 값(`{table}`·`{dataset}`·`{file}`)은 현재 프로젝트의 설정과 폴더 목록에 대조한 뒤에만 쓴다. 사용자 입력이 들어가는 SQL은 전부 매개변수 바인딩이고 식별자는 목록과 대조한 뒤 `psycopg.sql.Identifier`로만 넣는다.
 - 로그·오류 응답·감사 로그에 비밀값과 데이터 값을 싣지 않는다.
@@ -40,8 +40,37 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 |---|---|---|
 | `GET /health` | 불필요 | `{"status": "ok"}` |
 | `GET /config` | 운용자 | `{"project", "role", "limits"}`. 운용 화면이 데이터 메뉴를 그리는 데 쓴다 |
+| `GET /tables` | 운용자 | `{"items", "total", "project"}`. 항목 `{name, mode, on_conflict, description, rows, batches, compact_hint, last_batch: {file, added_at, actor_email} \| null}`. `rows`는 배치 기록의 `inserted` 합(적용한 적이 없으면 `null`), `batches`는 배치 폴더의 파일 수, `compact_hint`는 그 수가 `INGEST_COMPACT_HINT`를 넘는지 |
+| `GET /tables/{t}` | 운용자 | 입력 폼을 만드는 정의: `{name, mode, on_conflict, description, primary_key, columns: [{name, type, required, primary_key, label, values?, ref?, min?, max?, pattern?, description?, default?, aliases?}], checks: [이름], datasets: [그 테이블을 그대로 보는 데이터셋]}`. `label`은 그 테이블을 보는 `table:` 데이터셋의 `labels` |
+| `POST /tables/{t}/batches` | 운용자 | **데이터 더하기**([ingest.md](ingest.md) "더하기"). 아래 "데이터 더하기" |
+| `GET /tables/{t}/batches?removed=1` | 운용자 | 배치 이력, 최근 것부터: `{"items", "total"}`. 항목 `{file, removed, first, added_at, recorded, rows, inserted, updated, skipped, unchanged, actor_email, method, source_name, mine}`. 누가·방법·원래 파일 이름은 감사 로그(`data.batch.create`)에서 온다. `mine`은 요청한 사람이 더한 배치인지. `removed=1`이면 `_removed/`의 배치도 싣는다 |
+| `GET /tables/{t}/batches/{file}` | 운용자 | 배치 파일 내려받기(정규형 그대로, `.csv.gz`는 `application/gzip`) |
+| `DELETE /tables/{t}/batches/{file}` | admin, 또는 그 배치를 더한 operator | 되돌리기. 빠른 길(방금 추가 취소)이면 200 `{"ok", "fast": true, "table", "file", "rows"}`, 아니면 202 작업(다시 만들기) |
+| `POST /tables/{t}/batches/{file}/restore` | admin, 또는 그 배치를 더한 operator | `_removed/`의 배치 되살리기 → 202 작업 |
+| `GET /jobs`, `GET /jobs/{id}` | 운용자 | 작업 목록(최근 것부터, 로그 없이), 작업 하나(아래 "작업") |
 
-경로는 `dashkit/manage/routes/`의 모듈 하나씩이다. 경로를 더하는 일은 모듈 하나와 `routes/__init__.py`의 목록 한 줄이다. 설계서 11절의 나머지 경로는 그 단계에서 이 표에 더한다.
+경로는 `dashkit/manage/routes/`의 모듈 하나씩이다. 경로를 더하는 일은 모듈 하나와 `routes/__init__.py`의 목록 한 줄이다.
+
+### 데이터 더하기 (`POST /tables/{t}/batches`)
+
+| 본문 | 응답 |
+|---|---|
+| JSON `{"rows": [{…}], "method"?: "form" \| "paste", "dry_run"?, "columns"?, "force"?, "skip_invalid"?}` | 200 결과([ingest.md](ingest.md) "결과"). 행은 `INGEST_INLINE_MAX_ROWS`까지(넘으면 413 `too_many_rows`: 파일로 안내) |
+| multipart `file`(`<이름>.csv`) + 글 부분 `dry_run`·`force`·`skip_invalid`·`strict`(`1`/`true`)·`columns`(JSON 글) | 202 `{"job"}`. 파일은 디스크의 임시 파일로 받는다(파일 하나 `INGEST_MAX_UPLOAD_MB`, 요청 하나 `INGEST_MAX_REQUEST_MB`, 넘으면 413 `upload_too_large`, 행이 `INGEST_MAX_ROWS`를 넘으면 작업이 413 `too_many_rows`). 미리보기(`dry_run`)면 작업 결과에 `upload_id`가 있다 |
+| JSON `{"upload_id", "columns"?, "force"?, "skip_invalid"?}` | 202 `{"job"}`. 미리보기한 파일을 다시 올리지 않고 넣는다. 같은 테이블·같은 사람의 1시간 안의 미리보기만(아니면 410 `upload_expired`). 넣기에 성공하면 그 업로드는 풀리고, 실패하면 1시간 안에는 같은 `upload_id`로 다시 넣을 수 있다. 실패한 미리보기의 파일은 잡아 두지 않는다 |
+
+- 대상이 `replace` 테이블이면 409 `not_append`. 그 밖의 오류 코드는 [ingest.md](ingest.md)와 같다(422 `invalid_rows`·`unknown_columns`·`key_conflict`·`check_failed`, 409 `duplicate_file`·`rebuild_required`·`project_mismatch`·`stale_config`·`apply_running`).
+- 감사 로그: 넣으면 `data.batch.create`(`detail`: `project`, `table`, `file`, `sha256`, `rows`, `method`(`form`·`paste`·`upload`), `source_name`(올린 파일 이름)), 실패하면 `data.batch.failed`(`detail_code`). 미리보기는 남기지 않는다. 데이터 값은 싣지 않는다.
+
+### 되돌리기와 되살리기
+
+- 감사 로그: `data.batch.remove`(`fast`), `data.batch.restore`.
+- operator가 남의 배치(또는 누가 더했는지 기록이 없는 배치)를 되돌리거나 되살리면 403 `forbidden`.
+- 형식과 동작(빠른 길의 조건, 다시 만들기, 끊김 복구)은 [ingest.md](ingest.md) "되돌리기와 되살리기".
+
+### 작업
+
+`{"id", "kind": "ingest" | "remove" | "restore", "table", "status": "running" | "succeeded" | "failed", "started_at", "finished_at", "actor", "progress": {"step", …}, "log": [줄], "result": {…} | null, "error": {"status", "detail", "message", "errors"?} | null}`. 화면을 떠나도 작업은 끝까지 간다. 작업은 관리 서비스 프로세스의 메모리에 있어(최근 100개) 다시 뜨면 없어진다(404 `unknown_job`). 적재가 어디까지 갔는지는 묶음 기록의 복구가 정하고, 끝난 작업의 요약은 감사 로그에 있다.
 
 ## 한도
 

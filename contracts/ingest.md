@@ -133,7 +133,7 @@ projects/<프로젝트>/data/
 
 ## 더하기
 
-`dashkit.ingest.ingest(project, items, *, dry_run, force, strict, skip_invalid)`. 한 행도 배치이고 여러 항목은 한 트랜잭션이다(참조 순서대로 넣고, 하나라도 실패하면 아무것도 들어가지 않는다).
+`dashkit.ingest.ingest(project, items, *, dry_run, force, strict, skip_invalid, max_rows)`. 관리 서비스([manage.md](manage.md))와 CLI(`make ingest TABLE=<테이블> FILE=<CSV> [DRY_RUN=1] [SKIP_INVALID=1] [FORCE=1]` = `python -m dashkit ingest --table … --file …`. 감사 로그에 `method: cli`로 남는다)가 부른다. 한 행도 배치이고 여러 항목은 한 트랜잭션이다(참조 순서대로 넣고, 하나라도 실패하면 아무것도 들어가지 않는다).
 
 - 대상이 `replace` 테이블이면 409 `not_append`, 없는 테이블이면 404 `unknown_table`.
 - **같은 내용 다시 올리기:** 그 테이블에 같은 내용 해시의 배치가 있으면(같은 요청 안의 두 항목도) 409 `duplicate_file`, `duplicates: [{"table", "file"}]`. `force`면 진행한다. 견주는 일은 잠금 안에서 한다(동시에 두 번 보내도 뒤의 것이 거절된다).
@@ -155,6 +155,16 @@ projects/<프로젝트>/data/
 ```
 
 `changes`는 `update` 정책에서 바뀐 행의 전후 값(바뀐 열만, 앞 20개)이다. `applied_first`·`recovered`는 해당할 때만 있다.
+
+## 되돌리기와 되살리기
+
+`dashkit/ingest/remove.py`의 `remove_batch`·`restore_batch`. 공통 순서 위에서 돈다(데이터 설정 지문 확인 포함).
+
+- **되돌리기 = 그 배치 파일을 빼고 다시 만들기.** 결과는 "그 파일이 처음부터 없었을 때"와 같다. 파일은 `data/<테이블>/_removed/`로 간다. 폴더 안의 배치는 어느 것이든 뺄 수 있다. 첫 배치 `data/<테이블>.csv`는 빼지 않는다(404 `unknown_batch`).
+- **방금 추가 취소(빠른 길):** 아래가 모두 참이면 다시 만들지 않고 그 배치 파일에 있는 키의 행만 지운다. ① 폴더에서 가장 큰 번호의 배치 ② 배치 기록의 `inserted`가 `rows`와 같다(`updated`·`skipped`·`unchanged`가 하나라도 있으면 아니다. 같은 값으로 다시 보낸 기존 행을 지우지 않으려고) ③ 파일의 내용 해시가 기록과 같다 ④ 대조가 깨끗하다. 같은 트랜잭션에서 `checks`를 돌리고, 다른 테이블의 행이 그 행을 참조하거나 규칙을 어기면 DB도 파일도 그대로 두고 422 `check_failed`. 아니면 다시 만드는 길로 간다.
+- **다시 만드는 길:** 그 파일을 뺀 채로(되살리기는 `_removed/`의 파일을 번호순 자리에 넣은 채로) 트랜잭션 안에서 다시 만든다(로더와 같은 함수 `rebuild_locked`). 실패하면(참조가 깨지는 등) 파일을 건드리지 않고 422(`check_failed`·`invalid_rows`)와 이유.
+- 순서: DB 작업과 `checks` → 묶음 기록(종류 `remove`·`restore`: `{"id", "kind", "project", "table", "name", "fast", "loaded_at"}`) → 파일 옮기기 → (빠른 길은 배치 기록에서 그 줄을 지움) → 커밋 → 묶음 기록 지우기.
+- 복구: 커밋 여부를 판정해 파일을 그 결과에 맞는 자리에 둔다(커밋됐으면 `remove`는 `_removed/`, `restore`는 폴더. 아니면 반대). 빠른 길(`fast: true`)은 **배치 기록**(그 줄이 지워졌는지)으로, 다시 만드는 길은 **적재 스냅샷의 `loaded_at`**(작업 전 값을 기록에 적는다. 다시 만들면 바뀐다)으로 판정한다. 반영되지 않은 손 파일을 빼는 경우에도 배치 기록만으로는 판정할 수 없어서다. load 방식은 기록만 지운다(파일이 놓인 자리대로 다시 만든다). 설계서 5-6은 "옮긴 뒤 다시 만들기"였지만, DB 작업을 먼저 하고 옮기기를 커밋 직전에 하므로 끊기면 언제나 옮기기 전이나 커밋 뒤의 상태로 맞춰진다.
 
 ## 묶음 기록과 끊김 복구
 

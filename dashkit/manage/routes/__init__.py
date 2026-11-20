@@ -4,6 +4,6 @@
 """
 from __future__ import annotations
 
-from . import base
+from . import base, jobs, tables
 
-MODULES = [base]
+MODULES = [base, tables, jobs]

@@ -9,6 +9,7 @@ Studio(dashkit/studio)와 관리 서비스(dashkit/manage), CLI가 같은 로직
 - yamledit.py  YAML을 고친 곳만 다시 쓰기
 - roundtrip.py yamledit이 다룰 수 없는 파일을 ruamel.yaml round-trip으로 쓰기(이 모듈만 ruamel을 import한다)
 - jobs.py      apply(check → load → sync) 실행과 진행 로그
+- runs.py      관리 서비스의 작업(여러 개, 진행률·로그·결과)
 - upload.py    multipart 업로드 읽기(크기 한도, 파일 이름 검사)
 - locks.py     데이터 DB의 쓰기 잠금(세션 단위 advisory lock, 설계서 10-3)
 """

@@ -5,7 +5,7 @@
 //   key    메뉴 링크의 주소(#key)와 data-key
 //   label  메뉴 이름(document.title에도 쓴다)
 //   match  # 뒤(앞의 #는 뺀다)가 이 메뉴의 화면인지 고르는 정규식(상세 화면 주소도 포함)
-//   when   있으면 true일 때만 메뉴에 보인다(셸이 /api/auth/config를 읽은 뒤에 부른다)
+//   when   있으면 true일 때만 메뉴에 보인다(셸이 /api/auth/config와 /api/manage/config를 읽은 뒤에 부른다)
 //   render 주소가 바뀔 때마다 부른다. #view를 채운다
 // 메뉴를 더하려면 파일 하나를 만들고 아래 MENUS에 한 줄을 더한다. 맞는 메뉴가 없는 주소는 첫 메뉴가 받는다.
 import S from "../strings.js";
@@ -15,10 +15,11 @@ import { T, $, view, session, ApiFail, leave, errorText, message } from "./kit.j
 import users from "./menus/users.js";
 import groups from "./menus/groups.js";
 import stats from "./menus/stats.js";
+import tables from "./menus/tables.js";
 import audit from "./menus/audit.js";
 import outbox from "./menus/outbox.js";
 
-const MENUS = [users, groups, stats, audit, outbox];
+const MENUS = [users, groups, tables, stats, audit, outbox];
 const menus = () => MENUS.filter((m) => !m.when || m.when());
 
 function route() {
@@ -40,10 +41,16 @@ async function boot() {
   $("title").textContent = T.title;
   $("back").replaceChildren(icon("home"), T.back);
   $("nav").setAttribute("aria-label", T.title);
-  try {
-    const res = await fetch("/api/auth/config", { cache: "no-store", headers: { Accept: "application/json" } });
-    if (res.ok) session.mailMode = (await res.json()).mail_mode || session.mailMode;
-  } catch (e) { /* 기본값 */ }
+  const readJson = async (path) => {
+    try {
+      const res = await fetch(path, { cache: "no-store", headers: { Accept: "application/json" } });
+      return res.ok ? await res.json() : null;
+    } catch (e) { return null; }
+  };
+  // 관리 서비스가 떠 있지 않으면(nginx 502, 404, 연결 실패) null이고 데이터 메뉴를 숨긴다
+  const [authConfig, manageConfig] = await Promise.all([readJson("/api/auth/config"), readJson("/api/manage/config")]);
+  if (authConfig && authConfig.mail_mode) session.mailMode = authConfig.mail_mode;
+  session.manage = manageConfig && typeof manageConfig === "object" && manageConfig.limits ? manageConfig : null;
   if (session.mailMode === "test") { $("banner").textContent = S.auth.mailTestBanner; $("banner").hidden = false; }
   $("nav").replaceChildren(...menus().map((m) => h("a", { href: `#${m.key}`, "data-key": m.key, text: m.label })));
   view().replaceChildren(h("div", { class: "sk-note", text: T.loading }));

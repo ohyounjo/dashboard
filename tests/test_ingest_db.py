@@ -656,3 +656,14 @@ def test_plan_reports_a_changed_conflict_policy(tmp_path, scratch_db, monkeypatc
     schema.write_text(schema.read_text(encoding="utf-8").replace("on_conflict: update", "on_conflict: skip"), encoding="utf-8")
     e = entries()
     assert e["status"] == "changed" and e["rules_changed"] and e["batches"] == {"added": [], "removed": [], "changed": []}
+
+
+def test_crash_then_restart_applies_the_batch(tmp_path, scratch_db, fault):
+    """확정 도중(파일을 다 옮기고 커밋 전)에 죽인 뒤 관리 서비스가 다시 뜨면 그 배치가 반영된다(2a 완료 조건)."""
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    _crash_before_commit(root, scratch_db, fault, "E130")
+    outcomes = operation.recover_on_start(load_project("ledger", root), dbname=scratch_db)
+    assert [o.result for o in outcomes] == ["applied"]
+    assert "E130" in {x[0] for x in rows(scratch_db, "entries")} and leftovers(root) == []
+    rebuilt_equals_current(root, scratch_db)

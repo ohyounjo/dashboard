@@ -1,4 +1,4 @@
-"""python -m dashkit {check|plan|load|sync|migrate|api|gen|new|studio|manage|auth}
+"""python -m dashkit {check|plan|load|sync|migrate|api|gen|new|studio|manage|ingest|auth}
 
 `new <이름> --from <CSV 폴더>`는 CSV에서 프로젝트 초안을 만든다(PROJECT를 쓰지 않는다).
 `auth {init|create-admin}`은 인증 DB를 다룬다(dashkit/auth/cli.py, PROJECT를 쓰지 않는다).
@@ -155,6 +155,51 @@ def cmd_studio(args) -> int:
     return 0
 
 
+def cmd_ingest(args) -> int:
+    """CSV 파일 하나를 누적 테이블에 더한다(contracts/ingest.md "더하기"). 관리 서비스의 파일 적재와 같은 함수다."""
+    import json
+    from pathlib import Path
+
+    from .ingest import IngestError, Item, ingest
+
+    name = os.environ.get("PROJECT", "")
+    path = Path(args.file)
+    if not path.is_file():
+        return _fail("ingest 실패", [f"파일이 없음: {args.file}"])
+    try:
+        result = ingest(name, [Item(args.table, {"kind": "csv", "path": path, "name": path.name})],
+                        dry_run=args.dry_run, force=args.force, skip_invalid=args.skip_invalid)
+    except IngestError as exc:
+        extra = [json.dumps(exc.extra, ensure_ascii=False, default=str)] if exc.extra and not exc.errors else []
+        return _fail(f"ingest 실패({exc.detail}): {exc.message}", (exc.errors or []) + extra)
+    b = result["batches"][0]
+    rows = b["rows"]
+    _audit_cli(name, b, path.name, args.dry_run)
+    head = "미리보기(바꾸지 않음)" if args.dry_run else f"{args.table}/{b['file']}"
+    print(f"✔ ingest: {head}  +{rows.get('inserted', 0)} ~{rows.get('updated', 0)} "
+          f"건너뜀 {rows.get('skipped', 0)} 같음 {rows.get('unchanged', 0)} 오류 {rows.get('invalid', 0)}"
+          f" (읽은 행 {rows['total']})")
+    for e in b["errors"]:
+        print(f"  {e}", file=sys.stderr)
+    return 0 if result["ok"] else 1
+
+
+def _audit_cli(project: str, batch: dict, source_name: str, dry_run: bool) -> None:
+    """CLI 적재도 감사 로그에 남긴다(method cli, 사람 없음). 인증 DB에 닿지 못하면 건너뛴다."""
+    if dry_run:
+        return
+    try:
+        from .auth import store as auth_store
+
+        auth_store.record_audit("data.batch.create", target_type="table", target_id=batch["table"],
+                                target_label=batch["table"],
+                                detail={"project": project, "table": batch["table"], "file": batch["file"],
+                                        "sha256": batch["sha256"], "rows": batch["rows"], "method": "cli",
+                                        "source_name": source_name})
+    except Exception:
+        pass
+
+
 def cmd_manage(args) -> int:
     """관리 서비스(contracts/manage.md). 로그인한 운용자만 쓴다. 포트는 밖에 열지 않는다(nginx의 /api/manage/로만)."""
     import uvicorn
@@ -191,6 +236,13 @@ def main(argv: list[str] | None = None) -> int:
     studio.add_argument("--host", default="0.0.0.0")
     studio.add_argument("--port", type=int, default=8090)
     studio.set_defaults(fn=cmd_studio)
+    ing = sub.add_parser("ingest", help="CSV 파일 하나를 누적(append) 테이블에 더한다")
+    ing.add_argument("--table", required=True)
+    ing.add_argument("--file", required=True, help="CSV 파일(UTF-8 또는 CP949, 쉼표·탭·세미콜론)")
+    ing.add_argument("--dry-run", action="store_true", help="미리보기: 반영해 보고 되돌린다")
+    ing.add_argument("--force", action="store_true", help="같은 내용의 배치가 있어도 넣는다")
+    ing.add_argument("--skip-invalid", action="store_true", help="검증 오류가 난 행을 빼고 넣는다")
+    ing.set_defaults(fn=cmd_ingest)
     manage = sub.add_parser("manage", help="관리 서비스(운용자의 데이터 운용 API, /api/manage)")
     manage.add_argument("--host", default="0.0.0.0")
     manage.add_argument("--port", type=int, default=8100)
