@@ -63,3 +63,12 @@ def test_guard_uses_the_project_name_compose_resolves():
     order = [dev.index("$(COMPOSE_PROJECT_NAME)"), dev.index("COMPOSE_PROJECT_NAME,.env)"),
              dev.index("COMPOSE_PROJECT_NAME,.env.example)"), dev.index("basename")]
     assert order == sorted(order), dev
+
+
+def test_guard_compares_the_compose_file_path_exactly():
+    """스택의 주인은 compose 파일 경로 전체로 판정한다. 폴더 접두사로 보면 하위 worktree의 스택을 내 것으로 본다(리뷰 지적 회귀)."""
+    guard = MAKEFILE[MAKEFILE.index("\n_guard_project:\n"):]
+    guard = guard[:guard.index("\n\n")]
+    assert '"$(realpath docker-compose.yml)"' in guard, "이 폴더의 compose 파일과 정확히 비교해야 함"
+    assert '"$(CURDIR)"/*' not in guard, "폴더 접두사 비교가 남아 있음"
+    assert "%%,*" in guard, "compose 파일이 여러 개일 때 첫 파일로 판정해야 함"

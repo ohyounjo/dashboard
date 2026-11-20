@@ -150,13 +150,17 @@ define wait_healthy
 	done
 endef
 
-# GUARDED 목표들이 맨 먼저 거치는 확인(위 "GUARDED" 참고)
+# GUARDED 목표들이 맨 먼저 거치는 확인(위 "GUARDED" 참고).
+# 스택의 주인은 그 스택을 띄운 compose 파일의 경로로 판정한다. 이 폴더의 docker-compose.yml과 정확히 같을 때만 내 것이다
+# (폴더 경로로 시작하는지만 보면, 이 폴더 아래에 둔 다른 worktree의 스택까지 내 것으로 잘못 본다).
 _guard_project:
 	@name=$$($(COMPOSE) config 2>/dev/null | sed -n 's/^name: //p' | head -1); \
 	[ -n "$$name" ] || name="$(DEV_NAME)"; \
 	owner=$$(docker compose ls -a --format json 2>/dev/null | tr '{' '\n' | grep "\"Name\":\"$$name\"" | sed 's/.*"ConfigFiles":"//; s/".*//'); \
-	case "$$owner" in \
-	  ""|"$(CURDIR)"/*) ;; \
+	first=$${owner%%,*}; \
+	[ -z "$$first" ] || first=$$(readlink -f "$$first" 2>/dev/null || echo "$$first"); \
+	case "$$first" in \
+	  ""|"$(realpath docker-compose.yml)") ;; \
 	  *) echo "✖ compose 프로젝트 '$$name'은 다른 폴더의 스택입니다: $$owner"; \
 	     echo "  이 폴더에서 따로 띄우려면 이름과 포트를 주세요: COMPOSE_PROJECT_NAME=<이름> WEB_PORT=<포트> SUPERSET_PORT=<포트> make up"; \
 	     exit 1;; \
