@@ -167,6 +167,6 @@
 
 | 파일 | 내용 |
 |---|---|
-| `web/login.html` + `web/auth.js` + `web/auth.css` | 이메일, 비밀번호, 로그인 버튼. 실패·정지·미인증·잠금 안내. 성공하면 `?next=`(같은 출처의 경로만. 아니면 `/`)로 간다. `?reason=expired`면 "로그인이 만료되었습니다", `?reason=logout`이면 "로그아웃했습니다" |
+| `web/login.html` + `web/auth.js` + `web/auth.css` | 이메일, 비밀번호, 로그인 버튼. 실패·정지·미인증·잠금 안내. 성공하면 `?next=`로 간다. `next`는 브라우저와 같은 URL 파서(`new URL(next, 지금 출처)`)로 읽어 출처가 지금 출처와 같을 때만 그 경로·쿼리·해시를 쓰고, 아니면(다른 출처, 탭·줄바꿈·역슬래시를 섞은 우회, 로그인 전 화면) `/`로 간다(`web/common.js`의 `safeNext`, 테스트 `tests/js/`). `?reason=expired`면 "로그인이 만료되었습니다", `?reason=logout`이면 "로그아웃했습니다" |
 | `web/index.html`(웹앱 셸) | `/api/app`이 401이면 `/login.html?next=<지금 주소>`로 보낸다. 섹션의 guest token·데이터 요청이 401이면 `?reason=expired`를 붙여 보낸다. 레일 아래(테마 버튼 위)에 사용자 메뉴: 이메일, 등급, 로그아웃 |
 | `web/common.js` | 셸과 로그인 화면이 함께 쓰는 도우미(요소 생성, `next` 검사, JSON POST) |

@@ -29,6 +29,8 @@ TEST_ENV := COMPOSE_PROJECT_NAME=$(TEST_NAME) \
 # 단위 테스트는 compose 없이 tools 이미지만으로 돈다(.env도 필요 없다)
 APP_IMAGE := dashkit-app:local
 STUDIO_IMAGE := dashkit-studio:local
+# 웹앱 JS의 순수 함수 테스트(tests/js/, node --test). 호스트에 node가 없어도 된다
+NODE_IMAGE := node:22.21.1-alpine3.22
 # Studio가 projects/에 쓰는 파일이 호스트 사용자 소유가 되게 한다(compose의 studio.user)
 export HOST_UID HOST_GID
 # Studio 포트: 환경 > .env > .env.example
@@ -48,7 +50,7 @@ help:
 	@echo "make new NAME=<이름> FROM=<CSV 폴더>   CSV에서 프로젝트 초안 생성"
 	@echo "make migrate [CHECK=1]   설정 파일을 최신 설정 버전으로"
 	@echo "make studio / make studio-down   구성 화면(http://localhost:8090, 127.0.0.1 전용)"
-	@echo "make test-unit  단위 테스트(스택 불필요: 설정 검증, 번들 스냅샷, CSV 검증, 도메인 단어)"
+	@echo "make test-unit  단위 테스트(스택 불필요: 설정 검증, 번들 스냅샷, CSV 검증, 도메인 단어, 웹앱 JS)"
 	@echo "make test    통합 테스트(별도 테스트 스택을 띄우고 끝나면 내림. KEEP=1이면 남김)"
 	@echo "make golden  번들 스냅샷(tests/golden/) 갱신"
 	@echo "make gen     레지스트리에서 계약 문서의 생성 구간 갱신"
@@ -195,6 +197,8 @@ studio-image:
 # Studio 테스트(tests/test_studio*.py)는 ruamel.yaml이 있는 studio 이미지에서 따로 돈다. app 이미지에서는 그 파일들을 빼고 돈다.
 test-unit: unit-image studio-image
 	$(UNIT_RUN) python -m pytest -q -p no:cacheprovider -m "not integration" --ignore-glob='tests/test_studio*.py' tests/
+	@echo "== 웹앱 JS 테스트(node)"
+	docker run --rm --user $(HOST_UID):$(HOST_GID) -v "$(CURDIR)":/app -w /app $(NODE_IMAGE) sh -c 'node --test tests/js/*.test.mjs'
 	@if ls tests/test_studio*.py > /dev/null 2>&1; then \
 	  echo "== Studio 테스트(studio 이미지)"; \
 	  docker run --rm --user $(HOST_UID):$(HOST_GID) -v "$(CURDIR)":/app -w /app $(STUDIO_IMAGE) \

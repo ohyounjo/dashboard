@@ -27,17 +27,24 @@ export function applySavedTheme() {
   } catch (e) { /* 저장소 사용 불가 */ }
 }
 
-/** 같은 출처의 경로만 돌아갈 곳으로 받는다(다른 사이트로 보내는 열린 리디렉션 방지). */
-export function safeNext(raw) {
-  if (typeof raw !== "string" || !raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\")) return "/";
-  if (/^\/(login|signup|forgot|reset|verify)\.html/.test(raw)) return "/";
-  return raw;
+/** 같은 출처의 경로만 돌아갈 곳으로 받는다(다른 사이트로 보내는 열린 리디렉션 방지).
+ *  문자열 접두사가 아니라 브라우저와 같은 URL 파서로 읽은 결과의 출처를 본다(탭·줄바꿈·역슬래시를 섞은 `/\t/evil` 같은 우회).
+ *  돌려주는 값은 검증한 URL의 경로·쿼리·해시뿐이다. origin은 테스트용(기본: 지금 출처). */
+export function safeNext(raw, origin = location.origin) {
+  if (typeof raw !== "string" || !raw) return "/";
+  let url;
+  try { url = new URL(raw, origin); } catch (e) { return "/"; }
+  if (url.origin !== origin || (url.protocol !== "http:" && url.protocol !== "https:")) return "/";
+  const out = url.pathname + url.search + url.hash;
+  if (!out.startsWith("/") || out.startsWith("//")) return "/";
+  if (/^\/(login|signup|forgot|reset|verify)\.html$/.test(url.pathname)) return "/";
+  return out;
 }
 
 /** 로그인 화면 주소. next는 로그인한 뒤 돌아올 경로. */
 export function loginUrl(next, reason) {
   const q = new URLSearchParams();
-  const n = safeNext(next);
+  const n = safeNext(next, location.origin);
   if (n !== "/") q.set("next", n);
   if (reason) q.set("reason", reason);
   const qs = q.toString();
