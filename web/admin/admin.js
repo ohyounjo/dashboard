@@ -265,21 +265,45 @@ async function groupView(id) {
     h("div", { class: "a-grid" }, h("div", { class: "a-col" }, tabsForm, staleCard), membersCard));
 }
 
+/* ---------------- 테스트 메일함 ---------------- */
+
+function outboxView() {
+  const table = pagedTable({
+    defaultSort: "-created_at",
+    empty: T.outboxEmpty,
+    // 서버가 최근 순으로 준다(정렬 열 없음)
+    load: (st) => api("GET", `/api/admin/outbox?page=${st.page}&size=${st.size}`),
+    columns: [
+      { key: "to_email", label: T.outboxTo, render: (m) => h("span", {}, m.to_email, " ", h("small", { class: "a-key", text: S.roleLabel[m.role] || m.role })) },
+      { key: "kind", label: T.outboxKind, render: (m) => T.mailKind[m.kind] || m.kind },
+      { key: "created_at", label: T.outboxAt, render: (m) => h("span", { class: "num", text: T.fmtDateTime(m.created_at) }) },
+      { key: "link", label: T.outboxLink, render: (m) => (m.link ? h("a", { class: "a-link", href: m.link, target: "_blank", rel: "noopener noreferrer" }, T.openLink) : "—") },
+    ],
+  });
+  view().replaceChildren(head(T.outboxTitle, T.outboxIntro, h("button", { type: "button", class: "btn", onclick: () => table.draw() }, icon("refresh"), S.retry)), table.el);
+  table.draw();
+}
+
 /* ---------------- 셸 ---------------- */
+
+let mailMode = "test";
 
 const MENUS = [
   { key: "groups", label: T.menu.groups, match: /^(groups|group\/.+)$/ },
+  { key: "outbox", label: T.menu.outbox, match: /^outbox$/, when: () => mailMode === "test" },
 ];
+const menus = () => MENUS.filter((m) => !m.when || m.when());
 
 function route() {
   const hash = location.hash.replace(/^#/, "") || "groups";
-  const menu = MENUS.find((m) => m.match.test(hash)) || MENUS[0];
+  const menu = menus().find((m) => m.match.test(hash)) || MENUS[0];
   $("nav").querySelectorAll("a").forEach((a) => {
     if (a.dataset.key === menu.key) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
   document.title = `${menu.label} · ${T.title}`;
   const m = hash.match(/^group\/(.+)$/);
   if (m) { let id = ""; try { id = decodeURIComponent(m[1]); } catch (e) { id = ""; } groupView(id); }
+  else if (menu.key === "outbox") outboxView();
   else groupsView();
   $("main").focus({ preventScroll: true });
 }
@@ -292,7 +316,12 @@ async function boot() {
   $("title").textContent = T.title;
   $("back").replaceChildren(icon("home"), T.back);
   $("nav").setAttribute("aria-label", T.title);
-  $("nav").replaceChildren(...MENUS.map((m) => h("a", { href: `#${m.key}`, "data-key": m.key, text: m.label })));
+  try {
+    const res = await fetch("/api/auth/config", { cache: "no-store", headers: { Accept: "application/json" } });
+    if (res.ok) mailMode = (await res.json()).mail_mode || mailMode;
+  } catch (e) { /* 기본값 */ }
+  if (mailMode === "test") { $("banner").textContent = S.auth.mailTestBanner; $("banner").hidden = false; }
+  $("nav").replaceChildren(...menus().map((m) => h("a", { href: `#${m.key}`, "data-key": m.key, text: m.label })));
   view().replaceChildren(h("div", { class: "sk-note", text: T.loading }));
   let me;
   try {

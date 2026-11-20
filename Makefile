@@ -12,7 +12,7 @@ HOST_GID := $(shell id -g)
 TOOLS    := $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) tools
 
 .NOTPARALLEL:
-.PHONY: help env env-secrets auth-init admin up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down unit-image golden gen reset down logs dirs _test _test_run
+.PHONY: help env env-secrets auth-init admin outbox up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down unit-image golden gen reset down logs dirs _test _test_run
 
 # ---- 테스트 스택(보강설계서 3-2, 7절 D5): 개발 스택과 이름·포트·볼륨·상태 디렉터리가 모두 다르다.
 # 상태·빌드 디렉터리는 .test/ 고정이다(아래 정리 단계가 이 경로를 그대로 쓴다).
@@ -41,6 +41,7 @@ help:
 	@echo "make env     .env 생성(없을 때만, 비밀값 자동 생성)"
 	@echo "make auth-init   인증 DB(dashkit_auth 스키마, dash_auth 계정) 만들기·올리기(여러 번 실행해도 됨)"
 	@echo "make admin EMAIL=<주소>   첫 admin 계정 만들기(비밀번호는 프롬프트)"
+	@echo "make outbox  테스트 메일함의 최근 메일과 링크(메일 테스트 모드, 등급 제한 없음)"
 	@echo "make up      전체 빌드·기동 후 superset/backend/web healthy 대기"
 	@echo "make check   설정 검사"
 	@echo "make load    CSV 적재"
@@ -141,6 +142,10 @@ admin: dirs
 	@test -n "$(EMAIL)" || { echo "사용법: make admin EMAIL=<주소>" >&2; exit 2; }
 	$(COMPOSE) run --rm $(if $(PASSWORD_STDIN),-T) --user $(HOST_UID):$(HOST_GID) tools \
 	  python -m dashkit auth create-admin --email "$(EMAIL)" $(if $(PASSWORD_STDIN),--password-stdin)
+
+# 테스트 메일함(AUTH_MAIL_MODE=test)의 최근 메일과 링크. 등급 제한 없이 전부 나온다. LIMIT=<개수>(기본 20)
+outbox: dirs
+	$(TOOLS) python -m dashkit auth outbox --limit $(or $(LIMIT),20)
 
 # ---------------------------------------------------------------- 설정 반영
 check: dirs

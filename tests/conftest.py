@@ -25,6 +25,9 @@ from dashkit.auth.routes import Principal
 ROOT = Path(__file__).resolve().parent.parent
 PROJECTS = ROOT / "projects"
 WEB_URL = os.environ.get("TEST_WEB_URL", "http://web")  # 같은 compose 네트워크의 nginx
+# 인증 POST(/api/auth/*)는 IP당 1분에 20번이다. 테스트는 backend에 바로 보내고 요청마다 다른 X-Real-IP를 붙인다
+# (nginx를 거치면 모든 테스트가 tools 컨테이너 IP 하나로 세어진다). 운영에서 backend는 내부망에만 열려 있다.
+BACKEND_URL = os.environ.get("TEST_BACKEND_URL", "http://backend:8000")
 
 
 def live_project() -> str:
@@ -165,8 +168,19 @@ def session_cookie(headers) -> str | None:
     return None
 
 
-def login(email: str, password: str, base: str | None = None) -> str:
-    code, body, headers = http_full("POST", f"{base or WEB_URL}/api/auth/login", {"email": email, "password": password})
+def fake_ip() -> str:
+    """요청 제한에 걸리지 않게 요청마다 다른 사설 IP(테스트 전용)."""
+    return "10.{}.{}.{}".format(*secrets.token_bytes(3))
+
+
+def auth_post(path: str, body=None, headers=None, ip: str | None = None):
+    """인증 경로 POST를 backend에 바로 보낸다. (상태, 본문, 응답 헤더)."""
+    return http_full("POST", f"{BACKEND_URL}{path}", body if body is not None else {},
+                     {"X-Real-IP": ip or fake_ip(), **(headers or {})})
+
+
+def login(email: str, password: str) -> str:
+    code, body, headers = auth_post("/api/auth/login", {"email": email, "password": password})
     assert code == 200, (code, body)
     cookie = session_cookie(headers)
     assert cookie

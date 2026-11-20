@@ -121,7 +121,7 @@ async def _no_store(request: Request, call_next):
 
 @app.exception_handler(ApiError)
 async def _api_error(_req: Request, exc: ApiError):
-    resp = _error(exc.status, exc.detail, exc.message)
+    resp = JSONResponse({"detail": exc.detail, "message": exc.message, **exc.extra}, status_code=exc.status)
     for k, v in exc.headers.items():
         resp.headers[k] = v
     return resp

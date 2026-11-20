@@ -216,9 +216,29 @@ def delete_user(user_id: str) -> bool:
         return cur.rowcount > 0
 
 
-def record_login_success(user_id: str, new_hash: str | None = None) -> None:
-    """로그인 성공: 접속 횟수·최근 접속일, 실패 횟수와 잠금 초기화. new_hash가 있으면 다시 해시한 값으로 바꾼다."""
-    with connection() as conn:
+# ---------------------------------------------------------------- 세션
+
+def start_session(user_id: str, verified_hash: str, token_hash: bytes, expires_at: datetime,
+                  ip: str | None, user_agent: str | None, new_hash: str | None = None) -> bool:
+    """로그인 성공 처리를 한 트랜잭션으로: 사용자 행을 잠그고, 검증에 쓴 해시가 **지금도** 그 계정의 해시이고 계정이
+    active이며 잠겨 있지 않을 때만 세션을 만들고 접속 횟수·최근 접속일을 남긴다(new_hash면 다시 해시한 값으로).
+
+    비밀번호 재설정·변경·임시 비밀번호(use_reset_token, set_password)도 같은 행 잠금을 잡으므로, 옛 비밀번호로 시작한
+    로그인이 그 뒤에 세션을 만들 수 없다. 조건이 맞지 않으면 아무것도 바꾸지 않고 False.
+    """
+    done = False
+    with connection() as conn, conn.transaction() as tx:
+        row = conn.execute(
+            "SELECT password_hash, status, locked_until FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user_id,)
+        ).fetchone()
+        if (not row or row["password_hash"] != verified_hash or row["status"] != "active"
+                or (row["locked_until"] is not None and row["locked_until"] > now())):
+            raise psycopg.Rollback(tx)
+        conn.execute(
+            """INSERT INTO dashkit_auth.sessions (user_id, token_hash, expires_at, ip, user_agent)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (user_id, token_hash, expires_at, clean_ip(ip), (user_agent or "")[:400] or None),
+        )
         conn.execute(
             """UPDATE dashkit_auth.users
                   SET login_count = login_count + 1, last_login_at = now(), failed_count = 0, locked_until = NULL,
@@ -226,19 +246,8 @@ def record_login_success(user_id: str, new_hash: str | None = None) -> None:
                 WHERE id = %s""",
             (new_hash, user_id),
         )
-
-
-# ---------------------------------------------------------------- 세션
-
-def create_session(user_id: str, token_hash: bytes, expires_at: datetime,
-                   ip: str | None, user_agent: str | None) -> str:
-    with connection() as conn:
-        row = conn.execute(
-            """INSERT INTO dashkit_auth.sessions (user_id, token_hash, expires_at, ip, user_agent)
-               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-            (user_id, token_hash, expires_at, clean_ip(ip), (user_agent or "")[:400] or None),
-        ).fetchone()
-    return str(row["id"])
+        done = True
+    return done
 
 
 def session_by_hash(token_hash: bytes) -> SessionInfo | None:
@@ -499,3 +508,193 @@ def record_audit(action: str, *, actor_id: str | None = None, actor_email: str |
             (actor_id, actor_email, action, target_type, target_id, target_label,
              json.dumps(clean, ensure_ascii=False, default=str), clean_ip(ip)),
         )
+
+
+# ---------------------------------------------------------------- 계정 상태·비밀번호·잠금
+
+def create_pending_user(email: str, password_hash: str, token_hash: bytes, expires_at: datetime) -> User:
+    """스스로 가입: pending 계정과 첫 인증 토큰을 한 트랜잭션으로 만든다(그 사이에 다시 가입이 끼어들 틈이 없다).
+    Conflict: 같은 이메일이 있다."""
+    with connection() as conn, conn.transaction():
+        row = conn.execute(
+            f"""INSERT INTO dashkit_auth.users (email, password_hash, role, status, source, password_changed_at)
+                VALUES (%s, %s, 'user', 'pending', 'signup', now()) RETURNING {_USER_COLS}""",
+            (email, password_hash),
+        ).fetchone()
+        conn.execute("""INSERT INTO dashkit_auth.tokens (user_id, purpose, token_hash, expires_at)
+                        VALUES (%s, 'verify_email', %s, %s)""", (row["id"], token_hash, expires_at))
+    return User.from_row(row)
+
+
+def resign_pending(user_id: str, password_hash: str, token_hash: bytes, expires_at: datetime) -> bool:
+    """인증 전(pending) 계정에 다시 가입: 한 트랜잭션에서 사용자 행을 잠그고, 아직 pending일 때만 비밀번호를 바꾸고
+    이전 인증 토큰을 지우고 새 토큰을 넣는다. 그 사이 인증돼 pending이 아니면 아무것도 바꾸지 않고 False.
+    메일 인증(use_verify_token)도 같은 행 잠금을 먼저 잡으므로 둘은 겹치지 않는다."""
+    done = False
+    with connection() as conn, conn.transaction() as tx:
+        row = conn.execute("SELECT status FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user_id,)).fetchone()
+        if not row or row["status"] != "pending":
+            raise psycopg.Rollback(tx)
+        conn.execute("UPDATE dashkit_auth.users SET password_hash = %s WHERE id = %s", (password_hash, user_id))
+        conn.execute("DELETE FROM dashkit_auth.tokens WHERE user_id = %s AND purpose = 'verify_email'", (user_id,))
+        conn.execute("""INSERT INTO dashkit_auth.tokens (user_id, purpose, token_hash, expires_at)
+                        VALUES (%s, 'verify_email', %s, %s)""", (user_id, token_hash, expires_at))
+        done = True
+    return done
+
+
+def _activate(conn: psycopg.Connection, user_id: str, from_status: str) -> bool:
+    """(트랜잭션 안) from_status → active, 메일 인증 시각, 기본 그룹(is_default)."""
+    cur = conn.execute(
+        """UPDATE dashkit_auth.users SET status = 'active', email_verified_at = coalesce(email_verified_at, now())
+            WHERE id = %s AND status = %s""",
+        (user_id, from_status),
+    )
+    if not cur.rowcount:
+        return False
+    conn.execute(
+        """INSERT INTO dashkit_auth.group_members (group_id, user_id)
+           SELECT id, %s FROM dashkit_auth.groups WHERE is_default ON CONFLICT DO NOTHING""",
+        (user_id,),
+    )
+    return True
+
+
+_SET_PASSWORD = """UPDATE dashkit_auth.users
+                     SET password_hash = %s, password_changed_at = now(), must_change_password = %s,
+                         failed_count = 0, locked_until = NULL
+                   WHERE id = %s"""
+
+
+def set_password(user_id: str, password_hash: str, *, must_change: bool = False,
+                 end_sessions: bool = False, keep_session: str | None = None) -> None:
+    """새 비밀번호. 비밀번호 변경일을 남기고 실패 횟수·잠금을 지운다.
+    end_sessions면 같은 트랜잭션에서 그 사용자의 세션을 지운다(keep_session 하나는 남길 수 있다)."""
+    with connection() as conn, conn.transaction():
+        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user_id,))
+        conn.execute(_SET_PASSWORD, (password_hash, must_change, user_id))
+        if end_sessions:
+            conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s AND (%s::uuid IS NULL OR id <> %s::uuid)",
+                         (user_id, keep_session, keep_session))
+
+
+def use_reset_token(token_id: str, user_id: str, purpose: str, password_hash: str) -> bool:
+    """재설정·초대 수락을 한 트랜잭션으로: 토큰을 지우고(한 번만), 새 비밀번호, 초대면 active·기본 그룹,
+    그 사용자의 모든 세션 삭제. 토큰이 이미 쓰였거나 상태가 맞지 않으면 아무것도 바꾸지 않고 False."""
+    done = False
+    with connection() as conn, conn.transaction() as tx:
+        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user_id,))
+        if not conn.execute("DELETE FROM dashkit_auth.tokens WHERE id = %s AND user_id = %s AND purpose = %s",
+                            (token_id, user_id, purpose)).rowcount:
+            raise psycopg.Rollback(tx)
+        conn.execute(_SET_PASSWORD, (password_hash, False, user_id))
+        if purpose == "invite" and not _activate(conn, user_id, "invited"):
+            raise psycopg.Rollback(tx)
+        conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s", (user_id,))
+        done = True
+    return done
+
+
+def use_verify_token(token_id: str, user_id: str) -> bool:
+    """메일 인증을 한 트랜잭션으로: 토큰을 지우고 pending → active·기본 그룹. 아니면 아무것도 바꾸지 않고 False."""
+    done = False
+    with connection() as conn, conn.transaction() as tx:
+        # 다시 가입(resign_pending)과 겹치지 않게 사용자 행을 먼저 잠근다
+        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user_id,))
+        if not conn.execute("DELETE FROM dashkit_auth.tokens WHERE id = %s AND user_id = %s AND purpose = 'verify_email'",
+                            (token_id, user_id)).rowcount:
+            raise psycopg.Rollback(tx)
+        if not _activate(conn, user_id, "pending"):
+            raise psycopg.Rollback(tx)
+        done = True
+    return done
+
+
+def record_login_failure(user_id: str, threshold: int, lock_minutes: int) -> datetime | None:
+    """실패 횟수를 1 올린다. threshold에 닿으면 lock_minutes 동안 잠그고(횟수는 0부터 다시) 잠금 끝 시각을 돌려준다."""
+    with connection() as conn:
+        row = conn.execute(
+            """UPDATE dashkit_auth.users
+                  SET failed_count = CASE WHEN failed_count + 1 >= %(n)s THEN 0 ELSE failed_count + 1 END,
+                      locked_until = CASE WHEN failed_count + 1 >= %(n)s THEN now() + make_interval(mins => %(m)s)
+                                          ELSE locked_until END
+                WHERE id = %(id)s
+            RETURNING failed_count, locked_until, (locked_until > now() AND failed_count = 0) AS just_locked""",
+            {"n": threshold, "m": lock_minutes, "id": user_id},
+        ).fetchone()
+    return row["locked_until"] if row and row["just_locked"] else None
+
+
+# ---------------------------------------------------------------- 일회용 토큰
+
+def create_token(user_id: str, purpose: str, token_hash: bytes, expires_at: datetime) -> None:
+    """같은 사용자·같은 용도의 이전 토큰을 지우고 새로 넣는다(이전 링크는 무효).
+    사용자 행을 먼저 잠가 같은 사용자의 동시 발급을 직렬화한다(유효한 토큰은 용도마다 하나만 남는다)."""
+    with connection() as conn, conn.transaction():
+        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user_id,))
+        conn.execute("DELETE FROM dashkit_auth.tokens WHERE user_id = %s AND purpose = %s", (user_id, purpose))
+        conn.execute(
+            "INSERT INTO dashkit_auth.tokens (user_id, purpose, token_hash, expires_at) VALUES (%s, %s, %s, %s)",
+            (user_id, purpose, token_hash, expires_at),
+        )
+
+
+def token_owner(token_hash: bytes, purposes: tuple[str, ...]) -> dict[str, Any] | None:
+    """만료되지 않은 토큰의 {token_id, purpose, user_id, email, role, status}. 지우지 않는다."""
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT t.id AS token_id, t.purpose, u.id AS user_id, u.email, u.role, u.status
+                 FROM dashkit_auth.tokens t JOIN dashkit_auth.users u ON u.id = t.user_id
+                WHERE t.token_hash = %s AND t.purpose = ANY(%s::text[]) AND t.expires_at > now()""",
+            (token_hash, list(purposes)),
+        ).fetchone()
+    if not row:
+        return None
+    return {**row, "token_id": str(row["token_id"]), "user_id": str(row["user_id"])}
+
+
+def delete_user_tokens(user_id: str) -> int:
+    with connection() as conn:
+        return conn.execute("DELETE FROM dashkit_auth.tokens WHERE user_id = %s", (user_id,)).rowcount
+
+
+# ---------------------------------------------------------------- 테스트 메일함(outbox)
+
+def outbox_add(to_email: str, kind: str, link: str | None) -> bool:
+    """받는 계정이 있을 때만 쌓는다(user_id로 읽는 사람의 등급 제한을 판정한다)."""
+    with connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO dashkit_auth.outbox (user_id, to_email, kind, link)
+               SELECT id, email, %s, %s FROM dashkit_auth.users WHERE email = %s""",
+            (kind, link, to_email),
+        )
+        return cur.rowcount > 0
+
+
+def outbox_list(only_role: str | None, limit: int = 1000) -> list[dict[str, Any]]:
+    """최근 순. only_role을 주면 받는 계정의 **지금** 등급이 그것인 행만."""
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT o.id, o.to_email, o.kind, o.link, o.created_at, u.role
+                 FROM dashkit_auth.outbox o JOIN dashkit_auth.users u ON u.id = o.user_id
+                WHERE (%s::text IS NULL OR u.role = %s::text)
+                ORDER BY o.created_at DESC, o.id DESC LIMIT %s""",
+            (only_role, only_role, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------- 보존 기간 정리
+
+def cleanup(pending_days: int, outbox_days: int) -> dict[str, int]:
+    """인증 전 계정·오래된 테스트 메일·만료된 토큰과 세션을 지운다. 지운 행 수."""
+    out: dict[str, int] = {}
+    with connection() as conn:
+        out["pending_users"] = conn.execute(
+            "DELETE FROM dashkit_auth.users WHERE status = 'pending' AND created_at < now() - make_interval(days => %s)",
+            (pending_days,)).rowcount
+        out["outbox"] = conn.execute(
+            "DELETE FROM dashkit_auth.outbox WHERE created_at < now() - make_interval(days => %s)", (outbox_days,)).rowcount
+        out["tokens"] = conn.execute("DELETE FROM dashkit_auth.tokens WHERE expires_at <= now()").rowcount
+        out["sessions"] = conn.execute("DELETE FROM dashkit_auth.sessions WHERE expires_at <= now()").rowcount
+    return out

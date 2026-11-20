@@ -10,6 +10,8 @@ from __future__ import annotations
 import secrets
 import string
 import threading
+from functools import lru_cache
+from pathlib import Path
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
@@ -17,6 +19,7 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 MIN_LENGTH = 10
 MAX_LENGTH = 128
 TEMPORARY_LENGTH = 16
+COMMON_FILE = Path(__file__).resolve().parent / "vendor" / "common_passwords.txt"
 
 _hasher = PasswordHasher()
 _dummy_lock = threading.Lock()
@@ -51,10 +54,18 @@ def verify_dummy(password: str) -> None:
     verify(stored, password)
 
 
+@lru_cache(maxsize=1)
+def common_passwords() -> frozenset[str]:
+    """흔한 비밀번호 상위 1만 개(소문자). 파일: vendor/common_passwords.txt(출처는 vendor/README.md)."""
+    with open(COMMON_FILE, encoding="utf-8") as f:
+        return frozenset(line.strip().lower() for line in f if line.strip())
+
+
 def policy_violation(password: str, email: str) -> str | None:
     """정책 위반 사유 코드. 통과하면 None.
 
     too_short(10자 미만) · too_long(128자 초과) · same_as_email(이메일의 @ 앞부분과 같음, 대소문자 무시)
+    · too_common(흔한 비밀번호 목록에 있음, 대소문자 무시). 문자 종류 조합은 강제하지 않는다.
     """
     if len(password) < MIN_LENGTH:
         return "too_short"
@@ -63,6 +74,8 @@ def policy_violation(password: str, email: str) -> str | None:
     local = email.rpartition("@")[0].strip().lower()
     if local and password.strip().lower() == local:
         return "same_as_email"
+    if password.strip().lower() in common_passwords():
+        return "too_common"
     return None
 
 

@@ -1,4 +1,4 @@
-"""python -m dashkit auth {init|create-admin} (contracts/auth.md "CLI").
+"""python -m dashkit auth {init|create-admin|outbox} (contracts/auth.md "CLI").
 
 tools 컨테이너에서 dash_auth 계정으로 돈다.
 
@@ -6,6 +6,8 @@ tools 컨테이너에서 dash_auth 계정으로 돈다.
   안에서(superuser) data-db/init/02-auth.sh로 먼저 하고, 이 명령은 그 결과를 dash_auth로 접속해 확인한다.
 - create-admin: 첫 admin을 만든다. 비밀번호는 프롬프트로 두 번 받는다(--password-stdin이면 표준 입력의 첫 줄).
   코드와 .env에 넣지 않는다. 같은 이메일의 계정이 이미 있으면 아무것도 바꾸지 않고 실패한다.
+- outbox: 테스트 메일함의 최근 메일과 링크를 출력한다. 등급 제한 없이 전부 나온다(서버에 들어갈 수 있는 사람만 쓴다).
+  admin 자신이 비밀번호를 잊었을 때, operator 계정의 링크가 필요한데 admin이 없을 때 쓴다.
 """
 from __future__ import annotations
 
@@ -93,6 +95,22 @@ def cmd_create_admin(args) -> int:
     return 0
 
 
+def cmd_outbox(args) -> int:
+    try:
+        rows = store.outbox_list(None, limit=args.limit)
+    except store.Unavailable as exc:
+        return _fail(f"outbox: {exc}")
+    if not rows:
+        print("테스트 메일함이 비어 있습니다(AUTH_MAIL_MODE=test에서 보낸 메일만 쌓인다, 7일 보관)")
+        return 0
+    for r in rows:
+        when = r["created_at"].astimezone().strftime("%Y-%m-%d %H:%M")
+        print(f"{when}  {r['kind']:<18} {r['to_email']} ({r['role']})")
+        if r["link"]:
+            print(f"    {r['link']}")
+    return 0
+
+
 def register(sub) -> None:
     auth = sub.add_parser("auth", help="로그인·사용자 관리(인증 DB)")
     asub = auth.add_subparsers(dest="auth_cmd", required=True)
@@ -101,6 +119,9 @@ def register(sub) -> None:
     ca.add_argument("--email", required=True)
     ca.add_argument("--password-stdin", action="store_true", help="표준 입력의 첫 줄을 비밀번호로 읽는다(자동화용)")
     ca.set_defaults(fn=cmd_create_admin)
+    ob = asub.add_parser("outbox", help="테스트 메일함의 최근 메일과 링크(등급 제한 없음)")
+    ob.add_argument("--limit", type=int, default=20)
+    ob.set_defaults(fn=cmd_outbox)
 
 
 def run(argv: list[str]) -> int:

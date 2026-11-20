@@ -18,7 +18,7 @@ from argon2 import PasswordHasher
 from dashkit import config, db
 from dashkit.config import load_project
 
-from conftest import (PROJECTS, SESSION_COOKIE, WEB_URL, api, delete_user, http_full, live_project, login,
+from conftest import (PROJECTS, SESSION_COOKIE, WEB_URL, api, auth_post, delete_user, http_full, live_project, login,
                       make_user, random_email, session_cookie)
 
 pytestmark = pytest.mark.integration
@@ -42,7 +42,7 @@ def auth_sql(query: str, params=()):
 
 
 def post_login(email: str, password: str, headers=None):
-    return http_full("POST", f"{WEB_URL}/api/auth/login", {"email": email, "password": password}, headers)
+    return auth_post("/api/auth/login", {"email": email, "password": password}, headers)
 
 
 def with_cookie(cookie: str) -> dict:
@@ -111,7 +111,7 @@ def test_login_sets_cookie_and_logout_ends_session(account):
     assert not auth_sql("SELECT 1 FROM dashkit_auth.sessions WHERE user_id = %s", (user_id,))
     code, body, _ = http_full("GET", f"{WEB_URL}/api/app", headers=with_cookie(token))
     assert (code, body["detail"]) == (401, "unauthenticated")
-    code, _, _ = http_full("POST", f"{WEB_URL}/api/auth/logout", {})     # 세션 없이도 204
+    code, _, _ = auth_post("/api/auth/logout")                          # 세션 없이도 204
     assert code == 204
 
 
@@ -149,8 +149,9 @@ def test_missing_account_takes_as_long_as_wrong_password(account):
         assert code == 401
         return time.perf_counter() - t
 
-    existing = statistics.median(timed(email) for _ in range(5))
-    missing = statistics.median(timed(random_email("nobody")) for _ in range(5))
+    # 같은 주소로 5번 틀리면 잠기므로(423) 4번씩만 잰다
+    existing = statistics.median(timed(email) for _ in range(4))
+    missing = statistics.median(timed(random_email("nobody")) for _ in range(4))
     assert missing > existing * 0.5, (existing, missing)
 
 
