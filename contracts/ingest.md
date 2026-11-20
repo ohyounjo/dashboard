@@ -191,7 +191,7 @@ projects/<프로젝트>/data/
 `dashkit/ingest/structure.py`의 `change_config`. 구조 변경은 **설정 파일을 고치고 apply**다(설계서 6-1~6-3). Studio와 같은 연산([studio.md](studio.md) "변경 연산")과 같은 YAML 쓰기(고친 곳만 다시 쓰기)를 쓰고, 파일 여러 개를 함께 바꾼다.
 
 - 바뀌는 파일: 연산이 고친 `schema.yaml`·`dashboard.yaml`, `replace` 테이블에 `column.add`하면 그 테이블의 CSV(새 열을 맨 뒤에, 값은 `default` 또는 빈 칸), 새 테이블의 첫 파일(`append`는 `data/<이름>/000001-<시각>.csv.gz` 정규형, `replace`는 `data/<이름>.csv` 모든 열의 머리글). 되돌리기는 이력의 파일 내용이다.
-- 순서: 쓰기 잠금(설정 `revision` 확인. 데이터 설정 지문은 보지 않는다) → 복구 → 새 내용을 사본에서 검증(설정 검사와 `replace` CSV 검증) → **설정 이력**(변경 전 사본) → **묶음 기록**(종류 `config`) → 파일 바꾸기 → load(같은 잠금·같은 접속, 한 트랜잭션) → 커밋 → 묶음 기록 지우기 → (잠금 밖) sync.
+- 순서: 쓰기 잠금(설정 `revision` 확인. 데이터 설정 지문은 보지 않는다) → 복구 → 새 내용을 사본에서 검증(설정 검사와 `replace` CSV 검증) → **묶음 기록**(종류 `config`, 변경 전 사본 포함) → 파일 바꾸기 → load(같은 잠금·같은 접속, 한 트랜잭션) → 커밋 → **설정 이력**(묶음 기록의 변경 전 사본으로) → 묶음 기록 지우기 → (잠금 밖) sync.
 - `revision`은 필수다(설정을 읽을 때 받은 값, 다르면 409 `stale_config`). 연산 형식이 틀리면 400 `invalid_op`, 새 설정이 검사를 통과하지 못하면 422 `invalid_config`(파일은 그대로).
 - **load가 실패하면**(규칙을 좁혀 옛 배치가 걸림, `sql:` 데이터셋의 쿼리 오류, `checks` 위반) 복구 절차로 모든 파일을 변경 전으로 되돌리고 422 `load_failed`(+`errors`: 파일·줄)다. DB는 롤백돼 그대로다. **sync가 실패하면** 파일과 DB는 새 판이고 결과의 `sync.ok`가 `false`다. apply를 다시 돌리면 잇는다.
 - 열 연산의 규칙: `column.add`의 `required`는 `default`가 있어야 한다. `column.update`의 `type`은 넓히기만(`integer` → `number`, 무엇이든 → `text`). 규칙을 좁히는 것(`enum` 값 빼기, `min`·`max`·`pattern` 조이기)은 받지만 옛 배치가 걸리면 위와 같이 되돌린다. 열 이름 변경·삭제, 기본 키 변경은 없다.
@@ -199,17 +199,17 @@ projects/<프로젝트>/data/
 
 ### 설정 변경 이력
 
-- 구조 변경마다 `.state/history/<프로젝트>/<UTC 시각>-<동작>/`에 `before/<경로>`(바뀐 파일의 변경 전 내용. 새로 만든 파일은 없음)와 `meta.json`(`{"id", "action", "at", "files": [{"path", "before", "after"}]}`. 해시는 SHA-256, 없던 파일은 `null`)을 남긴다. 최근 50개만 둔다.
+- load까지 끝난 구조 변경마다(되돌려진 변경은 남기지 않는다) `.state/history/<프로젝트>/<UTC 시각>-<동작>/`에 `before/<경로>`(바뀐 파일의 변경 전 내용. 새로 만든 파일은 없음)와 `meta.json`(`{"id", "action", "at", "files": [{"path", "before", "after"}]}`. 해시는 SHA-256, 없던 파일은 `null`)을 남긴다. 최근 50개만 둔다.
 - 되돌리기: 그 작업이 바꾼 파일을 **함께** 변경 전으로(새로 만든 파일은 지운다) 바꾸고 apply한다. 되돌리기도 구조 변경이라 이력이 하나 더 생긴다. 지금 내용이 그 작업 바로 뒤의 판(`after` 해시)이 아닌 파일이 하나라도 있으면 덮어쓰지 않고 409 `stale_config`다.
 - 누적 테이블의 배치 파일(첫 파일 말고)은 이력에 넣지 않는다. 열을 더하기 전으로 되돌려도 옛 배치는 그대로 읽히고, 새 테이블을 되돌려도 그 뒤에 더한 배치 파일은 지우지 않는다(데이터를 지우지 않는다).
 
 ### 끊김 복구(종류 `config`)
 
-묶음 기록 `{"id", "kind": "config", "project", "data_revision": <새 설정의 지문>, "files": [{"path", "before": <변경 전 내용 base64 | null>, "after": <새 내용의 SHA-256 | null>}]}`.
+묶음 기록 `{"id", "kind": "config", "project", "data_revision": <새 설정의 지문>, "history": <이력 id>, "action", "files": [{"path", "before": <변경 전 내용 base64 | null>, "after": <새 내용의 SHA-256 | null>}]}`.
 
 | 남은 기록의 상태 | 처리 |
 |---|---|
-| DB의 `data_revision`이 기록의 것과 같고 모든 파일이 새 판이다(load까지 끝났다) | 파일을 그대로 두고 기록만 지운다(sync가 남았으면 apply를 다시 돌린다) |
+| DB의 `data_revision`이 기록의 것과 같고 모든 파일이 새 판이다(load까지 끝났다) | 파일을 그대로 두고, 이력이 아직 없으면 기록의 사본으로 쓴 뒤 기록을 지운다(sync가 남았으면 apply를 다시 돌린다) |
 | 그 밖(파일을 일부만 바꿨거나, 다 바꿨지만 load 전이다. DB에 다른 프로젝트가 적재돼 있어도) | 변경 전 사본으로 **모든 파일을 되돌리고** 새로 만든 파일은 지운 뒤 기록을 지운다 |
 
 - 이 복구는 관리 서비스가 시작할 때와 작업 전(공통 순서 2), 그리고 **설정을 읽기 전에**(`dashkit check`·load·apply, `recover_before_read`) 한다. `schema.yaml`만 새 판이고 CSV는 옛 판인 채로 검증하는 일이 없다. 기록이 없으면 DB에 닿지 않고, DB에 닿지 못하면 기록을 그대로 둔다.
