@@ -403,7 +403,11 @@ function renderUserMenu(user) {
     leaving = true;
     location.replace(loginUrl("/", "logout"));
   });
-  $("userActions").replaceChildren(logout);
+  const actions = [];
+  // 운용 화면 링크는 운용자에게만 보인다(권한은 API가 지킨다)
+  if (user.role === "admin" || user.role === "operator") actions.push(h("a", { href: "/admin/" }, icon("users"), S.adminLink));
+  actions.push(logout);
+  $("userActions").replaceChildren(...actions);
 
   const close = (focusButton) => {
     if (pop.hidden) return;
@@ -444,7 +448,14 @@ function renderApp(cfg) {
   const views = $("views");
   nav.replaceChildren();
   views.replaceChildren();
-  if (!tabs.length) { showAppState(stateBox({ tone: "neutral", iconName: "warning", title: S.noTabs, role: "status" })); return; }
+  if (!tabs.length) {
+    // 일반사용자는 속한 그룹이 허용한 탭만 받는다. 없으면 운용자에게 요청하라고 안내한다
+    const limited = cfg.user && cfg.user.role === "user";
+    showAppState(stateBox(limited
+      ? { tone: "neutral", iconName: "lock", title: S.noAccessTitle, body: S.noAccessBody, role: "status" }
+      : { tone: "neutral", iconName: "warning", title: S.noTabs, role: "status" }));
+    return;
+  }
 
   const resizeHandlers = new Set();
   let resizeTimer = null;

@@ -41,6 +41,34 @@
 - 만료된 세션(아래 "세션")이나 `active`가 아닌 계정의 세션은 그 요청에서 행을 지우고 401 `unauthenticated`.
 - 인증 DB에 닿지 못하거나 스키마가 없으면 503 `auth_unavailable`(로그에 원인 종류만 남긴다. 스키마가 없으면 `make auth-init`).
 
+## 접근 제어
+
+접근을 허용하는 단위는 `dashboard.yaml`의 **탭**(`tabs[].key`)이다. 탭을 허용하면 그 안의 섹션(Superset 대시보드, 위젯)이 전부 열린다. 권한은 그룹의 `(프로젝트 이름, 탭 키)`로 저장한다(`group_tabs`). 현재 프로젝트가 바뀌어도 다른 프로젝트의 권한은 남아 있어서 되돌아오면 그대로 쓴다.
+
+| 등급 | 볼 수 있는 탭(`dashkit/auth/access.py`) |
+|---|---|
+| `admin`, `operator` | 현재 프로젝트의 모든 탭 |
+| `user` | 속한 그룹들이 **현재 프로젝트 이름으로** 허용한 탭의 합집합. 설정에 없는 탭 키는 무시한다. 없으면 빈 목록 |
+
+- 판정은 요청마다 DB에서 읽는다. 그룹·구성원·허용 탭을 고치면 다음 요청부터 반영된다.
+
+| 경로 | 적용([api.md](api.md)) |
+|---|---|
+| `GET /api/app` | `tabs`에서 볼 수 없는 탭을 뺀다(설정 순서 유지). `applied`는 남은 탭만으로 계산한다(남은 탭이 없으면 `true`) |
+| `POST /api/guest-token` | 설정에 없는 키는 지금처럼 404 `unknown_dashboard`. 운용자는 설정의 모든 대시보드, user는 **볼 수 있는 탭의 superset 섹션**이 참조하는 대시보드만. 아니면 403 `forbidden` |
+| `GET /api/data/{dataset}` | 운용자는 지금과 같다. user는 **볼 수 있는 탭의 위젯 섹션**이 참조하는 데이터셋만. 아니면 지금과 같은 404 `unknown_dataset` |
+
+- 알려진 한계: guest token은 발급 후 300초 동안 유효하다. 그룹에서 빠진 사용자가 이미 받은 토큰으로 최대 5분 더 볼 수 있다.
+- 알려진 한계: 같은 Superset 대시보드를 두 탭에서 쓰면, 한 탭만 허용돼도 그 대시보드의 토큰은 발급된다(토큰은 탭이 아니라 대시보드에 대한 것이다). 의도한 동작이다.
+- 행 단위 권한은 없다(guest token의 `rls_rules`는 빈 배열).
+
+### 그룹
+
+- 그룹은 이름(앞뒤·연속 공백을 정리한 뒤 유일, 100자까지), 설명(500자까지), 허용 탭 목록, 구성원 목록, `is_default`를 가진다.
+- 설정 파일에서 탭이 없어지면 그룹의 그 항목은 지우지 않고 편집 화면에 "없는 탭"으로 표시한다. 판정에서는 무시한다(탭이 설정에 돌아오면 그대로 다시 쓰인다). 허용 탭을 다시 저장해도 없는 탭 기록은 남는다. 운용자가 편집 화면에서 항목을 **하나씩** 뺀다(`DELETE /groups/{id}/tabs/{project}/{tab_key}`).
+- 그룹을 삭제하면 구성원·허용 탭 연결만 지워진다. 사용자 계정은 남는다.
+- 구성원은 어느 등급이든 넣을 수 있다(운용자에게는 판정에 쓰이지 않는다). 단 operator는 `user` 계정만 넣고 뺀다(아래 "운용 API").
+
 ## 세션
 
 - 서버 저장 세션이다. 로그인하면 256비트 임의 값(`secrets.token_urlsafe(32)`)을 쿠키 `dashkit_session`에 넣고, DB(`sessions.token_hash`)에는 그 SHA-256만 저장한다.
@@ -93,6 +121,46 @@
 | 비밀번호는 맞고 메일 인증 전 | 403 | `email_not_verified` |
 | 비밀번호는 맞고 정지된 계정 | 403 | `account_suspended` |
 | 인증 DB를 쓸 수 없음 | 503 | `auth_unavailable` |
+
+## 운용 API (`/api/admin`, 운용자만)
+
+`dashkit/auth/admin_routes.py`. 모든 경로가 `require_operator`다(user 403 `forbidden`, 로그인 없음 401). 권한 검사는 서버에서 한다.
+
+- **operator는 `user` 등급 계정만 다룬다.** 요청의 대상(그룹 구성원 추가·제거 등)에 `operator`·`admin` 계정이 하나라도 있으면 요청 전체가 403 `forbidden`이고 아무것도 바꾸지 않는다.
+- 목록 응답은 `{"items": [...], "total": n}`이고 `?page=`(1부터, 기본 1), `?size=`(1~200, 기본 50), `?sort=`(열 이름, 앞에 `-`면 내림차순)를 받는다. 정렬할 수 없는 열이나 범위 밖 값은 422 `invalid_request`. 정렬 값이 없는(null) 항목은 뒤로 간다.
+- 경로의 id가 uuid 형식이 아니거나 없으면 404(`unknown_group` 등).
+
+### 탭과 그룹
+
+| 메서드·경로 | 본문 → 결과 |
+|---|---|
+| `GET /tabs` | → `{"project": "<현재>", "tabs": [{key, label, icon}], "others": [{project, tab_key, label, current, exists, groups}]}`. `others`는 그룹이 참조하지만 현재 프로젝트의 있는 탭이 아닌 것(다른 프로젝트, 설정에서 없어진 탭)과 그것을 참조하는 그룹 수 |
+| `GET /groups` | → 목록. 항목 `{id, name, description, is_default, created_at, updated_at, member_count, tab_count}`(`tab_count`: 현재 프로젝트의 있는 탭 수). 정렬 `name`(기본)·`member_count`·`tab_count`·`is_default`·`created_at`·`updated_at` |
+| `POST /groups` | `{name, description?, is_default?}` → 201 그룹 상세. 409 `group_exists` |
+| `GET /groups/{id}` | → 그룹 상세: 위 항목(목록의 수 제외) + `tabs: [{project, tab_key, label, current, exists}]`, `members: [{id, email, role, status, added_at}]`(이메일 순) |
+| `PATCH /groups/{id}` | `{name?, description?, is_default?}` → 200 그룹 상세. 409 `group_exists` |
+| `DELETE /groups/{id}` | → 204 |
+| `PUT /groups/{id}/tabs` | `{project, tab_keys: [...]}` → 200 그룹 상세. 그 프로젝트의 허용 탭 중 **설정에 있는 탭**을 통째로 바꾼다. 키는 그 프로젝트의 설정(`projects/<project>/`)에 있어야 한다. 아니면 422 `unknown_tab`(폴더가 없거나 설정이 유효하지 않은 프로젝트는 `[]`만 받고 아무것도 바꾸지 않는다). 설정에 없는 탭의 기존 기록은 건드리지 않는다 |
+| `DELETE /groups/{id}/tabs/{project}/{tab_key}` | → 200 그룹 상세. 허용 탭 기록 하나만 지운다(없는 탭·다른 프로젝트 탭 정리). 없는 기록이면 아무것도 하지 않는다 |
+| `PUT /groups/{id}/members` | `{add: [이메일 또는 id], remove: [id]}` → 200 `{"not_found": [...]}`(찾지 못한 이메일·id). 이미 있는 구성원 추가, 없는 구성원 제거는 무시한다 |
+
+- 같은 그룹의 허용 탭 저장·삭제는 부모 `groups` 행을 먼저 잠가(`SELECT … FOR UPDATE`) 순서를 세운다. 동시에 저장해도 결과는 어느 한 요청의 목록이다.
+- `label`은 그 프로젝트 설정의 탭 라벨이고 없는 탭이면 `null`. `current`는 현재 프로젝트의 것인지, `exists`는 그 프로젝트 설정에 지금 있는지.
+
+## 감사 로그
+
+`audit_log` 표에 남긴다(`store.record_audit`). 항목은 시각, 한 사람(id와 이메일 사본), 동작 코드, 대상(종류, id, 이름 사본), 변경 내용(`detail`, JSON), IP다. 이메일·이름을 사본으로 남겨 계정이나 그룹이 지워진 뒤에도 읽을 수 있다. `detail`에 비밀번호·토큰·해시를 넣지 않는다(키 이름에 `password`·`token`·`hash`·`secret`이 들어간 항목은 저장 전에 버린다).
+
+| 동작 코드 | 언제 | `detail` |
+|---|---|---|
+| `auth.login` | 로그인 성공 | `{}` |
+| `auth.login_failed` | 로그인 실패. 한 사람은 시도한 이메일(계정이 있으면 그 id) | `{"reason": "unknown_account" \| "no_password" \| "wrong_password" \| "email_not_verified" \| "account_suspended" \| "not_active"}` |
+| `auth.logout` | 로그아웃(세션이 있었을 때) | `{}` |
+| `group.create` | 그룹 생성 | `{description, is_default}` |
+| `group.update` | 그룹 이름·설명·기본 그룹 변경(바뀐 것이 있을 때) | `{<필드>: {"from", "to"}}` |
+| `group.delete` | 그룹 삭제 | `{"members": <구성원 수>}` |
+| `group.tabs` | 허용 탭 변경(바뀐 것이 있을 때) | `{project, added: [...], removed: [...]}` |
+| `group.members` | 구성원 변경(바뀐 것이 있을 때) | `{added: [이메일], removed: [이메일]}` |
 
 ## DB 계정
 
@@ -170,3 +238,5 @@
 | `web/login.html` + `web/auth.js` + `web/auth.css` | 이메일, 비밀번호, 로그인 버튼. 실패·정지·미인증·잠금 안내. 성공하면 `?next=`로 간다. `next`는 브라우저와 같은 URL 파서(`new URL(next, 지금 출처)`)로 읽어 출처가 지금 출처와 같을 때만 그 경로·쿼리·해시를 쓰고, 아니면(다른 출처, 탭·줄바꿈·역슬래시를 섞은 우회, 로그인 전 화면) `/`로 간다(`web/common.js`의 `safeNext`, 테스트 `tests/js/`). `?reason=expired`면 "로그인이 만료되었습니다", `?reason=logout`이면 "로그아웃했습니다" |
 | `web/index.html`(웹앱 셸) | `/api/app`이 401이면 `/login.html?next=<지금 주소>`로 보낸다. 섹션의 guest token·데이터 요청이 401이면 `?reason=expired`를 붙여 보낸다. 레일 아래(테마 버튼 위)에 사용자 메뉴: 이메일, 등급, 로그아웃 |
 | `web/common.js` | 셸과 로그인 화면이 함께 쓰는 도우미(요소 생성, `next` 검사, JSON POST) |
+| `web/index.html` 사용자 메뉴 | 운용자에게만 "운용"(`/admin/`) 링크. user 계정의 탭이 하나도 없으면 "접근할 수 있는 대시보드가 없습니다. 운용자에게 요청하세요." |
+| `web/admin/`(`index.html`, `admin.js`, `admin.css`) | 운용 화면. 주소의 `#` 뒤로 메뉴를 고른다. 시작할 때 `/api/app`의 `user.role`이 운용자가 아니면(또는 API가 403 `forbidden`이면) 웹앱(`/`)으로 돌려보내고, 401이면 로그인 화면으로 보낸다. 메뉴: **그룹**(`#groups`: 목록, 정렬, 50개씩, 그룹 만들기 / `#group/<id>`: 이름·설명·기본 그룹, 현재 프로젝트의 탭 체크 목록, 다른 프로젝트·없는 탭 묶음과 항목별 빼기(그 항목만), 구성원 목록과 빼기, 이메일로 추가(쉼표·줄바꿈 구분, 찾지 못한 주소 안내), 삭제 확인) |

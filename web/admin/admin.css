@@ -1,0 +1,78 @@
+/* 운용 화면(web/admin/). 토큰은 ../styles.css, 입력 칸은 ../auth.css(.field)를 쓴다. */
+.admin-page { min-height: 100vh }
+.admin-top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px max(16px, env(safe-area-inset-right, 0px)) 14px max(20px, env(safe-area-inset-left, 0px));
+  background: var(--surface); border-bottom: 1px solid var(--line) }
+.admin-top h1 { margin: 0; font-size: 18px; flex: 1; min-width: 0 }
+.admin-back { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 500;
+  padding: 6px 10px 6px 6px; border-radius: 8px }
+.admin-back:hover { background: var(--surface-2); color: var(--fg) }
+.admin-back .icon { width: 16px; height: 16px }
+.admin-who { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; min-width: 0 }
+.admin-who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.admin-banner { padding: 8px 20px; font-size: 13px; color: var(--warn); background: var(--warn-bg); border-bottom: 1px solid var(--line) }
+.admin-nav { display: flex; gap: 4px; padding: 10px 16px 0 16px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; background: var(--surface) }
+.admin-nav::-webkit-scrollbar { display: none }
+.admin-nav a { padding: 8px 12px 10px; color: var(--muted); text-decoration: none; font-size: 13.5px; font-weight: 500; border-bottom: 2px solid transparent; white-space: nowrap }
+.admin-nav a:hover { color: var(--fg) }
+.admin-nav a[aria-current="page"] { color: var(--fg); font-weight: 700; border-bottom-color: var(--primary) }
+/* styles.css의 main(레일 자리 여백)을 쓰지 않는다 */
+.admin-main { margin: 0; padding: 20px max(16px, env(safe-area-inset-right, 0px)) 48px max(20px, env(safe-area-inset-left, 0px)); max-width: 1200px }
+.admin-main:focus { outline: none }
+
+.a-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px }
+.a-head h2 { margin: 0; font-size: 17px }
+.a-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; word-break: keep-all }
+.a-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center }
+.a-link { color: var(--primary); text-decoration: none; font-weight: 500 }
+.a-link:hover { text-decoration: underline }
+.a-crumb { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); text-decoration: none; font-size: 13px; margin-bottom: 10px }
+.a-crumb:hover { color: var(--fg) }
+.a-msg { border-radius: 8px; padding: 9px 12px; font-size: 13px; margin-bottom: 12px; color: var(--tone, var(--fg)); background: var(--tone-bg, var(--surface-2)); word-break: keep-all; overflow-wrap: anywhere }
+.btn.danger { color: var(--bad); border-color: var(--bad) }
+.btn.danger:hover { background: var(--bad-bg) }
+.btn.small { padding: 3px 9px; font-size: 12.5px }
+
+.a-table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius) }
+.a-table { width: 100%; border-collapse: collapse; font-size: 13px }
+.a-table th, .a-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap }
+.a-table td.wrap { white-space: normal; min-width: 160px; word-break: keep-all; overflow-wrap: anywhere }
+.a-table tr:last-child td { border-bottom: 0 }
+.a-table th { font-weight: 600; color: var(--muted); font-size: 12.5px; background: var(--surface-2) }
+.a-table th button { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; display: inline-flex; gap: 4px; align-items: center }
+.a-table th[aria-sort] button { color: var(--fg) }
+.a-table td.num, .a-table th.num { text-align: right }
+.a-empty { padding: 28px; text-align: center; color: var(--muted); font-size: 13px }
+.a-pager { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); font-size: 13px }
+
+.a-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; min-width: 0 }
+.a-card h3 { margin: 0; font-size: 15px }
+.a-card > p { margin: -6px 0 0; color: var(--muted); font-size: 12.5px; word-break: keep-all }
+.a-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; margin-top: 16px }
+.a-form { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 12px; align-items: end }
+.a-form .full { grid-column: 1 / -1 }
+.check { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; cursor: pointer }
+.check input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--primary); flex-shrink: 0 }
+.check small { display: block; color: var(--muted); font-size: 12px; word-break: keep-all }
+.check-list { display: flex; flex-direction: column; gap: 8px }
+.a-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; min-width: 0 }
+.a-row:last-child { border-bottom: 0 }
+.a-row .who { display: flex; flex-direction: column; min-width: 0 }
+.a-row .who b { font-weight: 500; overflow-wrap: anywhere }
+.a-row .who span { color: var(--muted); font-size: 12px }
+.field textarea { border: 1px solid var(--line); background: var(--surface); color: var(--fg); border-radius: 8px; padding: 9px 11px; font: inherit; font-size: 14px; min-height: 72px; resize: vertical }
+.field textarea:focus-visible { outline: 2px solid var(--primary); outline-offset: 0; border-color: var(--primary) }
+.a-gap { height: 12px }
+.a-col { display: flex; flex-direction: column; gap: 16px; min-width: 0 }
+.a-key { color: var(--muted); font-size: 11.5px }
+.pill.tone { color: var(--tone); background: var(--tone-bg) }
+
+@media (max-width: 800px) {
+  .a-grid, .a-form { grid-template-columns: minmax(0, 1fr) }
+}
+@media (max-width: 600px) {
+  .admin-top { padding-left: max(12px, env(safe-area-inset-left, 0px)) }
+  .admin-top h1 { flex-basis: 100%; order: 3 }
+  .admin-who { margin-left: auto }
+  .admin-main { padding: 16px max(12px, env(safe-area-inset-right, 0px)) 40px max(12px, env(safe-area-inset-left, 0px)) }
+  .a-card { padding: 14px }
+}

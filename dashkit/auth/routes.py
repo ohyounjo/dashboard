@@ -120,6 +120,11 @@ def _invalid_credentials() -> ApiError:
     return ApiError(401, "invalid_credentials", "이메일 또는 비밀번호가 올바르지 않습니다")
 
 
+def _audit_login(request: Request, action: str, email: str, user_id: str | None = None, **detail) -> None:
+    store.record_audit(action, actor_id=user_id, actor_email=email[:320] or None, target_type="user",
+                       target_id=user_id, target_label=email[:320] or None, detail=detail, ip=client_ip(request))
+
+
 @router.post("/login")
 def login(body: LoginRequest, request: Request, response: Response):
     cfg = auth_settings.get()
@@ -127,21 +132,27 @@ def login(body: LoginRequest, request: Request, response: Response):
     user = store.user_by_email(email) if emails.valid(email) else None
     if user is None or user.password_hash is None:
         passwords.verify_dummy(body.password)       # 없는 계정도 같은 비용(응답 시간)
+        _audit_login(request, "auth.login_failed", email, user.id if user else None, reason="no_password" if user else "unknown_account")
         raise _invalid_credentials()
     if not passwords.verify(user.password_hash, body.password):
+        _audit_login(request, "auth.login_failed", email, user.id, reason="wrong_password")
         raise _invalid_credentials()
     # 비밀번호가 맞은 뒤에만 상태를 알려 준다(상태로 계정 존재 여부를 알아낼 수 없다)
     if user.status == "pending":
+        _audit_login(request, "auth.login_failed", email, user.id, reason="email_not_verified")
         raise ApiError(403, "email_not_verified", "메일 인증을 마쳐야 로그인할 수 있습니다")
     if user.status == "suspended":
+        _audit_login(request, "auth.login_failed", email, user.id, reason="account_suspended")
         raise ApiError(403, "account_suspended", "정지된 계정입니다")
     if user.status != "active":
+        _audit_login(request, "auth.login_failed", email, user.id, reason="not_active")
         raise _invalid_credentials()
     new_hash = passwords.hash_password(body.password) if passwords.needs_rehash(user.password_hash) else None
     token = sessions.new_token()
     store.create_session(user.id, sessions.token_hash(token), sessions.expires_at(store.now(), cfg),
                          client_ip(request), request.headers.get("user-agent"))
     store.record_login_success(user.id, new_hash)
+    _audit_login(request, "auth.login", user.email, user.id)
     sessions.set_cookie(response, token, cfg)
     return {"email": user.email, "role": user.role, "must_change_password": user.must_change_password}
 
@@ -150,7 +161,9 @@ def login(body: LoginRequest, request: Request, response: Response):
 def logout(request: Request, response: Response):
     token = request.cookies.get(sessions.COOKIE_NAME)
     if sessions.plausible_token(token):
-        store.delete_session_by_hash(sessions.token_hash(token))
+        ended = store.delete_session_by_hash(sessions.token_hash(token))
+        if ended is not None:
+            _audit_login(request, "auth.logout", ended["email"], ended["user_id"])
     sessions.clear_cookie(response, auth_settings.get())
     response.status_code = 204
     return None
