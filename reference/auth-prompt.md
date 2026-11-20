@@ -47,6 +47,8 @@ AUTH_MAIL_MODE=smtp의 실제 발송 구현은 하지 않는다. smtp는 Mailer 
 - DB 계정 경계를 지킨다: 대시보드 데이터 읽기는 dash_reader만, 인증·운용 API는 dash_auth만, backend에는 owner 계정과 Superset 계정을 주지 않는다.
   dash_auth는 raw·dash를 읽지 못하고 dash_reader는 dashkit_auth를 읽지 못한다는 것을 테스트로 고정한다.
 - 권한 검사는 서버에서 한다. 화면에서 버튼을 숨기는 것만으로 끝내지 않는다. 3절의 규칙(operator는 user만, 마지막 admin 보호, 자기 자신 보호)마다 테스트를 둔다.
+- 테스트 메일함(GET /api/admin/outbox)은 operator에게 받는 계정의 등급이 user인 메일만 돌려준다(6절). operator가 admin·operator 주소로
+  비밀번호 찾기를 요청해도 그 링크를 볼 수 없다는 것을 테스트로 고정한다.
 - 비밀번호, 임시 비밀번호, 토큰, 해시를 로그·감사 로그·오류 응답·테스트 출력에 싣지 않는다. 비밀값은 코드와 커밋에 넣지 않고 환경변수로만 받는다.
 - 가입·비밀번호 찾기·로그인 실패 응답으로 계정 존재 여부를 구분할 수 없어야 한다(5-1, 5-2, 5-3). 테스트로 고정한다.
 - 사용자 입력이 들어가는 SQL은 전부 매개변수 바인딩이다. 식별자는 psycopg.sql.Identifier로만 넣는다.

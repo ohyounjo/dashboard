@@ -65,13 +65,14 @@ A6~A9는 작성자가 제안해 승인받은 것이다. R3·R7이 이 기능에 
 | 사용자 목록·상세 보기 | ✓ | ✓ | |
 | 일반사용자 임의 가입·초대, 리셋, 정지, 삭제 | ✓ | ✓ | |
 | 그룹 만들기·편집·삭제 | ✓ | ✓ | |
-| 접속 통계, 감사 로그, 테스트 메일함 보기 | ✓ | ✓ | |
+| 접속 통계, 감사 로그 보기 | ✓ | ✓ | |
+| 테스트 메일함 보기(6절) | 전부 | `user` 계정 앞으로 간 메일만 | |
 | 등급 변경 | ✓ | | |
 | operator·admin 계정의 리셋, 정지, 삭제 | ✓ | | |
 
 지켜야 할 규칙(서버에서 검사한다. 화면에서 버튼을 숨기는 것만으로 끝내지 않는다):
 
-- operator는 `user` 등급만 다룬다. operator·admin 계정을 대상으로 한 변경 요청은 403 `forbidden`.
+- operator는 `user` 등급만 다룬다. operator·admin 계정을 대상으로 한 변경 요청은 403 `forbidden`. 이 제한은 변경 API뿐 아니라 **그 계정의 인증 수단을 얻을 수 있는 모든 경로**(테스트 메일함의 링크 등)에 똑같이 적용한다.
 - 활성 상태인 admin이 한 명뿐이면 그 계정은 삭제·정지·강등할 수 없다(409 `last_admin`).
 - 자기 자신은 삭제·정지·강등할 수 없다(409 `self_target`).
 - 첫 admin은 화면으로 만들지 않는다. `make admin EMAIL=<주소>`(= `python -m dashkit auth create-admin`)로 만들고 비밀번호는 프롬프트로 받는다. 코드와 `.env`에 넣지 않는다.
@@ -202,7 +203,9 @@ class Mailer(Protocol):
 테스트 모드에서 메일을 확인하는 방법:
 
 - **테스트 메일함:** 운용 화면의 한 메뉴. 받는 사람, 종류, 시각, 링크를 최근 순으로 보여 주고 링크를 바로 열 수 있다. 운용자만 본다.
-- **CLI:** `make outbox`(= `python -m dashkit auth outbox`)가 최근 메일과 링크를 출력한다. 운용자 자신이 비밀번호를 잊었을 때 쓴다.
+  - **등급 제한:** operator에게는 받는 계정의 **지금 등급이 `user`인 메일만** 보인다. admin·operator 계정 앞으로 간 메일은 목록에도 나오지 않고 링크도 돌려주지 않는다. admin은 전부 본다. 비밀번호 찾기(5-3)는 로그인 없이 아무 주소로나 요청할 수 있으므로, 이 제한이 없으면 operator가 admin 주소로 찾기를 요청하고 메일함에서 링크를 가져와 admin 계정을 차지할 수 있다(3절의 제한 우회).
+  - 판정은 메일을 쌓을 때가 아니라 **읽을 때의 등급**으로 한다(`outbox.user_id`로 `users`와 묶는다). 계정이 지워진 메일은 함께 지워진다.
+- **CLI:** `make outbox`(= `python -m dashkit auth outbox`)가 최근 메일과 링크를 출력한다. 등급 제한 없이 전부 나온다(서버에 들어갈 수 있는 사람만 쓴다). admin 자신이 비밀번호를 잊었을 때, operator 계정의 링크가 필요한데 admin이 없을 때 쓴다.
 - 테스트 모드일 때 로그인·가입·비밀번호 찾기 화면과 운용 화면 위에 "메일 테스트 모드: 메일이 실제로 발송되지 않습니다" 띠를 보인다(`GET /api/auth/config`의 `mail_mode`).
 - 비밀번호 찾기를 요청한 화면에 링크를 바로 보여 주는 방식은 쓰지 않는다. 로그인하지 않은 사람이 남의 계정 링크를 얻게 되기 때문이다.
 - outbox는 테스트 모드에서만 쓴다. `smtp` 모드에서는 쌓지 않고 테스트 메일함 API는 404다. 행은 7일 지나면 지운다.
@@ -221,7 +224,7 @@ class Mailer(Protocol):
 - 서버 저장 세션이다. 로그인하면 256비트 임의 값을 만들어 쿠키 `dashkit_session`에 넣고, DB에는 그 SHA-256만 저장한다.
 - 쿠키 속성: `HttpOnly`, `SameSite=Lax`, `Path=/`, `AUTH_COOKIE_SECURE=1`이면 `Secure`. HTTPS로 배포할 때는 반드시 1로 둔다.
 - 만료: 마지막 사용 후 8시간(`AUTH_SESSION_IDLE_MINUTES`), 로그인 후 최대 7일(`AUTH_SESSION_MAX_DAYS`). `last_seen_at`은 1분에 한 번만 갱신한다.
-- 일괄 무효화: 비밀번호 변경·리셋, 정지, 삭제, 등급 변경 때 그 사용자의 세션을 지운다. 운용자는 사용자 상세에서 "모든 기기에서 로그아웃"을 누를 수 있다.
+- 일괄 무효화: 비밀번호 변경·리셋, 정지, 삭제, 등급 변경 때 그 사용자의 세션을 지운다. 등급 변경 때는 그 사용자의 쓰지 않은 일회용 토큰(재설정·초대·메일 인증)도 함께 지운다. `user`일 때 발급돼 operator가 볼 수 있었던 링크가 승급 뒤에 쓰이지 않게 한다. 운용자는 사용자 상세에서 "모든 기기에서 로그아웃"을 누를 수 있다.
 
 ### 7-3. 로그인 실패 잠금 (A6)
 
@@ -310,7 +313,7 @@ Studio의 `guard.py`와 같은 방식을 backend에 넣는다.
 | `group_tabs` | `group_id` FK(함께 삭제), `project` text, `tab_key` text. PK(`group_id`, `project`, `tab_key`) |
 | `view_events` | `id` bigserial PK, `user_id` FK NULL(삭제 시 NULL), `project`, `tab_key`, `viewed_at`. 색인(`project`, `tab_key`, `viewed_at`) |
 | `audit_log` | `id` bigserial PK, `at`, `actor_id` uuid NULL, `actor_email` text, `action` text, `target_type` text, `target_id` text, `target_label` text, `detail` jsonb, `ip` inet |
-| `outbox` | `id` bigserial PK, `to_email`, `kind`, `link` text NULL, `created_at`. 테스트 모드 전용 |
+| `outbox` | `id` bigserial PK, `user_id` FK(함께 삭제), `to_email`, `kind`, `link` text NULL, `created_at`. 테스트 모드 전용. `user_id`는 읽는 사람의 등급 제한(6절)에 쓴다 |
 | `schema_version` | `version` int PK, `applied_at` |
 
 ## 11. API
@@ -356,7 +359,7 @@ Studio의 `guard.py`와 같은 방식을 backend에 넣는다.
 | `GET /tabs` | 현재 프로젝트의 탭 목록(`key`, `label`)과 그룹이 참조하는 다른 프로젝트·없는 탭 |
 | `GET /stats/tabs?days=`, `GET /stats/users?days=` | 9-1 |
 | `GET /audit?action=&from=&to=` | 9-2 |
-| `GET /outbox` | 테스트 모드 전용. 그 밖에는 404 |
+| `GET /outbox` | 테스트 모드 전용. 그 밖에는 404. operator에게는 받는 계정의 등급이 `user`인 행만 돌려준다(6절) |
 
 공통 오류: 401 `unauthenticated`, 403 `forbidden`·`password_change_required`, 404 `unknown_user`·`unknown_group`, 409 `last_admin`·`self_target`·`group_exists`, 429 `rate_limited`.
 
@@ -390,7 +393,7 @@ Studio의 `guard.py`와 같은 방식을 backend에 넣는다.
 | 4. 운용 화면 | 사용자 목록·상세, 임의 가입·초대·일괄 초대, 리셋 두 방식, 정지, 삭제, 일괄 그룹 지정, 내 정보 | 3절의 권한 표가 테스트로 고정된다(operator가 admin을 건드리지 못함, 마지막 admin 보호) |
 | 5. 통계와 기록 | 접속 통계, 감사 로그, 보존 기간 정리 | 통계 화면에 탭별·사용자별 수치가 나오고 9-2의 모든 동작이 감사 로그에 남는다 |
 
-테스트는 단계마다 같이 넣는다(`tests/test_auth_*.py`). 반드시 포함할 것: 가입·찾기 응답으로 계정 존재 여부를 구분할 수 없음, 토큰 재사용·만료 거절, 비밀번호 변경 후 다른 세션 무효, 권한 없는 탭의 guest token 거절, `dash_reader`가 `dashkit_auth`를 읽지 못함.
+테스트는 단계마다 같이 넣는다(`tests/test_auth_*.py`). 반드시 포함할 것: 가입·찾기 응답으로 계정 존재 여부를 구분할 수 없음, 토큰 재사용·만료 거절, 비밀번호 변경 후 다른 세션 무효, 권한 없는 탭의 guest token 거절, `dash_reader`가 `dashkit_auth`를 읽지 못함, operator가 admin·operator 주소로 비밀번호 찾기를 요청해도 테스트 메일함에서 그 링크를 볼 수 없음, 등급 변경 뒤 이전에 발급된 토큰 거절.
 
 ## 14. 회사에서 정해야 할 것
 
