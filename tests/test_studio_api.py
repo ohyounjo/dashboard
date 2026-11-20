@@ -325,7 +325,7 @@ def test_hand_edit_between_requests_is_respected(client):
 def test_ops_registry_takes_new_ops(monkeypatch):
     """연산은 등록 표에 함수를 더하면 는다."""
     assert sorted(ops.OPS) == [
-        "app.update", "chart.add", "chart.remove", "chart.update", "dashboard.update",
+        "app.update", "chart.add", "chart.remove", "chart.update", "column.update", "dashboard.update",
         "filter.add", "filter.move", "filter.remove", "filter.update", "layout.set",
         "section.add", "section.move", "section.remove", "section.update",
         "tab.add", "tab.move", "tab.remove", "tab.update"]
@@ -1079,3 +1079,20 @@ def test_studio_subcommand_exists():
     with pytest.raises(SystemExit) as exc:
         main(["studio", "--help"])
     assert exc.value.code == 0
+
+
+def test_column_update_saves_aliases_the_same_way_as_the_manager(client, tmp_path, monkeypatch):
+    """schema.yaml 열 연산(column.update): Studio의 PATCH와 관리 서비스가 쓰는 store.save_ops가 같은 바이트를 쓴다
+    (공용 코어 한 벌, contracts/studio.md "변경 연산")."""
+    op = {"op": "column.update", "table": "members", "column": "name", "set": {"aliases": ["이름", "Name"]}}
+    r = patch(client, op)
+    assert r.status == 200, r.body
+    via_studio = (client.projects / "devtracker" / "schema.yaml").read_bytes()
+    assert "aliases: [이름, Name]".encode() in via_studio or b"- Name" in via_studio
+    (tmp_path / "other").mkdir()
+    other = fresh_client(tmp_path / "other", monkeypatch)
+    out = store.save_ops("devtracker", [op], store.revision(other.projects / "devtracker"))
+    assert out["changed"] == ["schema.yaml"]
+    assert (other.projects / "devtracker" / "schema.yaml").read_bytes() == via_studio
+    r = patch(client, {"op": "column.update", "table": "members", "column": "name", "set": {"type": "integer"}})
+    assert r.status == 400 and "바꿀 수 없는 키" in json.loads(r.body)["message"]
