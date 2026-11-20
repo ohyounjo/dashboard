@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -63,6 +64,26 @@ def page(items: list[dict[str, Any]], page_no: int, size: int, sort: str | None,
 PageNo = Query(1, ge=1, alias="page")
 PageSize = Query(50, ge=1, le=MAX_PAGE_SIZE, alias="size")
 SortKey = Query(None, alias="sort", max_length=40)
+
+
+def manage_roles(actor: Principal) -> store.Roles:
+    """저장 함수가 대상 행을 잠근 뒤 다시 볼 등급. admin은 모든 등급(검사 없음), operator는 user만."""
+    return None if actor.role == "admin" else ("user",)
+
+
+@contextmanager
+def store_checks():
+    """저장 함수가 잠금 안에서 다시 본 결과를 API 오류로 바꾼다(검사 뒤 동시 변경에 대비)."""
+    try:
+        yield
+    except store.Forbidden:
+        raise ApiError(403, "forbidden", "운용진은 일반사용자 계정만 다룰 수 있습니다") from None
+    except store.InvalidStatus:
+        raise ApiError(409, "invalid_status", "지금 계정 상태에서는 할 수 없습니다") from None
+    except store.NotFound:
+        raise ApiError(404, "unknown_user", "없는 사용자입니다") from None
+    except store.LastAdmin:
+        raise ApiError(409, "last_admin", "마지막 활성 admin입니다") from None
 
 
 def ensure_can_manage(actor: Principal, targets: list[dict[str, Any]]) -> None:
@@ -286,8 +307,10 @@ def put_group_members(group_id: str, body: GroupMembersPut, request: Request,
     targets_add = list({u["id"]: u for u in found_add}.values())
     targets_remove = [by_id[r] for r in remove_refs if r in by_id]
     ensure_can_manage(actor, targets_add + targets_remove)
-    added, removed = store.change_group_members(group_id, [u["id"] for u in targets_add],
-                                                [u["id"] for u in targets_remove], actor.id)
+    with store_checks():
+        added, removed = store.change_group_members(group_id, [u["id"] for u in targets_add],
+                                                    [u["id"] for u in targets_remove], actor.id,
+                                                    roles=manage_roles(actor))
     if added or removed:
         emails_of = {u["id"]: u["email"] for u in targets_add + targets_remove}
         audit(request, actor, "group.members", target_type="group", target_id=group_id, target_label=group["name"],
@@ -503,21 +526,20 @@ def patch_user(user_id: str, body: UserPatch, request: Request, actor: Principal
     groups = _check_groups(body.group_ids) if body.group_ids is not None else None
 
     if body.role is not None and body.role != target["role"]:
-        try:   # 마지막 활성 admin인지는 같은 트랜잭션에서 활성 admin 행을 잠그고 다시 본다(동시 변경 대비)
+        with store_checks():   # 마지막 활성 admin인지는 같은 트랜잭션에서 활성 admin 행을 잠그고 다시 본다
             store.set_role(user_id, body.role, guard_admin=target["role"] == "admin")
-        except store.LastAdmin:
-            raise _last_admin() from None
         audit(request, actor, "user.role", target_type="user", target_id=user_id, target_label=target["email"],
               detail={"from": target["role"], "to": body.role})
     if body.status is not None and body.status != target["status"]:
-        try:
-            store.set_status(user_id, body.status, guard_admin=body.status == "suspended" and target["role"] == "admin")
-        except store.LastAdmin:
-            raise _last_admin() from None
+        with store_checks():
+            store.set_status(user_id, body.status, guard_admin=body.status == "suspended" and target["role"] == "admin",
+                             roles=manage_roles(actor))
         audit(request, actor, "user.suspend" if body.status == "suspended" else "user.unsuspend",
               target_type="user", target_id=user_id, target_label=target["email"])
     if groups is not None:
-        added, removed = store.set_user_groups(user_id, [g["id"] for g in groups], actor.id)
+        with store_checks():
+            added, removed = store.set_user_groups(user_id, [g["id"] for g in groups], actor.id,
+                                                   roles=manage_roles(actor))
         if added or removed:
             names = {g["id"]: g["name"] for g in groups + target["groups"]}
             audit(request, actor, "user.groups", target_type="user", target_id=user_id, target_label=target["email"],
@@ -531,10 +553,8 @@ def delete_user(user_id: str, request: Request, actor: Principal = Depends(requi
     target = _load_target(user_id)
     ensure_can_manage(actor, [target])
     _protect_admins(actor, target, removes_admin=True)
-    try:
-        deleted = store.delete_user(user_id, guard_admin=target["role"] == "admin")
-    except store.LastAdmin:
-        raise _last_admin() from None
+    with store_checks():
+        deleted = store.delete_user(user_id, guard_admin=target["role"] == "admin", roles=manage_roles(actor))
     if not deleted:
         raise _user_not_found()
     audit(request, actor, "user.delete", target_type="user", target_id=user_id, target_label=target["email"],
@@ -559,10 +579,12 @@ def reset_user_password(user_id: str, body: ResetPassword, request: Request,
         if target["status"] != "active":
             raise ApiError(409, "invalid_status", "활성 계정만 재설정 메일을 받습니다")
         _ensure_mail()
-        store.delete_user_sessions(user_id)          # 세션을 먼저 끊는다(메일이 실패해도 기존 로그인은 끊겨 있다)
+        # 토큰 발급과 세션 삭제를 한 트랜잭션으로, 대상 행을 잠근 뒤 지금 등급·상태를 다시 보고 한다
+        with store_checks():
+            token = issue_token(user_id, "reset_password", roles=manage_roles(actor), statuses=("active",),
+                                end_sessions=True)
         try:
-            mailer.get().send(target["email"], "reset_password",
-                              mailer.link("reset.html", issue_token(user_id, "reset_password")))
+            mailer.get().send(target["email"], "reset_password", mailer.link("reset.html", token))
         except mailer.MailUnavailable:
             raise _mail_unavailable() from None
         audit(request, actor, "user.reset_password", target_type="user", target_id=user_id,
@@ -571,8 +593,11 @@ def reset_user_password(user_id: str, body: ResetPassword, request: Request,
     if target["status"] not in ("active", "suspended"):
         raise ApiError(409, "invalid_status", "초대·인증 전 계정은 임시 비밀번호를 받을 수 없습니다")
     temporary = passwords.temporary_password()
-    # 임시 비밀번호와 세션 삭제를 한 트랜잭션으로
-    store.set_password(user_id, passwords.hash_password(temporary), must_change=True, end_sessions=True)
+    # 임시 비밀번호와 세션 삭제를 한 트랜잭션으로. 대상 행을 잠근 뒤 지금 등급·상태를 다시 본다
+    # (검사 뒤에 대상이 승급됐으면 operator의 요청은 403이고 아무것도 바뀌지 않는다)
+    with store_checks():
+        store.set_password(user_id, passwords.hash_password(temporary), must_change=True, end_sessions=True,
+                           roles=manage_roles(actor), statuses=("active", "suspended"))
     audit(request, actor, "user.reset_password", target_type="user", target_id=user_id,
           target_label=target["email"], detail={"method": "temporary"})
     return {"password": temporary}
@@ -585,7 +610,9 @@ def resend_invite(user_id: str, request: Request, actor: Principal = Depends(req
     if target["status"] != "invited":
         raise ApiError(409, "invalid_status", "초대 상태인 계정만 다시 보낼 수 있습니다")
     _ensure_mail()
-    _send_invite(user_id, target["email"])
+    with store_checks():
+        token = issue_token(user_id, "invite", roles=manage_roles(actor), statuses=("invited",))
+    _send_invite(user_id, target["email"], token)
     audit(request, actor, "user.invite_resent", target_type="user", target_id=user_id, target_label=target["email"])
     return Response(status_code=204)
 
@@ -594,7 +621,8 @@ def resend_invite(user_id: str, request: Request, actor: Principal = Depends(req
 def unlock_user(user_id: str, request: Request, actor: Principal = Depends(require_operator)):
     target = _load_target(user_id)
     ensure_can_manage(actor, [target])
-    store.unlock_user(user_id)
+    with store_checks():
+        store.unlock_user(user_id, roles=manage_roles(actor))
     audit(request, actor, "user.unlock", target_type="user", target_id=user_id, target_label=target["email"])
     return Response(status_code=204)
 
@@ -603,7 +631,8 @@ def unlock_user(user_id: str, request: Request, actor: Principal = Depends(requi
 def logout_all(user_id: str, request: Request, actor: Principal = Depends(require_operator)):
     target = _load_target(user_id)
     ensure_can_manage(actor, [target])
-    n = store.delete_user_sessions(user_id)
+    with store_checks():
+        n = store.delete_user_sessions(user_id, roles=manage_roles(actor))
     audit(request, actor, "user.logout_all", target_type="user", target_id=user_id, target_label=target["email"],
           detail={"sessions": n})
     return Response(status_code=204)
@@ -628,13 +657,17 @@ def bulk_groups(body: BulkGroups, request: Request, actor: Principal = Depends(r
     if {g["id"] for g in add} & {g["id"] for g in remove}:
         raise ApiError(422, "invalid_request", "같은 그룹을 더하고 뺄 수 없습니다")
     for g in add:
-        added, _ = store.change_group_members(g["id"], [t["id"] for t in targets], [], actor.id)
+        with store_checks():
+            added, _ = store.change_group_members(g["id"], [t["id"] for t in targets], [], actor.id,
+                                                  roles=manage_roles(actor))
         if added:
             emails_of = {t["id"]: t["email"] for t in targets}
             audit(request, actor, "group.members", target_type="group", target_id=g["id"], target_label=g["name"],
                   detail={"added": [emails_of[i] for i in added], "removed": [], "bulk": True})
     for g in remove:
-        _, removed = store.change_group_members(g["id"], [], [t["id"] for t in targets], actor.id)
+        with store_checks():
+            _, removed = store.change_group_members(g["id"], [], [t["id"] for t in targets], actor.id,
+                                                    roles=manage_roles(actor))
         if removed:
             emails_of = {t["id"]: t["email"] for t in targets}
             audit(request, actor, "group.members", target_type="group", target_id=g["id"], target_label=g["name"],

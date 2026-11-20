@@ -42,6 +42,39 @@ class LastAdmin(Exception):
     """이 변경으로 활성 admin이 없어진다(마지막 활성 admin)."""
 
 
+class Forbidden(Exception):
+    """잠근 뒤 다시 본 대상 계정의 지금 등급을 이 행위자가 다룰 수 없다(operator는 user만)."""
+
+
+class InvalidStatus(Exception):
+    """잠근 뒤 다시 본 대상 계정의 지금 상태에서는 할 수 없다."""
+
+
+class NotFound(Exception):
+    """대상 계정이 없다(그 사이 지워졌다)."""
+
+
+Roles = tuple[str, ...] | None   # 행위자가 다룰 수 있는 대상 등급. None이면 검사하지 않는다(admin)
+
+
+def _lock_targets(conn: psycopg.Connection, user_ids: list[str], roles: Roles = None,
+                  statuses: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
+    """(트랜잭션 안) 대상 사용자 행을 id 순서로 잠그고 **지금** 등급·상태를 다시 본다.
+    권한 검사(operator는 user만)와 상태 조건이 검사 뒤의 동시 변경(승급 등)에 뚫리지 않게 한다."""
+    ids = sorted(set(user_ids))
+    if not ids:
+        return []
+    rows = conn.execute("SELECT id, role, status FROM dashkit_auth.users WHERE id = ANY(%s::uuid[]) ORDER BY id FOR UPDATE",
+                        (ids,)).fetchall()
+    if len(rows) != len(ids):
+        raise NotFound()
+    if roles is not None and any(r["role"] not in roles for r in rows):
+        raise Forbidden()
+    if statuses is not None and any(r["status"] not in statuses for r in rows):
+        raise InvalidStatus()
+    return rows
+
+
 def now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -224,11 +257,14 @@ def _guard_last_admin(conn: psycopg.Connection, user_id: str) -> None:
         raise LastAdmin()
 
 
-def delete_user(user_id: str, *, guard_admin: bool = False) -> bool:
-    """guard_admin이면 같은 트랜잭션에서 마지막 활성 admin인지 다시 본다(LastAdmin)."""
+def delete_user(user_id: str, *, guard_admin: bool = False, roles: Roles = None) -> bool:
+    """계정을 지운다. guard_admin이면 같은 트랜잭션에서 마지막 활성 admin인지 다시 보고(LastAdmin),
+    roles면 잠근 뒤 지금 등급을 다시 본다(Forbidden)."""
     with connection() as conn, conn.transaction():
         if guard_admin:
             _guard_last_admin(conn, user_id)
+        if roles is not None:
+            _lock_targets(conn, [user_id], roles)
         cur = conn.execute("DELETE FROM dashkit_auth.users WHERE id = %s", (user_id,))
         return cur.rowcount > 0
 
@@ -304,8 +340,11 @@ def delete_session_by_hash(token_hash: bytes) -> dict[str, Any] | None:
     return {"user_id": str(row["user_id"]), "email": row["email"]} if row else None
 
 
-def delete_user_sessions(user_id: str, except_session: str | None = None) -> int:
-    with connection() as conn:
+def delete_user_sessions(user_id: str, except_session: str | None = None, *, roles: Roles = None) -> int:
+    """그 사용자의 세션을 지운다(except_session 하나는 남길 수 있다). roles면 잠근 뒤 지금 등급을 다시 본다."""
+    with connection() as conn, conn.transaction():
+        if roles is not None:
+            _lock_targets(conn, [user_id], roles)
         cur = conn.execute(
             "DELETE FROM dashkit_auth.sessions WHERE user_id = %s AND (%s::uuid IS NULL OR id <> %s::uuid)",
             (user_id, except_session, except_session),
@@ -490,11 +529,13 @@ def users_by_refs(emails: list[str], ids: list[str]) -> list[dict[str, Any]]:
 
 
 def change_group_members(group_id: str, add_ids: list[str], remove_ids: list[str],
-                         added_by: str | None) -> tuple[list[str], list[str]]:
-    """(실제로 더한 id, 실제로 뺀 id)."""
+                         added_by: str | None, *, roles: Roles = None) -> tuple[list[str], list[str]]:
+    """(실제로 더한 id, 실제로 뺀 id). 그룹 행과 대상 사용자 행을 잠그고, roles면 대상의 지금 등급을 다시 본다."""
     added: list[str] = []
     removed: list[str] = []
     with connection() as conn, conn.transaction():
+        conn.execute("SELECT 1 FROM dashkit_auth.groups WHERE id = %s FOR UPDATE", (group_id,))
+        _lock_targets(conn, add_ids + remove_ids, roles)
         for uid in remove_ids:
             if conn.execute("DELETE FROM dashkit_auth.group_members WHERE group_id = %s AND user_id = %s",
                             (group_id, uid)).rowcount:
@@ -584,11 +625,12 @@ _SET_PASSWORD = """UPDATE dashkit_auth.users
 
 
 def set_password(user_id: str, password_hash: str, *, must_change: bool = False,
-                 end_sessions: bool = False, keep_session: str | None = None) -> None:
-    """새 비밀번호. 비밀번호 변경일을 남기고 실패 횟수·잠금을 지운다.
-    end_sessions면 같은 트랜잭션에서 그 사용자의 세션을 지운다(keep_session 하나는 남길 수 있다)."""
+                 end_sessions: bool = False, keep_session: str | None = None,
+                 roles: Roles = None, statuses: tuple[str, ...] | None = None) -> None:
+    """새 비밀번호. 비밀번호 변경일을 남기고 실패 횟수·잠금을 지운다. 사용자 행을 잠그고, roles·statuses면 그 안에서
+    지금 등급·상태를 다시 본다(Forbidden·InvalidStatus). end_sessions면 같은 트랜잭션에서 세션을 지운다."""
     with connection() as conn, conn.transaction():
-        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user_id,))
+        _lock_targets(conn, [user_id], roles, statuses)
         conn.execute(_SET_PASSWORD, (password_hash, must_change, user_id))
         if end_sessions:
             conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s AND (%s::uuid IS NULL OR id <> %s::uuid)",
@@ -663,16 +705,20 @@ def record_login_failure(user_id: str, threshold: int, lock_minutes: int) -> dat
 
 # ---------------------------------------------------------------- 일회용 토큰
 
-def create_token(user_id: str, purpose: str, token_hash: bytes, expires_at: datetime) -> None:
+def create_token(user_id: str, purpose: str, token_hash: bytes, expires_at: datetime, *,
+                 roles: Roles = None, statuses: tuple[str, ...] | None = None, end_sessions: bool = False) -> None:
     """같은 사용자·같은 용도의 이전 토큰을 지우고 새로 넣는다(이전 링크는 무효).
-    사용자 행을 먼저 잠가 같은 사용자의 동시 발급을 직렬화한다(유효한 토큰은 용도마다 하나만 남는다)."""
+    사용자 행을 먼저 잠가 같은 사용자의 동시 발급을 직렬화한다(유효한 토큰은 용도마다 하나만 남는다).
+    roles·statuses면 잠근 뒤 지금 등급·상태를 다시 보고, end_sessions면 같은 트랜잭션에서 세션도 지운다."""
     with connection() as conn, conn.transaction():
-        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user_id,))
+        _lock_targets(conn, [user_id], roles, statuses)
         conn.execute("DELETE FROM dashkit_auth.tokens WHERE user_id = %s AND purpose = %s", (user_id, purpose))
         conn.execute(
             "INSERT INTO dashkit_auth.tokens (user_id, purpose, token_hash, expires_at) VALUES (%s, %s, %s, %s)",
             (user_id, purpose, token_hash, expires_at),
         )
+        if end_sessions:
+            conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s", (user_id,))
 
 
 def token_owner(token_hash: bytes, purposes: tuple[str, ...]) -> dict[str, Any] | None:
@@ -810,27 +856,32 @@ def set_role(user_id: str, role: str, *, guard_admin: bool = False) -> None:
         conn.execute("DELETE FROM dashkit_auth.tokens WHERE user_id = %s", (user_id,))
 
 
-def set_status(user_id: str, status: str, *, guard_admin: bool = False) -> None:
+def set_status(user_id: str, status: str, *, guard_admin: bool = False, roles: Roles = None) -> None:
     """active ↔ suspended. 정지하면 세션을 지운다(그룹 구성·접속 기록·비밀번호는 그대로).
-    guard_admin이면 같은 트랜잭션에서 마지막 활성 admin인지 다시 본다."""
+    guard_admin이면 마지막 활성 admin인지, roles면 지금 등급을, 그리고 지금 상태가 active·suspended인지 잠근 뒤 다시 본다."""
     with connection() as conn, conn.transaction():
         if guard_admin:
             _guard_last_admin(conn, user_id)
+        _lock_targets(conn, [user_id], roles, ("active", "suspended"))
         conn.execute("UPDATE dashkit_auth.users SET status = %s WHERE id = %s", (status, user_id))
         if status == "suspended":
             conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s", (user_id,))
 
 
-def unlock_user(user_id: str) -> None:
-    with connection() as conn:
+def unlock_user(user_id: str, *, roles: Roles = None) -> None:
+    with connection() as conn, conn.transaction():
+        _lock_targets(conn, [user_id], roles)
         conn.execute("UPDATE dashkit_auth.users SET failed_count = 0, locked_until = NULL WHERE id = %s", (user_id,))
 
 
-def set_user_groups(user_id: str, group_ids: list[str], added_by: str | None) -> tuple[list[str], list[str]]:
-    """그 사용자의 그룹을 통째로 바꾼다. (더한 그룹 id, 뺀 그룹 id)."""
+def set_user_groups(user_id: str, group_ids: list[str], added_by: str | None, *,
+                    roles: Roles = None) -> tuple[list[str], list[str]]:
+    """그 사용자의 그룹을 통째로 바꾼다. (더한 그룹 id, 뺀 그룹 id).
+    부모 사용자 행을 먼저 잠가(그룹이 하나도 없는 사용자도) 같은 사용자의 동시 교체를 직렬화하고, roles면 지금 등급을 다시 본다."""
     with connection() as conn, conn.transaction():
+        _lock_targets(conn, [user_id], roles)
         before = {str(r["group_id"]) for r in conn.execute(
-            "SELECT group_id FROM dashkit_auth.group_members WHERE user_id = %s FOR UPDATE", (user_id,)).fetchall()}
+            "SELECT group_id FROM dashkit_auth.group_members WHERE user_id = %s", (user_id,)).fetchall()}
         after = set(group_ids)
         for gid in before - after:
             conn.execute("DELETE FROM dashkit_auth.group_members WHERE user_id = %s AND group_id = %s", (user_id, gid))

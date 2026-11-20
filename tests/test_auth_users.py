@@ -318,6 +318,65 @@ def test_own_password_change_does_not_override_a_concurrent_reset(accounts):
     assert login(user["email"], "operator-set-pass-6")
 
 
+def test_operator_actions_recheck_the_target_under_lock(accounts):
+    """operator의 권한 검사(대상이 user인지)를 저장 트랜잭션 안에서 다시 한다. 검사 뒤 대상이 승급되면 403이고
+    아무것도 바뀌지 않는다(임시 비밀번호를 받아 승급된 계정에 로그인하는 일을 막는다)."""
+    import threading
+
+    op = accounts("operator")
+    target = accounts("user", log_in=False)
+    actions = [
+        ("POST", "/reset-password", {"method": "temporary"}),
+        ("POST", "/reset-password", {"method": "mail"}),
+        ("PATCH", "", {"status": "suspended"}),
+        ("PATCH", "", {"group_ids": []}),
+        ("POST", "/unlock", {}),
+        ("POST", "/logout-all", {}),
+        ("DELETE", "", None),
+    ]
+    for method, sub, body in actions:
+        sql("UPDATE dashkit_auth.users SET role = 'user' WHERE id = %s", (target["id"],))
+        result: dict = {}
+        with db.auth_conn() as conn:                                    # admin의 승급이 진행 중인 것처럼 행을 잡는다
+            conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (target["id"],))
+            t = threading.Thread(target=lambda: result.setdefault("r", as_(op, method, f"/api/admin/users/{target['id']}{sub}", body)))
+            t.start()
+            t.join(1.5)
+            assert t.is_alive(), (method, sub)                          # 앞의 검사는 통과했고 저장에서 기다린다
+            conn.execute("UPDATE dashkit_auth.users SET role = 'admin' WHERE id = %s", (target["id"],))
+            conn.commit()
+        t.join(10)
+        code, resp = result["r"]
+        assert (code, resp["detail"]) == (403, "forbidden"), (method, sub, code, resp)
+    (role, status, must_change), = sql("SELECT role, status, must_change_password FROM dashkit_auth.users WHERE id = %s", (target["id"],))
+    assert (role, status, must_change) == ("admin", "active", False)
+    assert login(target["email"], PW)                                    # 비밀번호도 그대로
+    assert not sql("SELECT 1 FROM dashkit_auth.tokens WHERE user_id = %s", (target["id"],))
+
+
+def test_user_group_replacement_waits_for_the_user_row(accounts):
+    """그룹이 없는 사용자의 그룹 전체 교체도 사용자 행을 먼저 잠가 동시 교체가 합쳐지지 않는다."""
+    import threading
+
+    from dashkit.auth import store
+
+    user = accounts("user", log_in=False)
+    code, g = api("POST", "/api/admin/groups", {"name": f"lock-{secrets.token_hex(3)}"})
+    try:
+        done = threading.Event()
+        with db.auth_conn() as conn:
+            conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user["id"],))
+            t = threading.Thread(target=lambda: (store.set_user_groups(user["id"], [g["id"]], None), done.set()))
+            t.start()
+            assert not done.wait(1.5)
+            conn.rollback()
+        assert done.wait(10)
+        t.join()
+        assert [x["id"] for x in api("GET", f"/api/admin/users/{user['id']}")[1]["groups"]] == [g["id"]]
+    finally:
+        api("DELETE", f"/api/admin/groups/{g['id']}")
+
+
 def test_reset_mail_unlock_logout_all(accounts):
     user = accounts("user")
     assert api("POST", f"/api/admin/users/{user['id']}/reset-password", {"method": "mail"})[0] == 204

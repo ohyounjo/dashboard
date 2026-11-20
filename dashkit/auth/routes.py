@@ -208,12 +208,14 @@ def logout(request: Request, response: Response):
 TOKEN_TTL = {"verify_email": 24 * 60, "reset_password": 30, "invite": 72 * 60}     # 분
 
 
-def issue_token(user_id: str, purpose: str) -> str:
-    """일회용 토큰(256비트, DB에는 SHA-256만). 같은 사용자·같은 용도의 이전 토큰은 무효가 된다."""
+def issue_token(user_id: str, purpose: str, **guard) -> str:
+    """일회용 토큰(256비트, DB에는 SHA-256만). 같은 사용자·같은 용도의 이전 토큰은 무효가 된다.
+    guard(roles, statuses, end_sessions)는 store.create_token에 그대로 넘긴다(잠근 뒤 대상 계정을 다시 본다)."""
     from datetime import timedelta
 
     token = sessions.new_token()
-    store.create_token(user_id, purpose, sessions.token_hash(token), store.now() + timedelta(minutes=TOKEN_TTL[purpose]))
+    store.create_token(user_id, purpose, sessions.token_hash(token),
+                       store.now() + timedelta(minutes=TOKEN_TTL[purpose]), **guard)
     return token
 
 
