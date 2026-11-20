@@ -726,7 +726,7 @@ Studio와 manager는 같은 일(추론, 파일 받기, 설정 연산, 저장, ap
 | `PATCH /config` | `{ops: […], revision}` → 202 작업(검증 → 저장 → apply). 연산은 6-3. admin |
 | `POST /tables/{t}/rows/query`, `POST /datasets/{d}/rows/query` | 행 조회(8-1) |
 | `GET /datasets` | 목록(읽는 테이블, 쓰는 그래프 수) |
-| `GET /lineage` | 계보(7-2) |
+| `GET /lineage`, `GET /tables/{t}/used_by` | 계보(7-2), 테이블의 쓰이는 곳 |
 | `GET /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/rejects` | 작업 목록, 상태·진행률·결과·로그, 빠진 행(CSV. 민감 열은 가린다) |
 | `GET /history`, `POST /history/{id}/restore`, `GET /export` | 설정 변경 이력, 되돌리기(202 작업), 설정 파일 내려받기(zip: `schema.yaml`, `dashboard.yaml`. 데이터는 넣지 않는다). admin |
 | `GET /health` | 로그인 불필요 |

@@ -104,13 +104,13 @@ def build(project: config.Project, table: Mapping[str, Any], content: bytes, sou
         taken = set(project.dashboard["datasets"])
         key = name if name not in taken else f"{name}_rows"
         ds: dict[str, Any] = {"table": name}
-        draft = scaffold.suggest_dashboard([{**table, "name": name, "label": table.get("label") or name,
+        sketch = scaffold.suggest_dashboard([{**table, "name": name, "label": table.get("label") or name,
                                              "rows": table.get("rows", 0)}]) if suggest else None
-        if draft:
-            ds = {**draft["datasets"][name], "table": name}
+        if sketch:
+            ds = {**sketch["datasets"][name], "table": name}
         ops.append({"op": "dataset.add", "key": key, "value": ds})
-        if draft:
-            ops += _draft_ops(project, draft, name, key)
+        if sketch:
+            ops += _sketch_ops(project, sketch, name, key)
     return ops, files
 
 
@@ -157,7 +157,7 @@ def _first_file(project: config.Project, name: str, value: Mapping[str, Any], co
     return buf.getvalue()
 
 
-def _draft_ops(project: config.Project, draft: Mapping[str, Any], name: str, dataset_key: str) -> list[dict[str, Any]]:
+def _sketch_ops(project: config.Project, sketch: Mapping[str, Any], name: str, dataset_key: str) -> list[dict[str, Any]]:
     """초안 그래프: Superset 대시보드 하나와 웹앱 탭 하나(그룹이 허용하기 전에는 user 등급에게 보이지 않는다)."""
     ops: list[dict[str, Any]] = []
     dashboards = project.dashboard["dashboards"]
@@ -165,7 +165,7 @@ def _draft_ops(project: config.Project, draft: Mapping[str, Any], name: str, dat
     taken_charts = {c["key"] for _d, c in config.charts(project)}
     rename: dict[str, str] = {}
     charts = []
-    for chart in draft["dashboards"][name]["charts"]:
+    for chart in sketch["dashboards"][name]["charts"]:
         key = chart["key"]
         while key in taken_charts:
             key = f"{key}_2"[:63]
@@ -181,10 +181,10 @@ def _draft_ops(project: config.Project, draft: Mapping[str, Any], name: str, dat
             return rename.get(entry, entry)
         return entry
 
-    board = draft["dashboards"][name]
+    board = sketch["dashboards"][name]
     ops.append({"op": "dashboard.add", "key": dkey, "value": {"title": board["title"], "charts": charts,
                                                             "layout": fix(board["layout"])}})
-    tab = draft["tabs"][0]
+    tab = sketch["tabs"][0]
     tabs = {t["key"] for t in project.dashboard["tabs"]}
     tkey = tab["key"] if tab["key"] not in tabs else f"{tab['key']}_tab"
     ops.append({"op": "tab.add", "tab": {"key": tkey, "label": tab["label"], "icon": tab["icon"]}})

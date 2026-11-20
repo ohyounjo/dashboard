@@ -67,24 +67,41 @@ def history_root(project: str) -> Path:
     return store.state_dir() / "history" / project
 
 
-def _write_history(project: str, action: str, files: Mapping[str, tuple[bytes | None, bytes | None]]) -> str:
-    """변경 전 사본과 전·후 해시를 남긴다(.state/history/<프로젝트>/<시각>-<동작>/). 최근 HISTORY_KEEP개만."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    hid = f"{stamp}-{action}"
+def _new_history_id(action: str) -> str:
+    return f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}-{action}"
+
+
+def _write_history(project: str, hid: str, action: str, files: list[tuple[str, bytes | None, str | None]]) -> None:
+    """변경 전 사본과 전·후 해시를 남긴다(.state/history/<프로젝트>/<시각>-<동작>/). 최근 HISTORY_KEEP개만.
+
+    files는 [(경로, 변경 전 내용 | None, 새 내용의 해시 | None)]. load까지 끝난 변경만 남긴다(되돌려진 변경은 남기지 않는다).
+    변경 전 사본은 그때까지 묶음 기록에 있으므로, 커밋 뒤 이력을 쓰기 전에 끊겨도 복구가 기록에서 이력을 쓴다.
+    """
     root = history_root(project) / hid
-    (root / "before").mkdir(parents=True)
+    if (root / "meta.json").is_file():
+        return
+    (root / "before").mkdir(parents=True, exist_ok=True)
     meta = {"id": hid, "action": action, "at": datetime.now(timezone.utc).isoformat(), "files": []}
-    for rel, (before, after) in files.items():
+    for rel, before, after_sha in files:
         if before is not None:
             target = root / "before" / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(before)
-        meta["files"].append({"path": rel, "before": _sha(before), "after": _sha(after)})
-    (root / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+        meta["files"].append({"path": rel, "before": _sha(before), "after": after_sha})
+    tmp = root / ".meta.json.tmp"
+    tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, root / "meta.json")          # meta.json이 있으면 다 쓴 이력이다
     entries = sorted(p for p in history_root(project).iterdir() if p.is_dir())
     for old in entries[:-HISTORY_KEEP]:
         shutil.rmtree(old, ignore_errors=True)
-    return hid
+
+
+def _history_from_record(project: str, record: Mapping[str, Any]) -> None:
+    if not record.get("history"):
+        return
+    _write_history(project, record["history"], str(record.get("action") or "config"),
+                   [(f["path"], base64.b64decode(f["before"]) if f.get("before") is not None else None, f.get("after"))
+                    for f in record.get("files") or []])
 
 
 def list_history(project: str) -> list[dict[str, Any]]:
@@ -122,9 +139,10 @@ def history_files(project: str, hid: str) -> dict[str, bytes | None]:
 # ---------------------------------------------------------------- 묶음 기록(종류 config)
 
 def _write_record(project: config.Project, files: Mapping[str, tuple[bytes | None, bytes | None]],
-                  new_revision: str) -> tuple[Path, dict[str, Any]]:
+                  new_revision: str, hid: str, action: str) -> tuple[Path, dict[str, Any]]:
     rid = pending.new_id()
     record = {"id": rid, "kind": "config", "project": project.name, "data_revision": new_revision,
+              "history": hid, "action": action,
               "files": [{"path": rel, "before": base64.b64encode(b).decode() if b is not None else None,
                          "after": _sha(a)} for rel, (b, a) in files.items()]}
     return pending.write_record(project.data_dir, record), record
@@ -143,6 +161,7 @@ def recover_config(project: config.Project, conn: psycopg.Connection | None, rec
     root = project.root
     all_new = all(_sha(_read(root / _safe_rel(f["path"]))) == f.get("after") for f in files)
     if now_revision is not None and now_revision == record.get("data_revision") and all_new:
+        _history_from_record(project.name, record)       # 커밋 뒤 이력을 쓰기 전에 끊겼으면 여기서 쓴다
         return recover.Outcome(rid, "config", "committed", [f["path"] for f in files])
     for f in files:
         path = root / _safe_rel(f["path"])
@@ -320,8 +339,8 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
             say(f"▶ 검사: {', '.join(changes)}")
             staged = _staged(project, changes)
             new_revision = data_revision(staged.project.schema, staged.project.dashboard)
-            hid = _write_history(project.name, action, changes)
-            record_path, record = _write_record(project, changes, new_revision)
+            hid = _new_history_id(action)
+            record_path, record = _write_record(project, changes, new_revision, hid, action)
             for rel, (_b, after) in changes.items():
                 path = project.root / rel
                 if after is None:
@@ -339,6 +358,7 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
                     counts = rebuild_locked(new_project, conn)
                     fault("before_commit")
                 fault("after_commit")
+                _history_from_record(project.name, record)
             except LoadError as exc:
                 # 확정적인 실패(검증·뷰·checks). 복구 절차로 모든 파일을 되돌린다(DB는 롤백됐다)
                 recover.recover(project, conn, mode="online", only=record["id"])

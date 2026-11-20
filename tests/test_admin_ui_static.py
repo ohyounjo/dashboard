@@ -45,6 +45,9 @@ def test_new_modules_exist():
     assert (SHARED / "query.js").is_file()
     assert (ADMIN / "rows.js").is_file()
     assert (ADMIN / "menus" / "datasets.js").is_file()
+    for name in ("datakit.js", "structure.js", "menus/history.js"):
+        assert (ADMIN / name).is_file(), name
+    assert (SHARED / "structure.js").is_file()
 
 
 def test_html_has_no_inline_code():
@@ -99,7 +102,8 @@ def test_data_menu_strings_match():
     keys = _data_block_keys()
     used: set[str] = set()
     # 데이터 쪽 화면(테이블, 행 표, 데이터셋)은 모두 S.admin.data(D)의 문구를 쓴다
-    for f in (ADMIN / "menus" / "tables.js", ADMIN / "rows.js", ADMIN / "menus" / "datasets.js"):
+    for f in (ADMIN / "menus" / "tables.js", ADMIN / "rows.js", ADMIN / "menus" / "datasets.js", ADMIN / "datakit.js",
+              ADMIN / "structure.js", ADMIN / "menus" / "history.js"):
         code = _read(f)
         assert "const D = T.data;" in code, f"{f.name}: const D = T.data;"
         used |= set(re.findall(r"\bD\.([A-Za-z][A-Za-z0-9_]*)", code))
@@ -169,7 +173,7 @@ def test_bulk_screen_uses_backend_paths():
         assert needle in code, f"tables.js에 {needle}가 없음"
     shared = _read(SHARED / "ingest.js")
     assert "total_bytes" in shared and "bytes" in shared
-    assert ".step" in code
+    assert ".step" in _without_comments(_read(ADMIN / "datakit.js")), "진행 표시는 progress.step을 쓴다"
     # 짝짓기·진행률 같은 판단은 DOM 없는 shared/ingest.js에 두고 node --test로 시험한다
     assert not re.search(r"\bdocument\b|\bwindow\b", _without_comments(shared))
     assert (ROOT / "tests" / "js" / "ingest.test.mjs").is_file()
@@ -198,3 +202,44 @@ def test_rows_query_screens():
     shared = _without_comments(_read(SHARED / "query.js"))
     assert not re.search(r"\bdocument\b|\bwindow\b", shared)
     assert (ROOT / "tests" / "js" / "query.test.mjs").is_file()
+
+
+# 관리 서비스의 PATCH /config가 받는 연산(contracts/manage.md "구조 변경")
+STRUCT_OPS = {"table.add", "table.update", "table.remove", "column.add", "column.update",
+              "dataset.add", "dataset.update", "dataset.remove"}
+
+
+def test_structure_screens_use_contract():
+    # 4단계: 구조 변경 화면은 계약의 경로와 연산만 쓴다
+    files = [ADMIN / "structure.js", ADMIN / "menus" / "tables.js", ADMIN / "menus" / "datasets.js", ADMIN / "menus" / "history.js",
+             SHARED / "structure.js"]
+    code = "\n".join(_without_comments(_read(f)) for f in files)
+    for needle in ('api("PATCH", `${BASE}/config`', "/tables/infer`", 'api("POST", `${BASE}/tables`', "/compact`", "/used_by`",
+                   "`${BASE}/history`", "/restore`", "`${BASE}/export`", "revision"):
+        assert needle in code, f"구조 변경 화면에 {needle}가 없음"
+    # 연산 이름: 화면의 `op: "…"`와 공용 모듈의 OPS 상수(Studio 검사가 web/shared의 `op: "…"`를 Studio 연산으로 세므로 상수로 둔다)
+    ops = set(re.findall(r"""op:\s*["']([a-z]+\.[a-z]+)["']""", code))
+    ops |= set(re.findall(r"""["']((?:table|column|dataset)\.[a-z]+)["']""", _without_comments(_read(SHARED / "structure.js"))))
+    assert {"column.add", "column.update", "table.remove", "dataset.add"} <= ops
+    assert ops <= STRUCT_OPS, f"계약에 없는 연산: {sorted(ops - STRUCT_OPS)}"
+    contract = _read(ROOT / "contracts" / "manage.md")
+    for op in sorted(ops):
+        assert f"`{op}`" in contract, f"contracts/manage.md에 없는 연산: {op}"
+
+
+def test_structure_buttons_are_admin_only():
+    # 바꾸는 버튼은 admin에게만 보이고(서버도 require_admin), 쓰이는 곳은 모두 본다
+    tables = _without_comments(_read(ADMIN / "menus" / "tables.js"))
+    assert re.search(r"if \(isAdmin\(\)\) \{\s*const colBtn", tables), "열 추가·합치기·삭제는 admin에게만"
+    assert re.search(r"if \(isAdmin\(\)\) \{\s*newBtn", tables), "새 테이블은 admin에게만"
+    assert "isAdmin() ? (col) => openAction(columnRuleCard" in tables, "규칙 고치기는 admin에게만"
+    assert 'key === "usage"' in tables and "usagePanel(t, alive)" in tables, "쓰이는 곳은 등급과 상관없이 보인다"
+    datasets = _without_comments(_read(ADMIN / "menus" / "datasets.js"))
+    assert re.search(r"if \(isAdmin\(\)\) \{\s*createBtn", datasets), "데이터셋 만들기는 admin에게만"
+    history = _without_comments(_read(ADMIN / "menus" / "history.js"))
+    assert re.search(r"when:\s*\(\)\s*=>\s*!!session\.manage && isAdmin\(\)", history), "설정 이력 메뉴는 admin에게만"
+    listed = re.search(r"const MENUS = \[([^\]]*)\]", _read(ADMIN / "admin.js")).group(1)
+    assert re.search(r"\bdatasets,\s*history\b", listed)
+    shared = _without_comments(_read(SHARED / "structure.js"))
+    assert not re.search(r"\bdocument\b|\bwindow\b", shared)
+    assert (ROOT / "tests" / "js" / "structure.test.mjs").is_file()

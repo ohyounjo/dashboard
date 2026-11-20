@@ -8,7 +8,9 @@ import * as F from "../../shared/fields.js";
 import * as I from "../../shared/ingest.js";
 import * as Q from "../../shared/query.js";
 import { rowsView } from "../rows.js";
-import { T, view, session, ApiFail, api, apiForm, waitJob, errorText, notice, head, checkbox, pagedTable, detailId } from "../kit.js";
+import { box, btn, pill, jobText, jobBox, dataFailText as failText } from "../datakit.js";
+import { newTableWizard, addColumnCard, columnRuleCard, usagePanel, dropTableCard, compactTable } from "../structure.js";
+import { T, view, session, ApiFail, api, apiForm, waitJob, notice, head, checkbox, pagedTable, detailId } from "../kit.js";
 
 const D = T.data;
 const BASE = "/api/manage";
@@ -18,6 +20,7 @@ const FIELD_TEXT = { yes: D.yes, no: D.no, choose: D.choose, empty: D.emptyValue
 
 let gen = 0;                 // 화면을 그릴 때마다 늘린다. 비동기 일이 끝났을 때 아직 그 화면인지 본다
 let detailTab = "preview";   // 상세에서 마지막으로 연 탭(같은 메뉴 안에서 기억한다)
+let flash = null;            // 구조 변경을 마치고 상세를 다시 그릴 때 위에 보일 결과 상자(한 번 쓰고 비운다)
 
 const isAdmin = () => ((session.manage && session.manage.role) || (session.me && session.me.role)) === "admin";
 const limits = () => (session.manage && session.manage.limits) || {};
@@ -25,31 +28,9 @@ const inlineMax = () => limits().inline_max_rows || 500;
 
 /* ---------------- 공통 조각 ---------------- */
 
-function failText(err) {
-  if (err instanceof ApiFail) {
-    if (err.detail && typeof D.errors[err.detail] === "string") return D.errors[err.detail];
-    if (err.detail && typeof T.errors[err.detail] === "string") return T.errors[err.detail];
-    if (err.body && typeof err.body.message === "string" && err.body.message) return err.body.message;
-  }
-  return errorText(err);
-}
 
-const pill = (text, tone) => h("span", { class: "pill tone", "data-tone": tone, text });
 
-/** 안내 상자: 제목 한 줄 + (줄 목록) + (버튼들). tone: good | warn | bad | primary | neutral */
-function box(tone, title, { lines, more, actions, body } = {}) {
-  const shown = (lines || []).slice(0, 50);
-  return h("div", { class: "a-msg d-box", "data-tone": tone, role: tone === "bad" ? "alert" : "status" },
-    h("strong", { text: title }),
-    body || null,
-    shown.length ? h("ul", { class: "d-lines" }, shown.map((l) => h("li", { text: l }))) : null,
-    more ? h("p", { class: "d-more", text: more }) : null,
-    actions && actions.length ? h("div", { class: "a-actions" }, actions) : null);
-}
 
-function btn(label, onclick, cls = "") {
-  return h("button", { type: "button", class: `btn ${cls}`.trim(), onclick }, label);
-}
 
 function modeCell(mode, conflict) {
   return h("span", { class: "pills" }, pill(D.modeLabel[mode] || mode, mode === "append" ? "primary" : "neutral"),
@@ -74,24 +55,7 @@ function checkText(problem) {
   return typeof m === "function" ? m(problem.arg) : m || problem.code;
 }
 
-/** 진행 중인 작업 한 줄(GET /jobs/{id}의 progress: {step, table?, rows?, bytes?, total_bytes?}). */
-function jobText(job) {
-  const p = (job && job.progress) || {};
-  const parts = [D.jobStep[p.step] || D.jobRunning];
-  if (p.table) parts.push(p.table);
-  if (p.rows != null) parts.push(D.rowsRead(p.rows));
-  if (p.bytes != null && p.total_bytes) parts.push(D.bytesRead(D.size(p.bytes), D.size(p.total_bytes)));
-  return parts.join(" · ");
-}
 
-/** 작업 진행 표시: 글 한 줄 + (전체 크기를 알면) 진행률 막대 + (파일 작업이면) 화면을 떠나도 계속된다는 안내 */
-function jobBox(job, { keepsRunning = false } = {}) {
-  const ratio = I.progressRatio(job && job.progress);
-  return h("div", { class: "d-progress", role: "status" },
-    h("span", { text: jobText(job) }),
-    ratio === null ? null : h("progress", { max: "1000", value: String(Math.round(ratio * 1000)), "aria-label": D.progressLabel(Math.round(ratio * 100)) }),
-    keepsRunning ? h("small", { class: "a-key", text: D.keepsRunning }) : null);
-}
 
 /** 오류 행을 빼고 넣은 작업의 빠진 행(CSV, 여러 파일이면 zip) 내려받기 링크 */
 const rejectsLink = (jobId) => h("a", { class: "btn small", href: `${BASE}/jobs/${encodeURIComponent(jobId)}/rejects`, download: "" }, D.downloadRejects);
@@ -233,8 +197,25 @@ function listView(my) {
     if (first) first.focus();
   }, "primary");
   bulkBtn.dataset.action = "bulk";        // e2e 캡처가 문구 대신 이 표시로 찾는다
-  view().replaceChildren(head(D.listTitle, D.listIntro(session.manage ? session.manage.project : ""), bulkBtn, refresh),
-    note.el, bulkBox, table.el);
+  // 새 테이블(admin): CSV 하나로 추론 → 고치기 → 만들기. 목록 위에 펼친다
+  const newBox = h("div", { hidden: true });
+  let newBtn = null;
+  if (isAdmin()) {
+    newBtn = btn(D.newTable, () => {
+      newBtn.hidden = true;
+      const made = newTableWizard({
+        alive,
+        onClose: () => { newBox.hidden = true; newBox.replaceChildren(); newBtn.hidden = false; newBtn.focus(); },
+        onCreated: () => { cache = null; table.draw(); },
+      });
+      newBox.replaceChildren(made.el);
+      newBox.hidden = false;
+      made.focus();
+    });
+    newBtn.dataset.action = "new-table";     // e2e 캡처가 문구 대신 이 표시로 찾는다
+  }
+  view().replaceChildren(head(D.listTitle, D.listIntro(session.manage ? session.manage.project : ""), bulkBtn, newBtn, refresh),
+    note.el, bulkBox, newBox, table.el);
   table.draw();
 }
 
@@ -485,19 +466,28 @@ async function detailView(name, my) {
 
   const tabsBox = h("div");
   const addBox = h("div", { hidden: true });
+  // 구조 변경(admin): 열 추가·규칙 고치기·삭제·합치기의 카드와 결과가 이 자리에 열린다
+  const actionBox = h("div", { class: "d-action-box" });
+  if (flash) { actionBox.append(flash); flash = null; }
+  const reload = (resultBox) => { flash = resultBox; gen += 1; detailView(name, gen); };
+  const openAction = (made) => { actionBox.replaceChildren(made.el); made.focus(); };
+  const closeAction = () => actionBox.replaceChildren();
   const panel = h("div", { class: "d-panel", role: "tabpanel", id: uid("panel"), tabindex: "0" });
-  const ids = { preview: uid("tab"), columns: uid("tab"), batches: uid("tab") };
+  const ids = { preview: uid("tab"), columns: uid("tab"), batches: uid("tab"), usage: uid("tab") };
   const draw = (key) => {
     detailTab = key;
     panel.setAttribute("aria-labelledby", ids[key]);
     if (key === "preview") panel.replaceChildren(previewPanel(t, alive));
-    else if (key === "columns") panel.replaceChildren(columnsPanel(t));
+    else if (key === "columns") {
+      panel.replaceChildren(columnsPanel(t, isAdmin() ? (col) => openAction(columnRuleCard(t, col, { alive, onClose: closeAction, onDone: reload })) : null));
+    } else if (key === "usage") panel.replaceChildren(usagePanel(t, alive));
     else panel.replaceChildren(batchesPanel(t, alive));
   };
   const strip = tabStrip(D.detailTabs, [
     { key: "preview", label: D.tabPreview, tabId: ids.preview, panelId: panel.id },
     { key: "columns", label: D.tabColumns, tabId: ids.columns, panelId: panel.id },
     { key: "batches", label: D.tabBatches, tabId: ids.batches, panelId: panel.id },
+    { key: "usage", label: D.tabUsage, tabId: ids.usage, panelId: panel.id },
   ], detailTab, draw);
   tabsBox.append(strip.el, panel);
 
@@ -520,9 +510,31 @@ async function detailView(name, my) {
       if (first) first.focus();
     }, "primary");
   }
+  // 구조 변경 버튼은 admin에게만 보인다(서버도 require_admin)
+  const structBtns = [];
+  if (isAdmin()) {
+    const colBtn = btn(D.addColumn, () => openAction(addColumnCard(t, { alive, onClose: closeAction, onDone: reload })));
+    colBtn.dataset.action = "add-column";
+    structBtns.push(colBtn);
+    if (t.mode === "append") {
+      const compactBtn = btn(D.compactBatches, async () => {
+        compactBtn.disabled = true;
+        const r = await compactTable(t, actionBox, alive);
+        compactBtn.disabled = false;
+        if (r && r.file) reload(actionBox.firstElementChild);
+      });
+      structBtns.push(compactBtn);
+    }
+    structBtns.push(btn(D.dropTable, () => openAction(dropTableCard(t, { alive, onClose: closeAction, onDone: (done) => {
+      actionBox.replaceChildren(done, h("div", { class: "a-actions" }, h("a", { class: "btn", href: "#tables" }, D.backToList)));
+      tabsBox.hidden = true;
+      if (addBtn) addBtn.hidden = true;
+      structBtns.forEach((b) => { b.hidden = true; });
+    } })), "danger"));
+  }
   view().replaceChildren(crumb,
-    head(t.name, t.description || (t.mode === "append" ? null : D.replaceNote), addBtn),
-    h("div", { class: "a-card" }, info), h("div", { class: "a-gap" }), addBox, tabsBox);
+    head(t.name, t.description || (t.mode === "append" ? null : D.replaceNote), addBtn, ...structBtns),
+    h("div", { class: "a-card" }, info), h("div", { class: "a-gap" }), actionBox, addBox, tabsBox);
   draw(detailTab);
 }
 
@@ -658,7 +670,8 @@ function editCard(t, one, alive, { onClose, onDone }) {
     form, out);
 }
 
-function columnsPanel(t) {
+/** 구조 탭. onRule(col)을 주면(admin) 열마다 "규칙 고치기" 버튼 */
+function columnsPanel(t, onRule = null) {
   const rows = t.columns.map((c) => h("tr", {},
     h("td", {}, h("span", { class: "d-stack" }, h("span", { class: "mono", text: c.name }), c.label ? h("small", { class: "a-key", text: c.label }) : null)),
     h("td", {}, typeText(c.type)),
@@ -667,9 +680,15 @@ function columnsPanel(t) {
     " ", ruleTexts(c, { withRequired: false }).join(" · ")),
     h("td", { class: "wrap" }, c.description || "—"),
     h("td", {}, c.default == null ? "—" : h("span", { class: "mono", text: F.display(c, String(c.default), FIELD_TEXT) })),
-    h("td", { class: "wrap" }, c.aliases && c.aliases.length ? c.aliases.join(", ") : "—")));
+    h("td", { class: "wrap" }, c.aliases && c.aliases.length ? c.aliases.join(", ") : "—"),
+    onRule ? h("td", {}, (() => {
+      const b = btn(D.editRules, () => onRule(c), "small");
+      b.setAttribute("aria-label", D.editRulesFor(c.name));
+      return b;
+    })()) : null));
   return h("div", { class: "a-table-wrap" }, h("table", { class: "a-table" },
-    h("thead", {}, h("tr", {}, [D.column, D.type, D.rules, D.description, D.defaultValue, D.aliases].map((l) => h("th", { scope: "col", text: l })))),
+    h("thead", {}, h("tr", {}, [D.column, D.type, D.rules, D.description, D.defaultValue, D.aliases].map((l) => h("th", { scope: "col", text: l })),
+      onRule ? h("th", { scope: "col" }, h("span", { class: "sr-only", text: D.actions })) : null)),
     h("tbody", {}, rows)));
 }
 

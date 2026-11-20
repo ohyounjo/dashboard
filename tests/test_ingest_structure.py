@@ -130,6 +130,7 @@ def test_narrowed_rule_fails_load_and_puts_every_file_back(root, scratch_db):
     assert (err.status, err.detail) == (422, "load_failed")
     assert any("000001-20261120T0910Z.csv" in e for e in err.errors)          # 옛 배치의 파일·줄로 알린다
     assert files(root) == before and all_rows(scratch_db) == data and leftovers(root) == []
+    assert structure.list_history("ledger") == []           # 되돌려진 변경은 이력에 남지 않는다
 
 
 @pytest.mark.parametrize("point,kept", [("after_move", False), ("before_commit", False), ("after_commit", True)])
@@ -146,6 +147,8 @@ def test_crash_during_structure_change_is_recovered_before_reading(root, scratch
     outcomes = structure.recover_before_read("ledger", root, dbname=scratch_db)
     assert [o.result for o in outcomes] == ["committed" if kept else "discarded"]
     assert (files(root) != before) is kept and leftovers(root) == []
+    # 커밋 뒤 이력을 쓰기 전에 끊겼으면 복구가 기록에서 이력을 쓴다. 되돌린 변경은 이력이 없다
+    assert [h["action"] for h in structure.list_history("ledger")] == (["test"] if kept else [])
     rebuilt_equals_current(root, scratch_db)                         # 파일과 DB가 같은 판이다
 
 
