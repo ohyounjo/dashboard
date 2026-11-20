@@ -510,35 +510,67 @@ def set_pending_password(user_id: str, password_hash: str) -> None:
                      (password_hash, user_id))
 
 
-def activate_user(user_id: str, from_status: str) -> bool:
-    """from_status(pending|invited) → active. 메일 인증 시각을 남기고 기본 그룹(is_default)에 넣는다.
-    다른 상태였으면 아무것도 바꾸지 않고 False."""
-    with connection() as conn, conn.transaction():
-        cur = conn.execute(
-            """UPDATE dashkit_auth.users SET status = 'active', email_verified_at = coalesce(email_verified_at, now())
-                WHERE id = %s AND status = %s""",
-            (user_id, from_status),
-        )
-        if not cur.rowcount:
-            return False
-        conn.execute(
-            """INSERT INTO dashkit_auth.group_members (group_id, user_id)
-               SELECT id, %s FROM dashkit_auth.groups WHERE is_default ON CONFLICT DO NOTHING""",
-            (user_id,),
-        )
+def _activate(conn: psycopg.Connection, user_id: str, from_status: str) -> bool:
+    """(트랜잭션 안) from_status → active, 메일 인증 시각, 기본 그룹(is_default)."""
+    cur = conn.execute(
+        """UPDATE dashkit_auth.users SET status = 'active', email_verified_at = coalesce(email_verified_at, now())
+            WHERE id = %s AND status = %s""",
+        (user_id, from_status),
+    )
+    if not cur.rowcount:
+        return False
+    conn.execute(
+        """INSERT INTO dashkit_auth.group_members (group_id, user_id)
+           SELECT id, %s FROM dashkit_auth.groups WHERE is_default ON CONFLICT DO NOTHING""",
+        (user_id,),
+    )
     return True
 
 
-def set_password(user_id: str, password_hash: str, *, must_change: bool = False) -> None:
-    """새 비밀번호. 비밀번호 변경일을 남기고 실패 횟수·잠금을 지운다."""
-    with connection() as conn:
-        conn.execute(
-            """UPDATE dashkit_auth.users
-                  SET password_hash = %s, password_changed_at = now(), must_change_password = %s,
-                      failed_count = 0, locked_until = NULL
-                WHERE id = %s""",
-            (password_hash, must_change, user_id),
-        )
+_SET_PASSWORD = """UPDATE dashkit_auth.users
+                     SET password_hash = %s, password_changed_at = now(), must_change_password = %s,
+                         failed_count = 0, locked_until = NULL
+                   WHERE id = %s"""
+
+
+def set_password(user_id: str, password_hash: str, *, must_change: bool = False,
+                 end_sessions: bool = False, keep_session: str | None = None) -> None:
+    """새 비밀번호. 비밀번호 변경일을 남기고 실패 횟수·잠금을 지운다.
+    end_sessions면 같은 트랜잭션에서 그 사용자의 세션을 지운다(keep_session 하나는 남길 수 있다)."""
+    with connection() as conn, conn.transaction():
+        conn.execute(_SET_PASSWORD, (password_hash, must_change, user_id))
+        if end_sessions:
+            conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s AND (%s::uuid IS NULL OR id <> %s::uuid)",
+                         (user_id, keep_session, keep_session))
+
+
+def use_reset_token(token_id: str, user_id: str, purpose: str, password_hash: str) -> bool:
+    """재설정·초대 수락을 한 트랜잭션으로: 토큰을 지우고(한 번만), 새 비밀번호, 초대면 active·기본 그룹,
+    그 사용자의 모든 세션 삭제. 토큰이 이미 쓰였거나 상태가 맞지 않으면 아무것도 바꾸지 않고 False."""
+    done = False
+    with connection() as conn, conn.transaction() as tx:
+        if not conn.execute("DELETE FROM dashkit_auth.tokens WHERE id = %s AND user_id = %s AND purpose = %s",
+                            (token_id, user_id, purpose)).rowcount:
+            raise psycopg.Rollback(tx)
+        conn.execute(_SET_PASSWORD, (password_hash, False, user_id))
+        if purpose == "invite" and not _activate(conn, user_id, "invited"):
+            raise psycopg.Rollback(tx)
+        conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s", (user_id,))
+        done = True
+    return done
+
+
+def use_verify_token(token_id: str, user_id: str) -> bool:
+    """메일 인증을 한 트랜잭션으로: 토큰을 지우고 pending → active·기본 그룹. 아니면 아무것도 바꾸지 않고 False."""
+    done = False
+    with connection() as conn, conn.transaction() as tx:
+        if not conn.execute("DELETE FROM dashkit_auth.tokens WHERE id = %s AND user_id = %s AND purpose = 'verify_email'",
+                            (token_id, user_id)).rowcount:
+            raise psycopg.Rollback(tx)
+        if not _activate(conn, user_id, "pending"):
+            raise psycopg.Rollback(tx)
+        done = True
+    return done
 
 
 def record_login_failure(user_id: str, threshold: int, lock_minutes: int) -> datetime | None:
@@ -559,8 +591,10 @@ def record_login_failure(user_id: str, threshold: int, lock_minutes: int) -> dat
 # ---------------------------------------------------------------- 일회용 토큰
 
 def create_token(user_id: str, purpose: str, token_hash: bytes, expires_at: datetime) -> None:
-    """같은 사용자·같은 용도의 이전 토큰을 지우고 새로 넣는다(이전 링크는 무효)."""
+    """같은 사용자·같은 용도의 이전 토큰을 지우고 새로 넣는다(이전 링크는 무효).
+    사용자 행을 먼저 잠가 같은 사용자의 동시 발급을 직렬화한다(유효한 토큰은 용도마다 하나만 남는다)."""
     with connection() as conn, conn.transaction():
+        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user_id,))
         conn.execute("DELETE FROM dashkit_auth.tokens WHERE user_id = %s AND purpose = %s", (user_id, purpose))
         conn.execute(
             "INSERT INTO dashkit_auth.tokens (user_id, purpose, token_hash, expires_at) VALUES (%s, %s, %s, %s)",
@@ -580,12 +614,6 @@ def token_owner(token_hash: bytes, purposes: tuple[str, ...]) -> dict[str, Any] 
     if not row:
         return None
     return {**row, "token_id": str(row["token_id"]), "user_id": str(row["user_id"])}
-
-
-def consume_token(token_id: str) -> bool:
-    """토큰을 지운다(한 번만 쓴다). 이미 지워졌으면(동시에 두 번 쓰려 함) False."""
-    with connection() as conn:
-        return conn.execute("DELETE FROM dashkit_auth.tokens WHERE id = %s", (token_id,)).rowcount > 0
 
 
 def delete_user_tokens(user_id: str) -> int:

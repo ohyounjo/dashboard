@@ -202,12 +202,12 @@
 1. `POST /api/auth/password/forgot`은 계정이 있든 없든 202다. `active` 계정에만 재설정 메일(`reset_password`, 30분, 한 번만)을 보낸다. 새로 요청하면 이전 링크는 무효다. 정지된 계정은 받지 않는다.
 2. 링크(`/reset.html#token=…`)의 화면이 `POST /api/auth/password/reset`을 부른다. 토큰의 용도와 계정 상태가 맞아야 한다(`reset_password`는 `active`, `invite`는 `invited`. 아니면 410 `token_expired`).
 3. 정책 위반은 422 `weak_password`이고 **토큰은 그대로 남는다**(다시 입력할 수 있다).
-4. 성공하면 토큰을 지우고, 새 비밀번호(`password_changed_at`), `must_change_password` 끄기, 실패 횟수·잠금 지우기, 그 사용자의 **모든 세션 삭제**. 초대(`invite`)면 계정이 `active`가 되고 기본 그룹에 들어간다(링크를 가진 것이 메일 수신 확인이다).
+4. 성공하면 토큰을 지우고, 새 비밀번호(`password_changed_at`), `must_change_password` 끄기, 실패 횟수·잠금 지우기, 그 사용자의 **모든 세션 삭제**. 초대(`invite`)면 계정이 `active`가 되고 기본 그룹에 들어간다(링크를 가진 것이 메일 수신 확인이다). 이 모두를 **한 트랜잭션**으로 한다(`store.use_reset_token`). 중간에 실패하면 토큰·비밀번호·세션이 모두 그대로다. 메일 인증(토큰 소비와 활성화)도 한 트랜잭션이다(`store.use_verify_token`).
 
 ### 일회용 토큰
 
 - 256비트 임의 값이고 DB(`tokens.token_hash`)에는 SHA-256만 저장한다. 한 번 쓰면 지운다(동시에 두 번 쓰면 하나만 성공한다).
-- 같은 사용자·같은 용도로 새로 만들면 이전 것은 지운다(무효).
+- 같은 사용자·같은 용도로 새로 만들면 이전 것은 지운다(무효). 발급은 그 사용자 행을 먼저 잠가(`SELECT … FOR UPDATE`) 동시에 요청해도 유효한 토큰은 용도마다 하나만 남는다.
 - 수명: `verify_email` 24시간, `reset_password` 30분, `invite` 72시간. 만료된 행은 보존 기간 정리가 지운다.
 - 링크의 토큰은 URL 조각(`#token=…`)에 넣어 서버 접근 로그와 Referer에 남지 않게 한다. 화면은 토큰을 읽은 뒤 주소창에서 지운다(`history.replaceState`).
 

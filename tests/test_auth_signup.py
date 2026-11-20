@@ -188,6 +188,54 @@ def test_reset_token_is_rejected_for_suspended_account(cleanup):
     assert auth_post("/api/auth/password/reset", {"token": token, "password": NEW_PASSWORD})[0] == 410
 
 
+def test_token_issue_is_serialized_per_user(cleanup):
+    """같은 사용자의 토큰 발급은 사용자 행을 먼저 잠근다(동시에 찾기를 요청해도 유효한 링크는 하나)."""
+    import threading
+    from datetime import timedelta
+
+    from dashkit.auth import sessions
+
+    email = random_email("tok-lock")
+    cleanup.append(email)
+    uid = make_user(email, PASSWORD).id
+    done = threading.Event()
+    with db.auth_conn() as conn:                                        # 다른 트랜잭션이 사용자 행을 잡고 있다
+        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (uid,))
+        t = threading.Thread(target=lambda: (store.create_token(uid, "reset_password", sessions.token_hash(sessions.new_token()),
+                                                                 store.now() + timedelta(minutes=30)), done.set()))
+        t.start()
+        assert not done.wait(1.5)
+        conn.rollback()
+    assert done.wait(10)
+    t.join()
+    # 동시에 여러 번 요청해도 남는 재설정 토큰은 하나다
+    threads = [threading.Thread(target=auth_post, args=("/api/auth/password/forgot", {"email": email})) for _ in range(6)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert sql("SELECT count(*) FROM dashkit_auth.tokens WHERE user_id = %s AND purpose = 'reset_password'", (uid,))[0][0] == 1
+
+
+def test_reset_is_all_or_nothing(cleanup):
+    """토큰 소비·새 비밀번호·활성화·세션 삭제는 한 트랜잭션이다. 중간에 실패하면 아무것도 바뀌지 않는다."""
+    from datetime import timedelta
+
+    from dashkit.auth import passwords, sessions
+
+    email = random_email("atomic")
+    cleanup.append(email)
+    uid = make_user(email, PASSWORD).id                                  # active 계정에 초대 토큰(활성화 단계에서 실패)
+    session = login(email, PASSWORD)
+    token = sessions.new_token()
+    store.create_token(uid, "invite", sessions.token_hash(token), store.now() + timedelta(hours=1))
+    (token_id,), = sql("SELECT id FROM dashkit_auth.tokens WHERE user_id = %s", (uid,))
+    assert store.use_reset_token(str(token_id), uid, "invite", passwords.hash_password(NEW_PASSWORD)) is False
+    assert sql("SELECT 1 FROM dashkit_auth.tokens WHERE id = %s", (token_id,))           # 토큰은 그대로
+    assert login(email, PASSWORD) and get_app(session)[0] == 200                         # 비밀번호·세션도 그대로
+    assert store.use_verify_token(str(token_id), uid) is False                           # 용도가 다른 토큰은 못 쓴다
+
+
 # ---------------------------------------------------------------- 기본 그룹
 
 def test_new_accounts_join_default_groups_when_they_become_active(cleanup):

@@ -276,9 +276,8 @@ def verify(body: TokenRequest, request: Request):
     if not sessions.plausible_token(body.token):
         raise _token_expired()
     owner = store.token_owner(sessions.token_hash(body.token), ("verify_email",))
-    if owner is None or owner["status"] != "pending" or not store.consume_token(owner["token_id"]):
-        raise _token_expired()
-    if not store.activate_user(owner["user_id"], "pending"):
+    # 토큰 소비와 활성화는 한 트랜잭션이다(중간에 실패하면 아무것도 바뀌지 않는다)
+    if owner is None or owner["status"] != "pending" or not store.use_verify_token(owner["token_id"], owner["user_id"]):
         raise _token_expired()
     store.record_audit("auth.verify_email", actor_id=owner["user_id"], actor_email=owner["email"], target_type="user",
                        target_id=owner["user_id"], target_label=owner["email"], ip=client_ip(request))
@@ -328,15 +327,10 @@ def password_reset(body: ResetRequest, request: Request):
     if reason:
         raise weak_password(reason)          # 토큰은 그대로 두고 다시 입력하게 한다
     password_hash = passwords.hash_password(body.password)
-    if not store.consume_token(owner["token_id"]):
+    # 토큰 소비·새 비밀번호·(초대면) 활성화·모든 세션 삭제를 한 트랜잭션으로 한다
+    if not store.use_reset_token(owner["token_id"], owner["user_id"], owner["purpose"], password_hash):
         raise _token_expired()
-    store.set_password(owner["user_id"], password_hash)
-    if owner["purpose"] == "invite":
-        store.activate_user(owner["user_id"], "invited")
-        action = "auth.invite_accepted"
-    else:
-        action = "auth.password_reset"
-    store.delete_user_sessions(owner["user_id"])
+    action = "auth.invite_accepted" if owner["purpose"] == "invite" else "auth.password_reset"
     store.record_audit(action, actor_id=owner["user_id"], actor_email=owner["email"], target_type="user",
                        target_id=owner["user_id"], target_label=owner["email"], ip=client_ip(request))
     return Response(status_code=204)
