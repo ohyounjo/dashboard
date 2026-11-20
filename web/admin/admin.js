@@ -197,7 +197,7 @@ async function groupView(id) {
     h("div", { class: "a-actions" }, h("button", { type: "submit", class: "btn primary" }, T.save)));
   tabsForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    // 현재 프로젝트의 없는 탭 항목은 체크 목록에 없으므로 저장하면 빠진다
+    // 서버는 설정에 있는 탭만 바꾸고, 없는 탭 기록은 그대로 둔다(아래 묶음에서 하나씩 뺀다)
     const keys = boxes.filter((b) => b.input.checked).map((b) => b.key);
     try {
       await api("PUT", `/api/admin/groups/${encodeURIComponent(id)}/tabs`, { project: tabs.project, tab_keys: keys });
@@ -214,9 +214,9 @@ async function groupView(id) {
         h("div", { class: "who" }, h("b", {}, tabLabel(t)),
           h("span", { text: [t.current ? "" : T.otherProject(t.project), t.exists ? "" : T.missingTab].filter(Boolean).join(" · ") })),
         h("button", { type: "button", class: "btn small", onclick: async () => {
-          const keep = g.tabs.filter((x) => x.project === t.project && x.tab_key !== t.tab_key && x.exists).map((x) => x.tab_key);
+          // 이 항목 하나만 지운다(같은 프로젝트의 다른 없는 탭 기록은 그대로)
           try {
-            await api("PUT", `/api/admin/groups/${encodeURIComponent(id)}/tabs`, { project: t.project, tab_keys: keep });
+            await api("DELETE", `/api/admin/groups/${encodeURIComponent(id)}/tabs/${encodeURIComponent(t.project)}/${encodeURIComponent(t.tab_key)}`);
             redraw(T.saved, "good");
           } catch (err) { note.set(errorText(err)); }
         } }, T.remove)))));

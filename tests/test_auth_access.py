@@ -236,10 +236,45 @@ def test_missing_and_other_project_tabs_are_shown_but_ignored(project, people, g
     assert {(project.name, "gone_tab"), ("zz-other", "x")} <= refs and (project.name, sup_key) not in refs
     code, app = as_user(people["user"], "GET", "/api/app")
     assert [x["key"] for x in app["tabs"]] == [sup_key]                  # 없는 탭은 판정에서 무시
-    # 정리: 현재 프로젝트의 탭을 다시 저장하면 없는 탭이 빠진다
-    api("PUT", f"/api/admin/groups/{g['id']}/tabs", {"project": project.name, "tab_keys": [sup_key]})
-    code, detail = api("GET", f"/api/admin/groups/{g['id']}")
-    assert (project.name, "gone_tab") not in {(x["project"], x["tab_key"]) for x in detail["tabs"]}
+    # 허용 탭을 다시 저장해도 없는 탭 기록은 남는다(설정에 돌아오면 다시 쓰인다)
+    api("PUT", f"/api/admin/groups/{g['id']}/tabs", {"project": project.name, "tab_keys": []})
+    api("PUT", f"/api/admin/groups/{g['id']}/tabs", {"project": "zz-other", "tab_keys": []})
+    refs = lambda: {(x["project"], x["tab_key"]) for x in api("GET", f"/api/admin/groups/{g['id']}")[1]["tabs"]}
+    assert refs() == {(project.name, "gone_tab"), ("zz-other", "x")}
+    # 없는 탭은 하나씩 뺀다: 같은 프로젝트의 다른 없는 탭은 그대로
+    with db.auth_conn(autocommit=True) as conn:
+        conn.execute("INSERT INTO dashkit_auth.group_tabs (group_id, project, tab_key) VALUES (%s, %s, 'gone_two')",
+                     (g["id"], project.name))
+    code, detail = api("DELETE", f"/api/admin/groups/{g['id']}/tabs/{project.name}/gone_tab")
+    assert code == 200 and refs() == {(project.name, "gone_two"), ("zz-other", "x")}
+    assert api("DELETE", f"/api/admin/groups/{g['id']}/tabs/zz-other/x")[0] == 200
+    assert api("DELETE", f"/api/admin/groups/{g['id']}/tabs/zz-other/x")[0] == 200       # 없는 기록: 아무것도 안 함
+    assert refs() == {(project.name, "gone_two")}
+    code, body = as_user(people["operator"], "DELETE", f"/api/admin/groups/{g['id']}/tabs/{project.name}/gone_two")
+    assert code == 200 and refs() == set()
+    code, body = as_user(people["user"], "DELETE", f"/api/admin/groups/{g['id']}/tabs/{project.name}/{sup_key}")
+    assert (code, body["detail"]) == (403, "forbidden")
+
+
+def test_tab_replacement_locks_the_group_row(project, groups):
+    """허용 탭 저장은 부모 groups 행을 먼저 잠근다(기존 탭이 없는 그룹도 동시 저장이 직렬화된다)."""
+    import threading
+
+    from dashkit.auth import store
+
+    g = new_group(groups)
+    key = project.dashboard["tabs"][0]["key"]
+    valid = {t["key"] for t in project.dashboard["tabs"]}
+    done = threading.Event()
+    with db.auth_conn() as conn:                                        # 트랜잭션 안에서 그룹 행을 잡고 있는다
+        conn.execute("SELECT 1 FROM dashkit_auth.groups WHERE id = %s FOR UPDATE", (g["id"],))
+        t = threading.Thread(target=lambda: (store.set_group_tabs(g["id"], project.name, [key], valid), done.set()))
+        t.start()
+        assert not done.wait(1.5)                                       # 잠금이 풀릴 때까지 기다린다
+        conn.rollback()
+    assert done.wait(10)
+    t.join()
+    assert [x["tab_key"] for x in api("GET", f"/api/admin/groups/{g['id']}")[1]["tabs"]] == [key]
 
 
 def test_group_changes_are_audited(project, people, groups):

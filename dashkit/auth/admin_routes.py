@@ -236,15 +236,28 @@ def put_group_tabs(group_id: str, body: GroupTabsPut, request: Request, actor: P
         valid: dict[str, str] | None = _tab_labels(project)
     else:
         valid = _other_project_tabs(body.project)
-    # 설정에 없는 키는 받지 않는다. 폴더가 없어진 프로젝트는 비우기([])만 된다
+    # 설정에 없는 키는 받지 않는다. 설정에 없는 탭의 기존 기록은 건드리지 않는다(하나씩 지우는 DELETE를 쓴다)
     unknown = [k for k in keys if not _TAB_KEY_RE.fullmatch(k) or valid is None or k not in valid]
     if unknown:
         raise ApiError(422, "unknown_tab", f"설정에 없는 탭입니다: {', '.join(unknown[:5])}")
-    added, removed = store.set_group_tabs(group_id, body.project, keys)
+    added, removed = store.set_group_tabs(group_id, body.project, keys, set(valid or {}))
     if added or removed:
         audit(request, actor, "group.tabs", target_type="group", target_id=group_id, target_label=group["name"],
               detail={"project": body.project, "added": added, "removed": removed})
     return _group_detail(store.group_by_id(group_id) or group, project)
+
+
+@router.delete("/groups/{group_id}/tabs/{project_name}/{tab_key}")
+def delete_group_tab(group_id: str, project_name: str, tab_key: str, request: Request,
+                     actor: Principal = Depends(require_operator)):
+    """허용 탭 기록 하나를 지운다(설정에서 없어진 탭·다른 프로젝트의 탭 정리). 없는 기록이면 아무것도 하지 않는다."""
+    group = store.group_by_id(group_id)
+    if group is None:
+        raise _group_not_found()
+    if store.remove_group_tab(group_id, project_name, tab_key):
+        audit(request, actor, "group.tabs", target_type="group", target_id=group_id, target_label=group["name"],
+              detail={"project": project_name, "added": [], "removed": [tab_key]})
+    return _group_detail(store.group_by_id(group_id) or group, current_project())
 
 
 class GroupMembersPut(BaseModel):

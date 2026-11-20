@@ -392,20 +392,41 @@ def group_tabs(group_id: str) -> list[tuple[str, str]]:
     return [(r["project"], r["tab_key"]) for r in rows]
 
 
-def set_group_tabs(group_id: str, project: str, tab_keys: list[str]) -> tuple[list[str], list[str]]:
-    """그 프로젝트의 허용 탭을 통째로 바꾼다. (더한 키, 뺀 키)."""
+def set_group_tabs(group_id: str, project: str, tab_keys: list[str],
+                   valid_keys: set[str]) -> tuple[list[str], list[str]]:
+    """그 프로젝트의 허용 탭 중 **설정에 있는 탭(valid_keys)** 을 tab_keys로 통째로 바꾼다. (더한 키, 뺀 키).
+
+    설정에 없는 탭(없어진 탭, 읽을 수 없는 프로젝트의 탭)의 기존 기록은 그대로 둔다(remove_group_tab으로 하나씩 지운다).
+    같은 그룹의 동시 저장은 부모 groups 행을 먼저 잠가 순서를 세운다(기존 탭이 없어도 직렬화된다).
+    """
     with connection() as conn, conn.transaction():
+        conn.execute("SELECT 1 FROM dashkit_auth.groups WHERE id = %s FOR UPDATE", (group_id,))
         before = {r["tab_key"] for r in conn.execute(
-            "SELECT tab_key FROM dashkit_auth.group_tabs WHERE group_id = %s AND project = %s FOR UPDATE",
+            "SELECT tab_key FROM dashkit_auth.group_tabs WHERE group_id = %s AND project = %s",
             (group_id, project)).fetchall()}
         after = set(tab_keys)
-        conn.execute("DELETE FROM dashkit_auth.group_tabs WHERE group_id = %s AND project = %s AND NOT (tab_key = ANY(%s::text[]))",
-                     (group_id, project, list(after)))
-        for key in sorted(after - before):
+        removed = sorted((before & valid_keys) - after)
+        added = sorted(after - before)
+        if removed:
+            conn.execute("DELETE FROM dashkit_auth.group_tabs WHERE group_id = %s AND project = %s AND tab_key = ANY(%s::text[])",
+                         (group_id, project, removed))
+        for key in added:
             conn.execute("INSERT INTO dashkit_auth.group_tabs (group_id, project, tab_key) VALUES (%s, %s, %s)",
                          (group_id, project, key))
-        conn.execute("UPDATE dashkit_auth.groups SET updated_at = now() WHERE id = %s", (group_id,))
-    return sorted(after - before), sorted(before - after)
+        if added or removed:
+            conn.execute("UPDATE dashkit_auth.groups SET updated_at = now() WHERE id = %s", (group_id,))
+    return added, removed
+
+
+def remove_group_tab(group_id: str, project: str, tab_key: str) -> bool:
+    """허용 탭 기록 하나를 지운다(없는 탭 정리). 지웠으면 True."""
+    with connection() as conn, conn.transaction():
+        conn.execute("SELECT 1 FROM dashkit_auth.groups WHERE id = %s FOR UPDATE", (group_id,))
+        n = conn.execute("DELETE FROM dashkit_auth.group_tabs WHERE group_id = %s AND project = %s AND tab_key = %s",
+                         (group_id, project, tab_key)).rowcount
+        if n:
+            conn.execute("UPDATE dashkit_auth.groups SET updated_at = now() WHERE id = %s", (group_id,))
+    return n > 0
 
 
 def group_tab_refs() -> list[dict[str, Any]]:
