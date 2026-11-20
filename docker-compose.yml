@@ -82,7 +82,7 @@ services:
   # 일회성: db upgrade → 관리자 → superset init → EmbedGuest 역할. 재실행해도 성공한다.
   superset-init:
     build: *superset-build
-    image: dashkit-superset:${SUPERSET_VERSION:?SUPERSET_VERSION이 없음. make로 실행하거나 .env.example의 값을 .env에 추가}
+    image: dashkit-superset:${SUPERSET_VERSION:?SUPERSET_VERSION이 없음. make로 실행하거나 .env.example의 값을 .env에 추가}${IMAGE_SUFFIX:-}
     command: ["/app/superset_init/init.sh"]
     restart: "no"
     environment:
@@ -95,7 +95,7 @@ services:
 
   superset:
     build: *superset-build
-    image: dashkit-superset:${SUPERSET_VERSION:?SUPERSET_VERSION이 없음. make로 실행하거나 .env.example의 값을 .env에 추가}
+    image: dashkit-superset:${SUPERSET_VERSION:?SUPERSET_VERSION이 없음. make로 실행하거나 .env.example의 값을 .env에 추가}${IMAGE_SUFFIX:-}
     restart: unless-stopped
     environment:
       <<: *superset-env
@@ -118,7 +118,7 @@ services:
       context: .
       dockerfile: dashkit/Dockerfile
       target: app
-    image: dashkit-app:local
+    image: dashkit-app:local${IMAGE_SUFFIX:-}
     restart: unless-stopped
     # SUPERSET_ADMIN_PASSWORD, DATA_DB_OWNER_PASSWORD는 주지 않는다. 인증 DB는 dash_auth 계정만
     environment:
@@ -171,7 +171,7 @@ services:
       context: .
       dockerfile: dashkit/Dockerfile
       target: app
-    image: dashkit-app:local
+    image: dashkit-app:local${IMAGE_SUFFIX:-}
     restart: "no"
     environment:
       # 인증 DB 계정은 make admin, make test(로그인 도우미·DB 계정 경계 테스트)가 쓴다
@@ -202,7 +202,7 @@ services:
       context: .
       dockerfile: dashkit/Dockerfile
       target: studio
-    image: dashkit-studio:local
+    image: dashkit-studio:local${IMAGE_SUFFIX:-}
     restart: "no"
     # projects/에 쓰는 파일이 호스트 사용자 소유가 되도록 같은 uid:gid로 실행한다(Makefile이 넘긴다)
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"

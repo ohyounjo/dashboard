@@ -170,7 +170,7 @@ jobs:
         working-directory: app
         run: |
           docker compose logs --tail=200
-          docker compose -p dashkit-test logs --tail=200 || true
+          make test-logs || true
 
       - uses: actions/upload-artifact@v7
         if: always() && env.UI == 'true'
