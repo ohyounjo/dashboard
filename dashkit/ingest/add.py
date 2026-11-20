@@ -65,6 +65,19 @@ def _load(name: str, projects_dir: Path | None) -> Project:
         raise IngestError(422, "invalid_config", "설정 검사를 통과하지 못했습니다", exc.errors) from None
 
 
+def load_stable(name: str, projects_dir: Path | None) -> tuple[Project, str]:
+    """설정과 그 설정 파일의 revision을 한 쌍으로 읽는다. 읽는 사이 파일이 바뀌었으면 다시 읽는다."""
+    from ..project import store
+
+    root = Path(projects_dir) / name if projects_dir else config.default_projects_dir() / name
+    for _ in range(5):
+        before = store.revision(root)
+        project = _load(name, projects_dir)
+        if store.revision(project.root) == before:
+            return project, before
+    raise IngestError(409, "stale_config", "설정 파일이 계속 바뀌고 있습니다. 잠시 뒤 다시 시도하세요")
+
+
 def check_table(project: Project, table: str) -> str:
     """경로의 {table} → schema.yaml의 테이블. 없으면 404, replace 테이블이면 409 not_append."""
     for known, spec in project.schema["tables"].items():
@@ -86,10 +99,7 @@ def ingest(project_name: str, items: list[Item], *, dry_run: bool = False, force
     if not items:
         raise IngestError(400, "bad_request", "더할 입력이 없습니다")
     for attempt in (1, 2):
-        project = _load(project_name, projects_dir)
-        from ..project import store
-
-        revision = store.revision(project.root)
+        project, revision = load_stable(project_name, projects_dir)
         tables = [check_table(project, it.table) for it in items]
         try:
             conn = db.owner_conn(dbname)

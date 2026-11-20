@@ -259,3 +259,26 @@ def test_data_revision_ignores_tabs_but_not_rules(project):
     schema = copy.deepcopy(project.schema)
     schema["tables"]["entries"]["columns"]["amount"]["min"] = 1
     assert data_revision(schema, project.dashboard) != base
+
+
+def test_config_and_revision_are_read_as_a_pair(tmp_path, monkeypatch):
+    """설정을 읽는 사이 파일이 바뀌면 다시 읽어, 설정과 revision이 같은 판이다(리뷰 지적 회귀)."""
+    from dashkit.ingest import add
+    from dashkit.project import store
+
+    shutil.copytree(FIXTURES / "ledger", tmp_path / "ledger")
+    schema = tmp_path / "ledger" / "schema.yaml"
+    real = config.load_project
+    calls = {"n": 0}
+
+    def load_and_edit(name, projects_dir=None):
+        project = real(name, projects_dir)
+        if calls["n"] == 0:      # 첫 읽기 직후 규칙이 좁아진다
+            schema.write_text(schema.read_text(encoding="utf-8").replace("min: 0", "min: 5"), encoding="utf-8")
+        calls["n"] += 1
+        return project
+
+    monkeypatch.setattr(config, "load_project", load_and_edit)
+    project, revision = add.load_stable("ledger", tmp_path)
+    assert calls["n"] == 2 and revision == store.revision(tmp_path / "ledger")
+    assert project.schema["tables"]["entries"]["columns"]["amount"]["min"] == 5
