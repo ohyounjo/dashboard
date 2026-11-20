@@ -441,7 +441,7 @@ CLI · API 토큰 ───┘
   1. 지금 테이블의 행을 기본 키 순으로 정규형 **임시 파일**로 쓴다(`.`으로 시작하는 이름이라 로더가 읽지 않는다).
   2. 묶음 기록(종류 `compact`: 새 파일의 최종 이름·해시·행 수, 옮길 옛 파일 목록)을 쓴다.
   3. 그때까지의 배치 파일(과 `data/<테이블>.csv`)을 `_merged/<시각>/`으로 옮긴다.
-  4. 임시 파일을 제 이름(`<다음 번호>-<시각>.csv.gz`)으로 바꾼다.
+  4. 임시 파일을 제 이름(`<다음 번호>-<시각>-merged.csv.gz`. 이름이 합친 배치의 표식이다)으로 바꾼다.
   5. 배치 기록을 고쳐 커밋하고 묶음 기록을 지운다.
 - **끊김 복구:** 3~5 사이에 죽으면 묶음 기록이 남는다. manager와 로더는 **배치를 읽기 전에** 먼저 복구한다(5-4의 `ingest.recover`).
 
@@ -452,7 +452,7 @@ CLI · API 토큰 ───┘
 
   그래서 로더가 옛 배치의 일부와 그 행을 이미 담은 합친 배치를 함께 읽는 일이 없다.
 - 합친 뒤 다시 만든 결과가 합치기 전과 같다는 것을 테스트로 고정한다(5-7).
-- 합친 배치는 하나씩 되돌릴 수 없다. `_merged/`는 합친 뒤의 apply가 한 번 성공한 것을 확인하고 지운다.
+- 합친 배치는 하나씩 되돌릴 수 없다(409 `merged_batch`. 그 테이블의 행 전부를 담는다). `_merged/`는 합친 뒤의 apply가 한 번 성공한 것을 확인하고 지운다.
 - 배치 수가 `INGEST_COMPACT_HINT`(기본 200)를 넘으면 운용 화면이 그 테이블에 "합치기 권장"을 보인다. 자동으로 하지는 않는다.
 - 열 이름 변경·삭제(6-2)는 이 작업에 "새 구조로 바꿔 쓰기"를 더한 것이다.
 
@@ -740,7 +740,7 @@ Studio와 manager는 같은 일(추론, 파일 받기, 설정 연산, 저장, ap
 |---|---|
 | 403 | `forbidden`(등급) · `sensitive_dataset`(민감 열을 읽는 데이터셋의 행 조회) |
 | 404 | `unknown_table` · `unknown_dataset` · `unknown_batch` · `unknown_job` · `not_found` |
-| 409 | `duplicate_file` · `table_exists` · `not_append`(`replace` 테이블에 추가 적재) · `rebuild_required` · `in_use` · `apply_running` · `project_mismatch`(DB에 다른 프로젝트가 적재돼 있다) · `stale_config` |
+| 409 | `duplicate_file` · `table_exists` · `not_append`(`replace` 테이블에 추가 적재) · `rebuild_required` · `in_use` · `merged_batch` · `apply_running` · `project_mismatch`(DB에 다른 프로젝트가 적재돼 있다) · `stale_config` |
 | 410 | `upload_expired` |
 | 413 | `upload_too_large` · `too_many_rows` |
 | 422 | `invalid_csv`·`invalid_rows`(+`errors`) · `unknown_columns`(+`columns`, 후보) · `key_conflict`(+`keys`) · `check_failed`(+`errors`) · `invalid_filter` · `invalid_query` · `invalid_config`(+`errors`) · `invalid_op` |

@@ -43,7 +43,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `GET /tables` | 운용자 | `{"items", "total", "project"}`. 항목 `{name, mode, on_conflict, description, rows, batches, compact_hint, used_by, last_batch: {file, added_at, actor_email} \| null}`. `rows`는 배치 기록의 `inserted` 합(적용한 적이 없으면 `null`), `batches`는 배치 폴더의 파일 수, `compact_hint`는 그 수가 `INGEST_COMPACT_HINT`를 넘는지, `used_by`는 그 테이블을 읽는 데이터셋의 수(계보) |
 | `GET /tables/{t}` | 운용자 | 입력 폼을 만드는 정의: `{name, mode, on_conflict, description, primary_key, revision, columns: [{name, type, required, primary_key, label, values?, ref?, min?, max?, pattern?, description?, default?, aliases?}], checks: [이름], datasets: [그 테이블을 그대로 보는 데이터셋]}`. `label`은 그 테이블을 보는 `table:` 데이터셋의 `labels` |
 | `POST /tables/{t}/batches` | 운용자 | **데이터 더하기**([ingest.md](ingest.md) "더하기"). 아래 "데이터 더하기" |
-| `GET /tables/{t}/batches?removed=1` | 운용자 | 배치 이력, 최근 것부터: `{"items", "total"}`. 항목 `{file, removed, first, added_at, recorded, rows, inserted, updated, skipped, unchanged, actor_email, method, source_name, mine}`. 누가·방법·원래 파일 이름은 감사 로그(`data.batch.create`)에서 온다. `mine`은 요청한 사람이 더한 배치인지. `removed=1`이면 `_removed/`의 배치도 싣는다 |
+| `GET /tables/{t}/batches?removed=1` | 운용자 | 배치 이력, 최근 것부터: `{"items", "total"}`. 항목 `{file, removed, first, merged, added_at, recorded, rows, inserted, updated, skipped, unchanged, actor_email, method, source_name, mine}`. 누가·방법·원래 파일 이름은 감사 로그(`data.batch.create`)에서 온다. `mine`은 요청한 사람이 더한 배치인지. `removed=1`이면 `_removed/`의 배치도 싣는다 |
 | `GET /tables/{t}/batches/{file}` | 운용자 | 배치 파일 내려받기(정규형 그대로, `.csv.gz`는 `application/gzip`) |
 | `DELETE /tables/{t}/batches/{file}` | admin, 또는 그 배치를 더한 operator | 되돌리기. 빠른 길(방금 추가 취소)이면 200 `{"ok", "fast": true, "table", "file", "rows"}`, 아니면 202 작업(다시 만들기) |
 | `POST /tables/{t}/batches/{file}/restore` | admin, 또는 그 배치를 더한 operator | `_removed/`의 배치 되살리기 → 202 작업 |
@@ -118,6 +118,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 
 - 감사 로그: `data.batch.remove`(`fast`), `data.batch.restore`.
 - operator가 남의 배치(또는 누가 더했는지 기록이 없는 배치)를 되돌리거나 되살리면 403 `forbidden`.
+- 합친 배치(`merged: true`, 이름이 `…-merged.csv.gz`)는 되돌리지 않는다: 409 `merged_batch`. 화면은 그 버튼을 보이지 않는다.
 - 형식과 동작(빠른 길의 조건, 다시 만들기, 끊김 복구)은 [ingest.md](ingest.md) "되돌리기와 되살리기".
 
 ### 구조 변경

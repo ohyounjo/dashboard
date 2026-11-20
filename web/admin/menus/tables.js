@@ -729,7 +729,7 @@ function batchesPanel(t, alive) {
     },
     columns: [
       { key: "file", label: D.file, render: (b) => h("span", { class: "d-stack" }, h("span", { class: "mono", text: b.file }),
-        h("span", { class: "pills" }, b.first && t.mode === "append" ? pill(D.firstBatch, "neutral") : null, b.removed ? pill(D.removedBatch, "bad") : null,
+        h("span", { class: "pills" }, b.first && t.mode === "append" ? pill(D.firstBatch, "neutral") : null, b.removed ? pill(D.removedBatch, "bad") : null, b.merged ? pill(D.mergedBatch, "neutral") : null,
           !b.removed && !b.recorded ? pill(D.notApplied, "warn") : null)) },
       { key: "added_at", label: D.addedAt, render: (b) => h("span", { class: "num", text: b.added_at ? T.fmtDateTime(b.added_at) : "—" }) },
       { key: "rows", label: D.rows, num: true, render: (b) => (b.rows == null ? "—" : h("span", { class: "d-stack end" }, D.num(b.rows),
@@ -741,7 +741,7 @@ function batchesPanel(t, alive) {
         if (canChange(b) && b.removed) {
           const r = btn(D.restore, () => act(b, "restore", r), "small");
           parts.push(r);
-        } else if (canChange(b) && !b.first) {
+        } else if (canChange(b) && !b.first && !b.merged) {      // 합친 배치는 테이블의 행 전부라 되돌리지 않는다
           const r = btn(D.remove, () => act(b, "remove", r), "small danger");
           parts.push(r);
         }

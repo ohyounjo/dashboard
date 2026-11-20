@@ -61,6 +61,9 @@ def _target(project: Project, table: str, name: str, *, removed: bool) -> Target
         ok = name in {f.name for f in batches.list_batches(project.data_dir, table)[0]}
     if not ok:
         raise IngestError(404, "unknown_batch", "그 배치 파일이 없습니다" + (" (뺀 배치 목록)" if removed else ""))
+    if not removed and batches.is_merged(name):
+        # 합친 배치는 그 테이블의 모든 행을 담는다. 빼면 마지막에 더한 행이 아니라 테이블 전체가 사라진다
+        raise IngestError(409, "merged_batch", "합친 배치는 되돌릴 수 없습니다(그 테이블의 행 전부가 들어 있습니다)")
     return Target(table, name, folder / name, folder / REMOVED_DIR / name)
 
 

@@ -6,7 +6,7 @@ rebuild_required. 합친 파일은 DB의 행에서 만들기 때문에, 반영�
 1. 지금 테이블의 행을 기본 키 순으로 정규형 **임시 파일**(`data/_pending/incoming/`)로 쓴다(모든 열의 머리글).
 2. 묶음 기록(종류 compact: 새 파일의 최종 이름·해시·행 수, 옮길 옛 파일 목록, `_merged/<시각>/` 폴더).
 3. 옛 배치 파일(과 `data/<테이블>.csv`)을 `_merged/<시각>/`으로 옮긴다.
-4. 임시 파일을 제 이름(`<다음 번호>-<시각>.csv.gz`)으로 바꾼다.
+4. 임시 파일을 제 이름(`<다음 번호>-<시각>-merged.csv.gz`. 이름이 합친 배치의 표식이다)으로 바꾼다.
 5. 배치 기록을 고쳐(그 테이블의 줄을 지우고 새 줄 하나) 커밋하고 묶음 기록을 지운다.
 
 복구: 새 파일(임시 이름이든 제 이름이든)이 있고 해시가 기록과 같으면 **끝까지 진행**한다(남은 옛 파일을 옮기고, 새 파일을
@@ -79,7 +79,7 @@ def _compact(session: Session, tname: str) -> dict[str, Any]:
         writer.abort()
         raise
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    name = batches.next_name(project.data_dir, tname)
+    name = batches.next_name(project.data_dir, tname, merged=True)
     merged_rel = f"{MERGED_DIR}/{stamp}"
     record = {"id": pending.new_id(), "kind": "compact", "project": project.name, "table": tname,
               "name": name, "incoming": temp.name, "sha256": sha, "rows": rows, "merged": merged_rel,

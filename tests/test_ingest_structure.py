@@ -188,6 +188,13 @@ def test_new_table_from_csv_is_saved_validated_and_applied(root, scratch_db, mod
     assert not (root / "ledger/data/items.csv").exists() and folder(root, "items") == later
 
 
+def test_unique_names_keep_the_suffix_within_63_chars():
+    long = "t" * 63
+    assert newtable.unique(long, {long}) == "t" * 61 + "_2"
+    assert newtable.unique(long, {long, "t" * 61 + "_2"}) == "t" * 61 + "_3"
+    assert newtable.unique("items", set()) == "items"
+
+
 def test_new_table_rows_that_fail_the_rules_are_reported(root, scratch_db):
     project = load_project("ledger", root)
     inferred = newtable.infer_one(project, "items.csv", CSV)
@@ -229,6 +236,20 @@ def test_compact_equals_rebuild_and_merged_folder_goes_after_next_load(root, scr
         assert list(ledger.read(cur)["entries"]) == [result["file"]]
     rebuilt_equals_current(root, scratch_db)
     assert not (root / "ledger/data/entries/_merged").exists()     # load가 성공했으니 지웠다
+    # 합친 배치는 이름이 표식이라 load 뒤에도 되돌리지 않는다(테이블의 행 전부가 들어 있다)
+    assert result["file"].endswith("-merged.csv.gz")
+    from dashkit.ingest.remove import remove_batch
+
+    for fast in (True, False):
+        err = pytest.raises(IngestError, remove_batch, "ledger", "entries", result["file"], fast_only=fast,
+                            projects_dir=root, dbname=scratch_db).value
+        assert (err.status, err.detail) == (409, "merged_batch")
+    assert all_rows(scratch_db) == data
+    # 합친 뒤에 더한 배치는 그대로 되돌릴 수 있다
+    name = add(root, scratch_db, "entries", [{"id": "E499"}])["batches"][0]["file"]
+    assert not name.endswith("-merged.csv.gz")
+    remove_batch("ledger", "entries", name, fast_only=True, projects_dir=root, dbname=scratch_db)
+    assert all_rows(scratch_db) == data
 
 
 def test_compact_refuses_unapplied_files(root, scratch_db):

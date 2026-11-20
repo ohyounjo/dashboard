@@ -339,7 +339,7 @@ def get_batches(table: str, removed: str | None = None, principal: Principal = D
     def row(file: str, *, is_removed: bool) -> dict[str, Any]:
         r = rec.get(file)
         who = log.get(file) or {}
-        return {"file": file, "removed": is_removed, "first": file == f"{name}.csv",
+        return {"file": file, "removed": is_removed, "first": file == f"{name}.csv", "merged": batches.is_merged(file),
                 "added_at": batches.stamp_of(file), "recorded": r is not None,
                 "rows": r.rows if r else None, "inserted": r.inserted if r else None,
                 "updated": r.updated if r else None, "skipped": r.skipped if r else None,

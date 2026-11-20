@@ -322,6 +322,7 @@ export default {
       actions: "동작",
       firstBatch: "첫 배치",
       removedBatch: "뺀 배치",
+      mergedBatch: "합친 배치",
       notApplied: "반영 안 됨",
       rowParts: (b) => [b.inserted != null ? `+${b.inserted}` : null, b.updated ? `~${b.updated}` : null,
         b.unchanged ? `=${b.unchanged}` : null, b.skipped ? `↷${b.skipped}` : null].filter(Boolean).join(" "),

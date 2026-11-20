@@ -123,11 +123,21 @@ def all_numbers(data_dir: Path, table: str) -> list[int]:
     return numbers
 
 
-def next_name(data_dir: Path, table: str, now: datetime | None = None) -> str:
-    """`<6자리 번호>-<UTC 시각>.csv.gz`. 번호는 지금까지 쓴 가장 큰 번호 + 1이다(되돌리고 합친 배치 포함)."""
+MERGED_MARK = "-merged"
+
+
+def next_name(data_dir: Path, table: str, now: datetime | None = None, *, merged: bool = False) -> str:
+    """`<6자리 번호>-<UTC 시각>.csv.gz`. 번호는 지금까지 쓴 가장 큰 번호 + 1이다(되돌리고 합친 배치 포함).
+    합친 배치는 `<번호>-<시각>-merged.csv.gz`(이름이 표식이다. load 뒤에도 남는다)."""
     number = max(all_numbers(data_dir, table), default=0) + 1
     stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime(STAMP_FORMAT)
-    return f"{number:0{NUMBER_WIDTH}d}-{stamp}.csv.gz"
+    return f"{number:0{NUMBER_WIDTH}d}-{stamp}{MERGED_MARK if merged else ''}.csv.gz"
+
+
+def is_merged(name: str) -> bool:
+    """합치기가 만든 배치인지(이름의 표식). 합친 배치는 하나씩 되돌리지 않는다."""
+    m = BATCH_RE.fullmatch(name)
+    return bool(m and m.group(2) and m.group(2).endswith(MERGED_MARK))
 
 
 # ---------------------------------------------------------------- 읽기와 해시

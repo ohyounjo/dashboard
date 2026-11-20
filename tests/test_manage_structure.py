@@ -152,6 +152,11 @@ def test_compact_keeps_rows_and_leaves_one_batch(who):
     code, listing, _h = call("GET", "/tables/entries/batches", admin)
     assert [x["file"] for x in listing["items"] if not x["removed"]] == [job["result"]["file"]]
     assert view_count() == before
+    merged = [x for x in listing["items"] if not x["removed"]][0]
+    assert merged["merged"] is True
+    code, b, _h = call("DELETE", f"/tables/entries/batches/{merged['file']}", admin)
+    assert code == 409 and b["detail"] == "merged_batch", b
+    assert view_count() == before
     code, b, _h = call("POST", "/tables/groups/compact", admin, {})
     assert code == 409 and b["detail"] == "not_append"
 

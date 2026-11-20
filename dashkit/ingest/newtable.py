@@ -25,6 +25,19 @@ NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,62}")
 TYPES = ("text", "integer", "number", "boolean", "date", "timestamp", "enum")
 
 
+def unique(base: str, taken: set[str], limit: int = 63) -> str:
+    """taken에 없는 이름: base, 아니면 base_2, base_3…(접미사가 잘리지 않게 base를 먼저 줄인다)."""
+    if base not in taken:
+        return base
+    n = 2
+    while True:
+        suffix = f"_{n}"
+        name = base[:limit - len(suffix)] + suffix
+        if name not in taken:
+            return name
+        n += 1
+
+
 def infer_one(project: config.Project, name: str, content: bytes) -> dict[str, Any]:
     """CSV 하나 → 테이블 추론(scaffold 형식의 표 하나). 이미 있는 이름과 겹치면 이름을 바꾼다."""
     try:
@@ -34,10 +47,7 @@ def infer_one(project: config.Project, name: str, content: bytes) -> dict[str, A
     table = tables[0]
     taken = set(project.schema["tables"])
     base = table["name"]
-    n = 2
-    while table["name"] in taken:
-        table["name"] = f"{base}_{n}"[:63]
-        n += 1
+    table["name"] = unique(base, taken)
     # 이미 있는 테이블의 단일 열 기본 키와 이름·유형이 맞는 열을 참조 후보로(값 대조는 apply가 한다)
     for col in table["columns"]:
         if col.get("ref") or col["name"] in table["primary_key"]:
@@ -102,7 +112,7 @@ def build(project: config.Project, table: Mapping[str, Any], content: bytes, sou
     files = {_first_path(project, name, mode): _first_file(project, name, value, columns, content, source_name, mode)}
     if dataset or suggest:
         taken = set(project.dashboard["datasets"])
-        key = name if name not in taken else f"{name}_rows"
+        key = unique(name, taken)
         ds: dict[str, Any] = {"table": name}
         sketch = scaffold.suggest_dashboard([{**table, "name": name, "label": table.get("label") or name,
                                              "rows": table.get("rows", 0)}]) if suggest else None
@@ -161,14 +171,13 @@ def _sketch_ops(project: config.Project, sketch: Mapping[str, Any], name: str, d
     """초안 그래프: Superset 대시보드 하나와 웹앱 탭 하나(그룹이 허용하기 전에는 user 등급에게 보이지 않는다)."""
     ops: list[dict[str, Any]] = []
     dashboards = project.dashboard["dashboards"]
-    dkey = name if name not in dashboards else f"{name}_view"
+    dkey = unique(name, set(dashboards))
     taken_charts = {c["key"] for _d, c in config.charts(project)}
     rename: dict[str, str] = {}
     charts = []
     for chart in sketch["dashboards"][name]["charts"]:
-        key = chart["key"]
-        while key in taken_charts:
-            key = f"{key}_2"[:63]
+        key = unique(chart["key"], taken_charts)
+        taken_charts.add(key)
         rename[chart["key"]] = key
         charts.append({k: v for k, v in {**chart, "key": key, "dataset": dataset_key}.items() if k != "note"})
 
@@ -186,7 +195,7 @@ def _sketch_ops(project: config.Project, sketch: Mapping[str, Any], name: str, d
                                                             "layout": fix(board["layout"])}})
     tab = sketch["tabs"][0]
     tabs = {t["key"] for t in project.dashboard["tabs"]}
-    tkey = tab["key"] if tab["key"] not in tabs else f"{tab['key']}_tab"
+    tkey = unique(tab["key"], tabs)
     ops.append({"op": "tab.add", "tab": {"key": tkey, "label": tab["label"], "icon": tab["icon"]}})
     ops.append({"op": "section.add", "tab": tkey, "section": {"type": "superset", "dashboard": dkey}})
     return ops
