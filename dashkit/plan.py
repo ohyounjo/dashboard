@@ -34,6 +34,7 @@ UNKNOWN_TEXT = "적용해야 알 수 있음"
 NO_RECORD_TEXT = "지난 적재 기록 없음"
 PENDING_TEXT = "끝나지 않은 폴더 작업이 있음(다음 적재·적용이 처리함): 배치를 비교하지 않음"
 BATCH_TEXT = "누적 테이블은 배치 단위로 비교함"
+RULES_TEXT = "테이블 규칙(충돌 정책·default·검증 규칙)이 바뀜: 다시 만든 결과가 달라질 수 있음"
 LABEL_WIDTH = 9                          # 출력의 줄 머리 폭(화면 칸 수)
 
 
@@ -225,6 +226,7 @@ def batch_diff(name: str, table: Mapping[str, Any], folder: Mapping[str, Any], r
     old = dict(old_batches or {}) if replaced_project is None and recorded is not None else {}
     added: list[str] = []
     changed: list[str] = []
+    rules_changed = False
     new_rows = 0
     errors: list[str] = []
     for fname, src in files.items():
@@ -251,7 +253,10 @@ def batch_diff(name: str, table: Mapping[str, Any], folder: Mapping[str, Any], r
         status = "changed"
     else:
         cols = diff_columns(table_columns(table), [(c, t) for c, t in recorded["columns"]])
-        status = "changed" if (added or removed or changed or _columns_changed(cols)) else "unchanged"
+        from .loader.record import table_rules_hash
+
+        rules_changed = recorded.get("rules") != table_rules_hash(table)
+        status = "changed" if (added or removed or changed or rules_changed or _columns_changed(cols)) else "unchanged"
     # 지금 테이블의 행 수 = 배치 기록의 inserted 합(추가 적재분 포함. 스냅샷의 rows는 마지막 load 때의 값이라 쓰지 않는다)
     rows_now = (sum(rec[2] for rec in (old_batches or {}).values())
                 if recorded is not None and replaced_project is None else 0)
@@ -259,7 +264,7 @@ def batch_diff(name: str, table: Mapping[str, Any], folder: Mapping[str, Any], r
             "status": status, "columns": cols,
             "added": new_rows, "removed": removed_rows, "changed": None, "unchanged": None,
             "comparable": False, "reason": BATCH_TEXT, "keys": {"added": [], "removed": [], "changed": []},
-            "batches": batch_lists}
+            "batches": batch_lists, "rules_changed": status == "changed" and rules_changed}
 
 
 def removed_table(name: str, recorded: Mapping[str, Any]) -> dict[str, Any]:
@@ -665,6 +670,8 @@ def _table_text(t: Mapping[str, Any]) -> str:
                  f" (+{t['added']}행 {MINUS}{t['removed']}행)"]
         if t["status"] == "new":
             parts.append("(새 테이블)")
+        if t.get("rules_changed"):
+            parts.append(RULES_TEXT)
         parts += _columns_text(t["columns"])
         return "  ".join(parts)
     if t["status"] == "unrecorded":

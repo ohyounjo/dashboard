@@ -126,6 +126,12 @@ def definition_hash(dataset: Mapping[str, Any]) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def table_rules_hash(table: Mapping[str, Any]) -> str:
+    """테이블 정의(정규화한 값: 열·규칙·방식·충돌 정책·default·checks)의 해시."""
+    text = json.dumps(table, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def data_revision(schema: Mapping[str, Any], dashboard: Mapping[str, Any]) -> str:
     """데이터 설정 지문: DB의 내용을 정하는 설정만으로 구한 해시(contracts/ingest.md "데이터 설정 지문").
 
@@ -153,6 +159,9 @@ def snapshot(project_name: str, schema: Mapping[str, Any], dashboard: Mapping[st
                 "primary_key": list(table["primary_key"]),
                 "rows": int(row_counts.get(name, 0)),
                 "mode": table.get("mode", "replace"),
+                # 누적 테이블은 배치를 어떻게 해석하는지(충돌 정책, default, 규칙)도 남긴다. 파일이 같아도 이것이 바뀌면
+                # 다시 만든 결과가 달라질 수 있다(plan이 비교한다)
+                **({"rules": table_rules_hash(table)} if table.get("mode") == "append" else {}),
             }
             for name, table in schema["tables"].items()
         },

@@ -638,3 +638,21 @@ def test_recovery_keeps_files_when_its_own_commit_result_is_unknown(tmp_path, sc
     assert r["recovered"][0]["result"] == "applied"
     assert {"E121", "E122"} <= {x[0] for x in rows(scratch_db, "entries")}
     rebuilt_equals_current(root, scratch_db)
+
+
+def test_plan_reports_a_changed_conflict_policy(tmp_path, scratch_db, monkeypatch):
+    from dashkit import plan
+
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    monkeypatch.setenv("BUILD_DIR", str(tmp_path / "build"))
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+
+    def entries():
+        return next(t for t in plan.make_plan(load_project("ledger", root), dbname=scratch_db)["data"]
+                    if t["table"] == "entries")
+    assert entries()["status"] == "unchanged"
+    schema = root / "ledger" / "schema.yaml"
+    schema.write_text(schema.read_text(encoding="utf-8").replace("on_conflict: update", "on_conflict: skip"), encoding="utf-8")
+    e = entries()
+    assert e["status"] == "changed" and e["rules_changed"] and e["batches"] == {"added": [], "removed": [], "changed": []}

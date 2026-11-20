@@ -77,7 +77,7 @@ CREATE TABLE dashkit_meta.batch (                 -- 원본 데이터 파일마�
 
 - `tables.<이름>.columns`: 적재 뒤 raw 테이블의 열(이름, `information_schema`의 `data_type`), schema.yaml 순서. `enum`은 `text`다.
 - `data_revision`: 데이터 설정 지문(DB의 내용을 정하는 설정만으로 구한 해시. [ingest.md](ingest.md) "배치 기록과 데이터 설정 지문"). 추가 적재가 "설정이 DB에 적용됐는지" 확인하는 데 쓴다.
-- `tables.<이름>.mode`: `replace` | `append`. `rows`는 적재 뒤 테이블의 행 수다.
+- `tables.<이름>.mode`: `replace` | `append`. `rows`는 적재 뒤 테이블의 행 수다. `append` 테이블은 `rules`(정규화한 테이블 정의의 SHA-256)도 남긴다.
 - `batch`: **프로젝트의 모든 원본 데이터 파일**(replace 테이블의 CSV, append 테이블의 배치마다)이 한 줄씩. 이름·해시·행 수뿐이다. 누적(append) 테이블은 행 지문을 남기지 않는다(배치 단위로 비교한다).
 - `datasets.<키>.definition`: 뷰 정의의 해시. `table:`은 `"table:<테이블>"`, `sql:`은 로더가 뷰를 만들 때처럼 다듬은 쿼리(앞뒤 공백과 끝의 `;` 제거)의 SHA-256.
 - **raw의 원본 값은 하나도 저장하지 않는다.** 지문 테이블의 두 열은 모두 해시이고(기본 키 값도 해시로만), 스냅샷에는 이름·타입·행 수·정의 해시만, 배치 기록에는 파일 이름·내용 해시·행 수만 있다. raw의 기본 키(이메일 등)는 dash 뷰에 나오지 않는 값일 수 있어, `dash_reader`가 읽는 기록에 두면 권한 경계가 넓어진다.
@@ -135,6 +135,7 @@ CREATE TABLE dashkit_meta.batch (                 -- 원본 데이터 파일마�
 | 기록에 있는데 폴더에 없는 파일 | `batches.removed`(배치 −1). 그 배치가 넣었던 새 행 수(`inserted`)를 `removed`에 센다 |
 | 이름이 같고 내용 해시가 다른 파일 | `batches.changed`. 새 행 수를 `added`에, 기록된 `inserted`를 `removed`에 센다 |
 | 이름과 해시가 같은 배치 | 다시 읽지 않는다 |
+| 테이블 정의(충돌 정책·`default`·검증 규칙·`checks`)가 지난 적재와 다름(스냅샷의 `tables.<이름>.rules`, 정의의 해시) | 파일이 같아도 `status: changed`, `rules_changed: true`. "테이블 규칙이 바뀜: 다시 만든 결과가 달라질 수 있음" |
 | 이 테이블을 가리키는 묶음 기록이 `data/_pending/`에 남아 있음 | `status: pending`. 기록을 고치지 않고 "끝나지 않은 폴더 작업이 있음"을 알리며 비교하지 않는다 |
 
 `rows`는 지금 행 수(배치 기록의 `inserted` 합. 추가 적재분 포함) + 새 배치의 행 수 − 없어지거나 바뀐 배치의 `inserted`(어림값. 키가 겹치는 배치는 적용해야 정확히 안다), `changed`·`unchanged`는 `null`, `comparable`은 `false`다. 사람이 읽는 출력은 `배치 +2 −1 ~0 (+120행 −30행)`이다. 배치 파일의 이름 오류와 검증 오류는 CSV 검증 실패와 같게 다룬다.
