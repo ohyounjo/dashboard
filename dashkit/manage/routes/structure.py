@@ -12,21 +12,20 @@ import shutil
 import zipfile
 from typing import Any, Mapping
 
-import psycopg
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from ... import config, db
+from ... import config
 from ...auth import store as auth_store
 from ...auth.routes import Principal, client_ip, require_admin, require_operator
-from ...ingest import IngestError, batches, ledger, lineage, newtable, structure
+from ...ingest import IngestError, batches, lineage, newtable, structure
 from ...ingest.compact import compact
 from ...project import store, upload
 from .. import context
 from ..runs_state import runs
 from ..uploads import uploads
-from .tables import _json, _project, _receive, _table
+from .tables import _json, _lineage, _project, _receive, _table
 
 router = APIRouter()
 
@@ -44,20 +43,6 @@ def _audit(action: str, principal: Principal, request: Request | None, target_ty
                                 ip=client_ip(request) if request is not None else None)
     except Exception:     # 감사 로그 실패가 끝난 변경을 실패로 만들지 않는다
         pass
-
-
-def _snapshot() -> Mapping[str, Any] | None:
-    """적재 스냅샷(dash_inspect). 읽지 못하면 None(적용 전 등)."""
-    try:
-        with db.inspect_conn() as conn:
-            with conn.cursor() as cur:
-                return ledger.loaded(cur).snapshot
-    except (psycopg.Error, RuntimeError):
-        return None
-
-
-def _lineage(project: config.Project) -> dict[str, Any]:
-    return lineage.build(project, _snapshot())
 
 
 # ---------------------------------------------------------------- 계보

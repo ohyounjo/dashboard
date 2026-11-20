@@ -69,8 +69,8 @@ CREATE TABLE dashkit_meta.batch (                 -- 원본 데이터 파일마�
     "members": { "columns": [["id", "text"], ["name", "text"], ["role", "text"]], "primary_key": ["id"], "rows": 6, "mode": "replace" }
   },
   "datasets": {
-    "kpi_snapshots": { "kind": "table", "definition": "<sha256>" },
-    "docs":          { "kind": "sql",   "definition": "<sha256>" }
+    "kpi_snapshots": { "kind": "table", "definition": "<sha256>", "sources": { "kpi_snapshots": ["as_of", "open_issues"] } },
+    "docs":          { "kind": "sql",   "definition": "<sha256>", "sources": { "docs": ["id", "title"], "members": ["id", "name"] } }
   }
 }
 ```
@@ -79,6 +79,7 @@ CREATE TABLE dashkit_meta.batch (                 -- 원본 데이터 파일마�
 - `data_revision`: 데이터 설정 지문(DB의 내용을 정하는 설정만으로 구한 해시. [ingest.md](ingest.md) "배치 기록과 데이터 설정 지문"). 추가 적재가 "설정이 DB에 적용됐는지" 확인하는 데 쓴다.
 - `tables.<이름>.mode`: `replace` | `append`. `rows`는 적재 뒤 테이블의 행 수다. `append` 테이블은 `rules`(정규화한 테이블 정의의 SHA-256)도 남긴다.
 - `batch`: **프로젝트의 모든 원본 데이터 파일**(replace 테이블의 CSV, append 테이블의 배치마다)이 한 줄씩. 이름·해시·행 수뿐이다. 누적(append) 테이블은 행 지문을 남기지 않는다(배치 단위로 비교한다).
+- `datasets.<키>.sources`: 그 뷰가 읽는 raw 테이블과 열(`{테이블: [열]}`, 이름순). 로더가 뷰를 만든 직후 PostgreSQL의 의존 정보로 적는다(뷰가 뷰를 쓰면 끝까지 따라간다). 계보와 "쓰이는 곳"이 쓴다([ingest.md](ingest.md) "계보"). 이 키가 없는 옛 스냅샷도 읽는다.
 - `datasets.<키>.definition`: 뷰 정의의 해시. `table:`은 `"table:<테이블>"`, `sql:`은 로더가 뷰를 만들 때처럼 다듬은 쿼리(앞뒤 공백과 끝의 `;` 제거)의 SHA-256.
 - **raw의 원본 값은 하나도 저장하지 않는다.** 지문 테이블의 두 열은 모두 해시이고(기본 키 값도 해시로만), 스냅샷에는 이름·타입·행 수·정의 해시만, 배치 기록에는 파일 이름·내용 해시·행 수만 있다. raw의 기본 키(이메일 등)는 dash 뷰에 나오지 않는 값일 수 있어, `dash_reader`가 읽는 기록에 두면 권한 경계가 넓어진다.
 - 권한: `dash` 스키마와 같은 방식으로, 적재할 때마다 로더가 `REVOKE ALL ON SCHEMA dashkit_meta FROM PUBLIC`, `GRANT USAGE`·`GRANT SELECT ON ALL TABLES`를 `dash_reader`(와 있으면 `dash_inspect`)에게 준다. 초기화 스크립트(`data-db/init/01-reader.sh`)에 기대지 않으므로 이미 있는 DB 볼륨에서도 다음 적재부터 생긴다. `dash_reader`는 이 스키마에 쓰거나 지울 수 없다(`tests/test_plan.py`).

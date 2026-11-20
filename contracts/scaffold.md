@@ -158,3 +158,13 @@ CSV를 읽는 방식은 `dashkit/loader/validate.py`와 같다: UTF-8(BOM 허용
 - kanban: `columns`는 enum 값 순서 그대로(`label` = 값), `card.chips`는 다른 enum 열 2개까지.
 - gantt `fields.label`과 kanban `card.title`: 이름 토막에 `name`·`title`·`label`·`subject`가 있는 text 열 → 첫 text 열 → 기본 키.
 - 탭 아이콘: gantt가 있으면 `calendar`, kanban만 있으면 `list`, 아니면 `table`.
+
+## 운용 화면의 새 테이블
+
+관리 서비스의 `POST /api/manage/tables/infer`·`POST /tables`([manage.md](manage.md) "구조 변경")도 이 추론을 쓴다(`dashkit/ingest/newtable.py`). 다른 점만 적는다.
+
+- CSV 하나를 `infer_tables`로 추론한다. 이름이 이미 있는 테이블과 겹치면 `_2`, `_3`…을 붙인다.
+- **이미 있는 테이블의 단일 열 기본 키도 `ref` 후보**로 본다: 이름이 그 기본 키와 같거나(`id`는 빼고) `<테이블>_id`·`<단수형>_id`이고 유형이 같으면 `ref`와 `ref_basis`를 채운다. 값 대조는 apply가 한다(없는 값이면 load가 실패하고 모든 파일이 되돌아간다).
+- 열의 `source`(원래 머리글)가 열 이름과 다르면 그 열의 **`aliases`에 남긴다**. 같은 모양의 파일을 다음에 올리면 머리글이 저절로 맞는다.
+- 방식은 기본 `append`(충돌 정책 `error`)이고 `replace`도 고를 수 있다. 첫 파일은 사람이 고친 정의로 접수(유형·필수·기본 키 검증)한 정규형이다. 규칙을 통과하지 못한 행이 있으면 422 `invalid_rows`(+`errors`)이고 아무것도 쓰지 않는다.
+- 데이터셋(`table:`, 기본 켬)을 함께 만든다. 초안 그래프를 고르면 위 "dashboard.yaml 초안"의 Superset 대시보드 하나와 그것을 담은 웹앱 탭 하나를 더한다(위젯 섹션은 만들지 않는다. 새 탭은 그룹이 허용하기 전에는 `user` 등급에게 보이지 않는다).

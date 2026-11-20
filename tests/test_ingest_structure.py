@@ -48,8 +48,6 @@ def change(root, dbname, op_list, **kw):
 
 
 def columns_of(dbname, table):
-    import psycopg
-
     from dashkit import db
 
     with db.owner_conn(dbname) as conn, conn.cursor() as cur:
@@ -112,12 +110,12 @@ def test_required_column_without_default_and_type_narrowing_are_rejected(root, s
 
 def test_column_add_on_append_table_fills_old_batches_with_default(root, scratch_db):
     load(load_project("ledger", root), dbname=scratch_db)
-    change(root, scratch_db, [{"op": "column.add", "table": "entries", "column": "rank",
+    change(root, scratch_db, [{"op": "column.add", "table": "entries", "column": "tier",
                                "value": {"type": "integer", "default": 5}},
                               {"op": "column.update", "table": "entries", "column": "qty", "set": {"type": "number"}}])
     got = {r[0]: r for r in rows(scratch_db, "entries")}
     assert {r[-1] for r in got.values()} == {5}
-    add(root, scratch_db, "entries", [{"id": "E300", "rank": 9, "qty": 1.5}])       # 새 열이 든 배치
+    add(root, scratch_db, "entries", [{"id": "E300", "tier": 9, "qty": 1.5}])       # 새 열이 든 배치
     add(root, scratch_db, "entries", [{"id": "E301"}])                             # 옛 모양의 배치
     got = {r[0]: r for r in rows(scratch_db, "entries")}
     assert got["E300"][-1] == 9 and got["E301"][-1] == 5
@@ -174,15 +172,17 @@ def test_new_table_from_csv_is_saved_validated_and_applied(root, scratch_db, mod
     if mode == "append":
         (name,) = folder(root, "items")
         assert name.startswith("000001-") and gzip.decompress((root / "ledger/data/items" / name).read_bytes()) \
-            .decode().startswith("item_code,group,count,seen_on\n")
-        add(root, scratch_db, "items", [{"Item Code": "A3", "Count": 1}], columns={"Item Code": "item_code"})
+            .decode().startswith("item_code,group_col,count_col,seen_on\n")
+        # 같은 모양(원래 머리글)의 행을 다음에 올리면 aliases로 저절로 맞는다
+        add(root, scratch_db, "items", [{"Item Code": "A3", "Group": "g1", "Count": 1, "Seen On": "2026-11-03"}])
     else:
-        assert (root / "ledger/data/items.csv").read_text(encoding="utf-8").startswith("item_code,group,count,seen_on\n")
+        assert (root / "ledger/data/items.csv").read_text(encoding="utf-8").startswith("item_code,group_col,count_col,seen_on\n")
     rebuilt_equals_current(root, scratch_db)
-    # 되돌리면 첫 파일도 함께 지운다
+    # 되돌리면 그 작업이 만든 첫 파일도 함께 지운다. 그 뒤에 더한 배치는 이력에 없어 그대로 남는다(데이터를 지우지 않는다)
+    later = folder(root, "items")[1:]
     change(root, scratch_db, None, files=structure.history_files("ledger", result["history"]), action="restore")
     assert "items" not in load_project("ledger", root).schema["tables"]
-    assert not (root / "ledger/data/items.csv").exists() and folder(root, "items") == []
+    assert not (root / "ledger/data/items.csv").exists() and folder(root, "items") == later
 
 
 def test_new_table_rows_that_fail_the_rules_are_reported(root, scratch_db):
