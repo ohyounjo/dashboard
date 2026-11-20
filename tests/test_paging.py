@@ -98,6 +98,9 @@ def test_long_values_are_cut_in_lists_but_not_in_one_row_reads(big):
         q = paging.parse_query({"filters": [{"column": "id", "op": "eq", "value": "E107"}]}, ENTRY_COLS)
         page = paging.fetch_page(cur, RAW, ENTRY_COLS, q, key_columns=["id"], version="v", total_rows=None)
         assert len(page.rows[0]["memo"]) == paging.CELL_CHARS and page.truncated_cells == [[0, "memo"]]
+        whole = paging.fetch_page(cur, RAW, ENTRY_COLS, q, key_columns=["id"], version="v", total_rows=None,
+                                  cut_cells=False)        # /api/data(대시보드)는 자르지 않는다
+        assert len(whole.rows[0]["memo"]) == 2500 and whole.truncated_cells == []
         one = paging.fetch_row(cur, RAW, ENTRY_COLS, {"id": "E107"})
         assert len(one["row"]["memo"]) == 2500 and one["truncated_cells"] == []
 
@@ -110,7 +113,11 @@ def test_cursor_is_bound_to_its_query_and_version(big):
         assert first.total == 125
         q2 = paging.parse_query({"limit": 10, "cursor": first.next_cursor}, ENTRY_COLS)
         assert not paging.fetch_page(cur, RAW, ENTRY_COLS, q2, key_columns=["id"], version="v1", total_rows=125).changed
-        assert paging.fetch_page(cur, RAW, ENTRY_COLS, q2, key_columns=["id"], version="v2", total_rows=125).changed
+        second = paging.fetch_page(cur, RAW, ENTRY_COLS, q2, key_columns=["id"], version="v2", total_rows=125)
+        assert second.changed
+        # 다음 커서도 첫 페이지의 판을 이어 가서, 셋째 페이지에서도 바뀜 안내가 사라지지 않는다
+        q3 = paging.parse_query({"limit": 10, "cursor": second.next_cursor}, ENTRY_COLS)
+        assert paging.fetch_page(cur, RAW, ENTRY_COLS, q3, key_columns=["id"], version="v2", total_rows=125).changed
         q3 = paging.parse_query({"limit": 10, "cursor": first.next_cursor,
                                  "filters": [{"column": "state", "op": "eq", "value": "open"}]}, ENTRY_COLS)
         with pytest.raises(paging.QueryError):

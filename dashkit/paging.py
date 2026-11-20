@@ -264,7 +264,7 @@ class Page:
 
 def fetch_page(cur: Any, relation: sql.Composable, columns: Sequence[Column], q: Query, *,
                key_columns: Sequence[str] | None, version: str, total_rows: int | None,
-               to_json: Any = None) -> Page:
+               to_json: Any = None, cut_cells: bool = True) -> Page:
     """한 페이지를 읽는다. relation은 목록과 대조한 이름으로 만든 식별자(예: raw.<t>, dash.<d>)다.
 
     key_columns가 있으면(고유한 키가 결과에 있음) 키 방식, 없으면 건너뛰기 방식. total_rows는 필터가 없을 때 쓸 전체 행 수
@@ -284,13 +284,15 @@ def fetch_page(cur: Any, relation: sql.Composable, columns: Sequence[Column], q:
         keys = sort + [(c.name, "asc") for c in columns if c.name not in {s for s, _ in sort}]
         select_cols = list(shown)
     changed = False
+    first_version = version       # 커서에는 언제나 첫 페이지 때의 판을 이어 넣는다(바뀜 안내가 다음 페이지에서 사라지지 않게)
     offset = 0
     after: tuple[sql.Composable, list[Any]] | None = None
     if q.cursor:
         doc = decode_cursor(q.cursor)
         if doc.get("mode") != mode or doc.get("keys") != [list(k) for k in keys] or doc.get("where") != _fingerprint(q):
             raise QueryError("invalid_query", "cursor가 이 조회의 것이 아닙니다(처음부터 다시 조회하세요)")
-        changed = doc.get("version") != version
+        first_version = doc.get("version")
+        changed = first_version != version
         if mode == "key":
             after = _after(keys, [_from_json(v) for v in doc["last"]])
         else:
@@ -312,14 +314,14 @@ def fetch_page(cur: Any, relation: sql.Composable, columns: Sequence[Column], q:
             if c not in shown:
                 continue
             value = to_json(v, by[c].type)
-            if isinstance(value, str) and len(value) > CELL_CHARS:
+            if cut_cells and isinstance(value, str) and len(value) > CELL_CHARS:
                 value = value[:CELL_CHARS]
                 truncated.append([i, c])
             row[c] = value
         rows.append(row)
     nxt = None
     if more:
-        doc = {"mode": mode, "keys": [list(k) for k in keys], "where": _fingerprint(q), "version": version}
+        doc = {"mode": mode, "keys": [list(k) for k in keys], "where": _fingerprint(q), "version": first_version}
         if mode == "key":
             last = raw[-1]
             idx = {c: j for j, c in enumerate(select_cols)}
