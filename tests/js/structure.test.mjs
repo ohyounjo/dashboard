@@ -51,6 +51,10 @@ test("열 규칙 고치기: 바뀐 키만, 비우면 null, 유형은 넓히기�
   // enum → text: enum이 아닌 열은 values를 가질 수 없으니 함께 지운다(값 칸을 비워 둬도 막지 않는다)
   assert.deepEqual(columnUpdateOp("t", e, { values: "a, b", type: "text" }).op.set, { values: null, type: "text" });
   assert.deepEqual(columnUpdateOp("t", e, { values: "", type: "text" }).op.set, { values: null, type: "text" });
+  // 경계가 있는 열을 text로: min·max를 함께 지운다(number로 넓힐 때는 그대로)
+  const bounded = { name: "n", type: "integer", min: 0, max: 100 };
+  assert.deepEqual(columnUpdateOp("t", bounded, { min: "0", max: "100", type: "text" }).op.set, { type: "text", min: null, max: null });
+  assert.deepEqual(columnUpdateOp("t", bounded, { min: "0", max: "100", type: "number" }).op.set, { type: "number" });
   assert.deepEqual(columnUpdateOp("t", { name: "p", type: "text", pattern: "^A" }, { pattern: "" }).op.set, { pattern: null });
   assert.deepEqual(columnUpdateOp("t", { name: "d", type: "date" }, { min: "2026/01/01" }).op.set, { min: "2026-01-01" });
 });

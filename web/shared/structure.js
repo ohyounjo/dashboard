@@ -90,7 +90,12 @@ export function columnUpdateOp(table, before, form) {
   let typeChanged = false;
   if (form.type && form.type !== before.type) {
     if (!widenTargets(before.type).includes(form.type)) problems.push({ field: "type", code: "widen" });
-    else { set.type = form.type; typeChanged = true; }
+    else {
+      set.type = form.type;
+      typeChanged = true;
+      // text 열은 min·max를 가질 수 없다(config 검사). 넓힐 때 있던 경계를 함께 지운다
+      if (form.type === "text") for (const k of ["min", "max"]) if (before[k] != null) set[k] = null;
+    }
   }
   if (problems.length) return { op: null, problems, typeChanged };
   if (!Object.keys(set).length) return { op: null, problems: [], typeChanged };

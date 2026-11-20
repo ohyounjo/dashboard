@@ -149,9 +149,42 @@ def test_append_table_with_batches_cannot_switch_to_replace(root, scratch_db):
     before = files(root)
     for mode in ("replace", None):
         err = pytest.raises(IngestError, change, root, scratch_db, [
-            {"op": "table.update", "table": "entries", "set": {"mode": mode}}]).value     # 잠금 안에서도 본다
+            {"op": "table.update", "table": "entries", "set": {"mode": mode, "on_conflict": None}}]).value  # 잠금 안에서도 본다
         assert (err.status, err.detail) == (422, "invalid_op")
     assert files(root) == before
+
+
+def test_history_restore_cannot_switch_an_append_table_with_batches_back_to_replace(root, scratch_db):
+    """replace → append로 바꾼 뒤 배치를 더했으면, 그 전환을 이력으로 되돌리는 것도 거절한다(배치의 행이 사라진다)."""
+    load(load_project("ledger", root), dbname=scratch_db)
+    result = change(root, scratch_db, [{"op": "table.update", "table": "groups", "set": {"mode": "append"}}])
+    add(root, scratch_db, "groups", [{"id": "g9", "label": "아홉"}])
+    data = all_rows(scratch_db)
+    back = structure.history_files("ledger", result["history"])
+    err = pytest.raises(IngestError, change, root, scratch_db, None, files=back, action="restore").value
+    assert (err.status, err.detail) == (422, "invalid_op")
+    assert all_rows(scratch_db) == data and "g9" in {r[0] for r in rows(scratch_db, "groups")}
+
+
+def test_recovery_reads_the_records_again_after_taking_the_lock(root, scratch_db, monkeypatch):
+    """잠금을 기다리는 사이 다른 쪽이 기록을 처리했으면(지웠으면) 옛 사본으로 되돌리지 않는다."""
+    from dashkit.project import locks
+
+    load(load_project("ledger", root), dbname=scratch_db)
+    record_dir = root / "ledger" / "data"
+    pending.write_record(record_dir, {"id": "stale", "kind": "config", "project": "ledger", "data_revision": "x",
+                                      "loaded_at": None, "files": [{"path": "schema.yaml", "before": "", "after": "y"}]})
+    before = files(root)
+    real = locks.acquire
+
+    def acquire_after_someone_else_finished(conn, wait_ms):
+        for path, _r in pending.list_records(record_dir):
+            pending.remove_record(path)          # 기다리는 사이 원래 작업이 끝나 기록을 지웠다
+        return real(conn, wait_ms)
+
+    monkeypatch.setattr(locks, "acquire", acquire_after_someone_else_finished)
+    assert structure.recover_before_read("ledger", root, dbname=scratch_db) == []
+    assert files(root) == before                 # 지워진 기록의 사본(빈 schema.yaml)으로 덮어쓰지 않았다
 
 
 @pytest.mark.parametrize("point,kept", [("after_move", False), ("before_commit", False), ("after_commit", True)])

@@ -186,9 +186,8 @@ def recover_before_read(name: str, projects_dir: Path | None = None, *, dbname: 
                         wait_ms: int = 10_000) -> list[recover.Outcome]:
     """설정을 읽기 전에(load·check·apply) 끝나지 않은 구조 변경을 정리한다. 기록이 없으면 DB에 닿지 않는다."""
     root = (Path(projects_dir) if projects_dir else config.default_projects_dir()) / name
-    records = [(p, r) for p, r in pending.list_records(root / "data") if r and r.get("kind") == "config"]
-    if not records:
-        return []
+    if not any(r and r.get("kind") == "config" for _p, r in pending.list_records(root / "data")):
+        return []          # 기록이 없으면 DB에 닿지 않는다(잠금을 잡은 뒤 다시 읽는다)
     shell = config.Project(name=name, root=root, schema={"tables": {}}, dashboard={})
     try:
         conn = db.owner_conn(dbname)
@@ -205,6 +204,8 @@ def recover_before_read(name: str, projects_dir: Path | None = None, *, dbname: 
     use = conn if loaded_project == name else None      # 다른 프로젝트가 적재돼 있으면 이 변경의 load는 없었다
     outcomes = []
     try:
+        # 잠금을 기다리는 사이 원래 작업이나 다른 복구가 기록을 처리했을 수 있다. 잠금을 잡은 뒤 남은 기록만 본다
+        records = [(p, r) for p, r in pending.list_records(root / "data") if r and r.get("kind") == "config"]
         for path, record in records:
             outcome = recover_config(shell, use, record, "load")
             pending.remove_record(path)
@@ -279,20 +280,19 @@ def plan_files(project: config.Project, op_list: list[Mapping[str, Any]],
     return {k: v for k, v in out.items() if v[0] != v[1]}
 
 
-def check_mode_switch(project: config.Project, op_list: list[Mapping[str, Any]]) -> None:
-    """배치 파일이 있는 append 테이블을 replace로 바꾸는 것은 거절한다(배치를 읽지 않게 되어 그 행이 사라진다).
-    폴더 상태를 보는 검사라 쓰기 잠금 안에서 파일을 바꾸기 전에 다시 한다(요청을 받을 때도 미리 본다)."""
+def check_mode_switch(project: config.Project, new_project: config.Project) -> None:
+    """배치 파일이 있는 append 테이블이 새 설정에서 replace가 되는 변경은 거절한다(배치를 읽지 않게 되어 그 행이
+    사라진다). 연산이든 이력 되돌리기든 새 설정과 견주어 본다. 폴더 상태를 보는 검사라 쓰기 잠금 안에서 파일을 바꾸기
+    전에 다시 한다(요청을 받을 때도 미리 본다)."""
     from . import batches
 
-    for o in op_list:
-        name = o.get("table")
-        spec = project.schema["tables"].get(name) if isinstance(name, str) else None
-        values = o.get("set")
-        if o.get("op") != "table.update" or spec is None or not isinstance(values, dict) or "mode" not in values:
+    for name, spec in project.schema["tables"].items():
+        new = new_project.schema["tables"].get(name)
+        if new is None or (spec.get("mode") or "replace") != "append" or (new.get("mode") or "replace") == "append":
             continue
-        if (spec.get("mode") or "replace") == "append" and values["mode"] in (None, "replace") \
-                and batches.list_batches(project.data_dir, name)[0]:
-            raise IngestError(422, "invalid_op", "배치 파일이 있는 누적 테이블은 replace로 바꾸지 않습니다(배치를 읽지 않게 됩니다)")
+        if batches.list_batches(project.data_dir, name)[0]:
+            raise IngestError(422, "invalid_op", f"배치 파일이 있는 누적 테이블({name})은 replace로 바꾸지 않습니다"
+                              "(배치를 읽지 않게 됩니다)")
 
 
 def _staged(project: config.Project, changes: Mapping[str, tuple[bytes | None, bytes | None]]):
@@ -315,10 +315,9 @@ def validate(project_name: str, op_list: list[Mapping[str, Any]],
         project = config.load_project(project_name)
     except config.ConfigError as exc:
         raise IngestError(422, "invalid_config", "지금 설정이 검사를 통과하지 못합니다", exc.errors) from None
-    check_mode_switch(project, op_list)
     changes = plan_files(project, op_list, extra)
     if changes:
-        _staged(project, changes)
+        check_mode_switch(project, _staged(project, changes).project)
     return sorted(changes)
 
 
@@ -354,13 +353,13 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
                 changes = {_safe_rel(k): (_read(project.root / k), v) for k, v in files.items()}
                 changes = {k: v for k, v in changes.items() if v[0] != v[1]}
             else:
-                check_mode_switch(project, op_list or [])          # 잠금 안에서 폴더를 다시 본다
                 changes = plan_files(project, op_list or [], extra)
             if not changes:
                 return {"changed": [], "history": None, "revision": store.revision(project.root), "counts": None,
                         "sync": None}
             say(f"▶ 검사: {', '.join(changes)}")
             staged = _staged(project, changes)
+            check_mode_switch(project, staged.project)          # 잠금 안에서 폴더를 다시 본다(이력 되돌리기 포함)
             new_revision = data_revision(staged.project.schema, staged.project.dashboard)
             hid = _new_history_id(action)
             record_path, record = _write_record(project, changes, new_revision, hid, action, session.loaded.loaded_at)
