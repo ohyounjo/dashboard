@@ -306,8 +306,19 @@ function statusPill(u) {
 
 let me = null;   // 로그인한 운용자 {email, role}
 let allGroups = null;
+/** 모든 그룹(마지막 페이지까지). 다 읽지 못하면 실패한다(일부만 가지고 사용자의 그룹을 통째로 저장하지 않게). */
 async function groupList() {
-  if (!allGroups) allGroups = (await api("GET", "/api/admin/groups?size=200")).items;
+  if (allGroups) return allGroups;
+  const items = [];
+  for (let page = 1; ; page += 1) {
+    const r = await api("GET", `/api/admin/groups?size=200&page=${page}`);
+    items.push(...r.items);
+    if (!r.items.length || items.length >= r.total) {
+      if (items.length < r.total) throw new ApiFail(0, "network");
+      break;
+    }
+  }
+  allGroups = items;
   return allGroups;
 }
 

@@ -595,6 +595,25 @@ def set_password(user_id: str, password_hash: str, *, must_change: bool = False,
                          (user_id, keep_session, keep_session))
 
 
+def change_own_password(user_id: str, verified_hash: str, session_id: str, new_hash: str) -> str | None:
+    """내 비밀번호 변경을 한 트랜잭션으로: 사용자 행을 잠그고, 현재 비밀번호 검증에 쓴 해시가 **지금도** 같고 이 세션이
+    아직 있을 때만 새 비밀번호로 바꾸고 이 세션만 남긴다. 성공하면 None, 아니면 사유("changed" | "session")."""
+    reason: str | None = None
+    with connection() as conn, conn.transaction() as tx:
+        row = conn.execute("SELECT password_hash, status FROM dashkit_auth.users WHERE id = %s FOR UPDATE",
+                           (user_id,)).fetchone()
+        if not row or row["status"] != "active" or not conn.execute(
+                "SELECT 1 FROM dashkit_auth.sessions WHERE id = %s AND user_id = %s", (session_id, user_id)).fetchone():
+            reason = "session"
+            raise psycopg.Rollback(tx)
+        if row["password_hash"] != verified_hash:
+            reason = "changed"
+            raise psycopg.Rollback(tx)
+        conn.execute(_SET_PASSWORD, (new_hash, False, user_id))
+        conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s AND id <> %s", (user_id, session_id))
+    return reason
+
+
 def use_reset_token(token_id: str, user_id: str, purpose: str, password_hash: str) -> bool:
     """재설정·초대 수락을 한 트랜잭션으로: 토큰을 지우고(한 번만), 새 비밀번호, 초대면 active·기본 그룹,
     그 사용자의 모든 세션 삭제. 토큰이 이미 쓰였거나 상태가 맞지 않으면 아무것도 바꾸지 않고 False."""

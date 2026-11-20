@@ -388,8 +388,14 @@ def change_my_password(body: PasswordChange, request: Request, principal: Princi
         raise weak_password(reason)
     if passwords.verify(user.password_hash, body.new):
         raise weak_password("same_as_current")
-    # 새 비밀번호와 다른 세션 삭제를 한 트랜잭션으로(지금 세션만 남긴다)
-    store.set_password(user.id, passwords.hash_password(body.new), end_sessions=True, keep_session=principal.session_id)
+    # 사용자 행을 잠근 한 트랜잭션에서, 검증한 해시와 이 세션이 그대로일 때만 바꾸고 이 세션만 남긴다
+    # (그 사이 운용자의 임시 비밀번호·재설정이 있었으면 그것을 덮어쓰지 않는다)
+    failed = store.change_own_password(user.id, user.password_hash, principal.session_id or "",
+                                       passwords.hash_password(body.new))
+    if failed == "session":
+        raise _unauthenticated()
+    if failed == "changed":
+        raise _invalid_credentials()
     store.record_audit("auth.password_changed", actor_id=user.id, actor_email=user.email, target_type="user",
                        target_id=user.id, target_label=user.email, ip=client_ip(request))
     return Response(status_code=204)

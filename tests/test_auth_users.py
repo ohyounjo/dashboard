@@ -284,6 +284,40 @@ def test_temporary_password_forces_change(accounts):
     assert login(user["email"], "brand-new-pass-7")
 
 
+def test_own_password_change_does_not_override_a_concurrent_reset(accounts):
+    """현재 비밀번호를 검증한 뒤 운용자가 비밀번호를 바꾸면(임시 비밀번호·재설정), 진행 중이던 내 비밀번호 변경은 덮어쓰지 않는다."""
+    import threading
+
+    from dashkit.auth import passwords
+
+    user = accounts("user")
+    result: dict = {}
+    with db.auth_conn() as conn:                                        # 운용자의 리셋이 진행 중인 것처럼 행을 잡는다
+        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user["id"],))
+        t = threading.Thread(target=lambda: result.setdefault("r", api("POST", "/api/me/password", {"current": PW, "new": "mine-new-password-5"}, cookie=user["cookie"])))
+        t.start()
+        t.join(1.5)
+        assert t.is_alive()                                             # 검증은 끝났고 저장에서 기다린다
+        conn.execute("UPDATE dashkit_auth.users SET password_hash = %s WHERE id = %s", (passwords.hash_password("operator-set-pass-6"), user["id"]))
+        conn.commit()
+    t.join(10)
+    code, body = result["r"]
+    assert (code, body["detail"]) == (401, "invalid_credentials")
+    assert login(user["email"], "operator-set-pass-6")                  # 운용자가 정한 비밀번호가 남는다
+    # 세션이 그 사이 끊겼어도(모든 기기 로그아웃 등) 바꾸지 않는다
+    cookie = login(user["email"], "operator-set-pass-6")
+    with db.auth_conn() as conn:
+        conn.execute("SELECT 1 FROM dashkit_auth.users WHERE id = %s FOR UPDATE", (user["id"],))
+        t = threading.Thread(target=lambda: result.__setitem__("r", api("POST", "/api/me/password", {"current": "operator-set-pass-6", "new": "mine-new-password-5"}, cookie=cookie)))
+        t.start()
+        t.join(1.5)
+        conn.execute("DELETE FROM dashkit_auth.sessions WHERE user_id = %s", (user["id"],))
+        conn.commit()
+    t.join(10)
+    assert result["r"][0] == 401 and result["r"][1]["detail"] == "unauthenticated"
+    assert login(user["email"], "operator-set-pass-6")
+
+
 def test_reset_mail_unlock_logout_all(accounts):
     user = accounts("user")
     assert api("POST", f"/api/admin/users/{user['id']}/reset-password", {"method": "mail"})[0] == 204
