@@ -14,12 +14,12 @@ Superset 버전은 `.env.example`의 `SUPERSET_VERSION` **한 곳**에 있다. `
    make test KEEP=1
    ```
 
-   이미지가 새 버전으로 빌드되고(`dashkit-superset:<새 버전>`), 테스트 스택(웹앱 18080, Superset 18088)이 남는다. 이 단계에서 실패하는 통합 테스트가 첫 번째 단서다.
+   이미지가 새 버전으로 빌드되고(`dashkit-superset:<새 버전>`), 테스트 스택(주소는 `make info`의 "테스트 스택" 줄)이 남는다. 이 단계에서 실패하는 통합 테스트가 첫 번째 단서다.
 
 3. **export를 다시 받는다.** 테스트 스택의 Superset에서 sync가 만든 대시보드를 export해 `contracts/superset-<새 버전>-export/`에 풀어 둔다.
 
    ```bash
-   # http://localhost:18088 에 관리자로 로그인 → Dashboards → 전체 선택 → Export
+   # 테스트 스택의 Superset(포트는 make info)에 관리자로 로그인 → Dashboards → 전체 선택 → Export
    mkdir -p contracts/superset-<새 버전>-export
    unzip dashboard_export_*.zip -d /tmp/export && cp -r /tmp/export/*/. contracts/superset-<새 버전>-export/
    ```
@@ -47,7 +47,7 @@ Superset 버전은 `.env.example`의 `SUPERSET_VERSION` **한 곳**에 있다. `
    make test          # 3단계가 갤러리를 적용하고 차트마다 데이터 조회를 확인한다
    ```
 
-   화면은 `make test KEEP=1` 뒤 http://localhost:18080 에서 탭마다 확인한다. 차트 자리에 오류가 보이는 유형은 그 유형 파일(`dashkit/charts/<viz>.yaml`)의 파라미터 이름을 새 버전에 맞춘다. 맞출 수 없으면 축약에서 내리고 카탈로그에 원본 방식 조각으로 남긴다(보강설계서 7절 D4).
+   화면은 `make test KEEP=1` 뒤 테스트 스택의 웹앱(포트는 `make info`)에서 탭마다 확인한다. 차트 자리에 오류가 보이는 유형은 그 유형 파일(`dashkit/charts/<viz>.yaml`)의 파라미터 이름을 새 버전에 맞춘다. 맞출 수 없으면 축약에서 내리고 카탈로그에 원본 방식 조각으로 남긴다(보강설계서 7절 D4).
 
 6. **기록.** `contracts/superset-notes.md`에 새 버전에서 달라진 점(키 이름, 기본값, 권한, 임베드 SDK 호환)을 적는다. README 맨 아래의 버전 줄과 `web/vendor/`의 SDK 버전도 함께 본다.
 

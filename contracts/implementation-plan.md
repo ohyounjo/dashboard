@@ -88,7 +88,7 @@ pytest==9.2.0
 | `new NAME= FROM=` | CSV 폴더에서 프로젝트 초안 생성(`contracts/scaffold.md`). 스택 불필요 |
 | `migrate` | 설정 파일을 최신 설정 버전으로(`CHECK=1`이면 확인만) |
 | `test-unit` | 스택 없이 `pytest -m "not integration" tests/`(tools 이미지를 `docker run`으로 직접 실행) |
-| `test` | 별도 compose 프로젝트 `dashkit-test`(웹앱 18080, Superset 18088, 별도 볼륨, 상태 `.test/`)를 띄워 `pytest tests/` → 프로젝트 전환 검사 → 스택 삭제(`KEEP=1`이면 남김). 개발 스택의 `.state/`가 바뀌면 실패 |
+| `test` | 별도 compose 프로젝트 `dashkit-test-<작업 폴더 식별자>`(폴더별 포트, 별도 볼륨, 상태 `.test/`. `make info`로 확인)를 띄워 `pytest tests/` → 프로젝트 전환 검사 → 스택 삭제(`KEEP=1`이면 남김). 개발 스택의 `.state/`가 바뀌면 실패 |
 | `golden` | 번들 스냅샷 `tests/golden/` 갱신 |
 | `reset` | `down -v` 후 `.state/`, `.build/` 삭제(확인 문구 출력) |
 | `down`, `logs` | 그대로 |

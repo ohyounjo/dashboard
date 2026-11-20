@@ -12,14 +12,27 @@ HOST_GID := $(shell id -g)
 TOOLS    := $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) tools
 
 .NOTPARALLEL:
-.PHONY: help env env-secrets auth-init admin outbox up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down unit-image golden gen reset down logs dirs _test _test_run
+.PHONY: help info env env-secrets auth-init admin outbox up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down test-logs unit-image golden gen reset down logs dirs _test _test_run _guard_project
+
+# ---- 작업 폴더 식별자
+# 같은 컴퓨터에서 이 저장소의 복제본이나 git worktree 여러 개가 동시에 빌드·테스트할 수 있다. 브랜치는 소스 파일만
+# 나눠 주고 Docker 이미지 태그, compose 프로젝트 이름, 포트는 컴퓨터 전체가 함께 쓰므로, 폴더마다 달라지게 한다.
+# WT_ID는 이 폴더 경로의 체크섬에서 나온 숫자 5자리다(같은 폴더는 늘 같은 값). `make info`로 볼 수 있다.
+WT_SUM := $(firstword $(shell printf '%s' "$(CURDIR)" | cksum))
+WT_ID  ?= $(shell expr $(WT_SUM) % 90000 + 10000)
+# 이미지 태그의 접미사. compose 파일이 ${IMAGE_SUFFIX:-}로 읽는다(make 없이 compose를 직접 부르면 접미사 없는 이름)
+IMAGE_SUFFIX ?= -$(WT_ID)
+export IMAGE_SUFFIX
 
 # ---- 테스트 스택(보강설계서 3-2, 7절 D5): 개발 스택과 이름·포트·볼륨·상태 디렉터리가 모두 다르다.
 # 상태·빌드 디렉터리는 .test/ 고정이다(아래 정리 단계가 이 경로를 그대로 쓴다).
-TEST_NAME          := dashkit-test
-TEST_WEB_PORT      ?= 18080
-TEST_SUPERSET_PORT ?= 18088
-TEST_STUDIO_PORT    ?= 18090
+# 이름과 포트는 작업 폴더마다 다르다. 포트는 20000~39999 가운데 폴더별로 정해지는 10개짜리 구간을 쓴다
+# (다른 프로그램과 겹치면 TEST_PORT_BASE=<다른 값> make test).
+TEST_NAME          := dashkit-test-$(WT_ID)
+TEST_PORT_BASE     ?= $(shell expr $(WT_SUM) % 2000 \* 10 + 20000)
+TEST_WEB_PORT      ?= $(TEST_PORT_BASE)
+TEST_SUPERSET_PORT ?= $(shell expr $(TEST_PORT_BASE) + 8)
+TEST_STUDIO_PORT   ?= $(shell expr $(TEST_PORT_BASE) + 9)
 TEST_ENV := COMPOSE_PROJECT_NAME=$(TEST_NAME) \
   WEB_PORT=$(TEST_WEB_PORT) SUPERSET_PORT=$(TEST_SUPERSET_PORT) \
   WEB_ORIGINS=http://localhost:$(TEST_WEB_PORT),http://127.0.0.1:$(TEST_WEB_PORT) \
@@ -27,8 +40,8 @@ TEST_ENV := COMPOSE_PROJECT_NAME=$(TEST_NAME) \
   STATE_DIR=/app/.test/state BUILD_DIR=/app/.test/build HOST_STATE_DIR=./.test/state HOST_BUILD_DIR=./.test/build \
   STUDIO_PORT=$(TEST_STUDIO_PORT) WEB_PUBLIC_URL=http://localhost:$(TEST_WEB_PORT)
 # 단위 테스트는 compose 없이 tools 이미지만으로 돈다(.env도 필요 없다)
-APP_IMAGE := dashkit-app:local
-STUDIO_IMAGE := dashkit-studio:local
+APP_IMAGE := dashkit-app:local$(IMAGE_SUFFIX)
+STUDIO_IMAGE := dashkit-studio:local$(IMAGE_SUFFIX)
 # 웹앱 JS의 순수 함수 테스트(tests/js/, node --test). 호스트에 node가 없어도 된다
 NODE_IMAGE := node:22.21.1-alpine3.22
 # Studio가 projects/에 쓰는 파일이 호스트 사용자 소유가 되게 한다(compose의 studio.user)
@@ -37,7 +50,24 @@ export HOST_UID HOST_GID
 STUDIO_PORT ?= $(or $(shell sed -n 's/^STUDIO_PORT=//p' .env 2>/dev/null | tail -1),$(shell sed -n 's/^STUDIO_PORT=//p' .env.example | tail -1),8090)
 UNIT_RUN  := docker run --rm --user $(HOST_UID):$(HOST_GID) -v "$(CURDIR)":/app -w /app $(APP_IMAGE)
 
+# 개발 스택의 compose 프로젝트 이름은 폴더 이름에서 온다(바꾸면 지금 쓰는 스택·볼륨과 끊어지므로 그대로 둔다)
+DEV_NAME := $(or $(COMPOSE_PROJECT_NAME),$(shell basename "$(CURDIR)" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9_-'))
+
+# 폴더 이름이 같은 다른 복제본·worktree가 이미 같은 compose 프로젝트 이름으로 스택을 띄웠으면, 그 스택에 닿는 목표를
+# 모두 멈춘다(그대로 두면 그쪽 컨테이너를 이 폴더의 코드와 마운트로 다시 만들거나, 그쪽 DB에 적재하거나, 내려 버린다).
+# 각 목표의 실행부는 이 확인이 통과한 뒤에만 돈다(.env를 보충하는 env-secrets도 포함. 그 전에 도는 것은 폴더 만들기뿐이다).
+GUARDED := env-secrets up down reset logs check load sync apply plan migrate studio studio-down auth-init admin outbox
+$(GUARDED): _guard_project
+
+info:
+	@echo "작업 폴더     $(CURDIR)"
+	@echo "식별자        $(WT_ID)"
+	@echo "이미지        $(APP_IMAGE)  $(STUDIO_IMAGE)  dashkit-superset:<버전>$(IMAGE_SUFFIX)"
+	@echo "테스트 스택   $(TEST_NAME)  웹앱 :$(TEST_WEB_PORT)  Superset :$(TEST_SUPERSET_PORT)  Studio :$(TEST_STUDIO_PORT)"
+	@echo "개발 스택     $(DEV_NAME)"
+
 help:
+	@echo "make info    이 작업 폴더의 이미지 태그, 테스트 스택 이름·포트"
 	@echo "make env     .env 생성(없을 때만, 비밀값 자동 생성)"
 	@echo "make auth-init   인증 DB(dashkit_auth 스키마, dash_auth 계정) 만들기·올리기(여러 번 실행해도 됨)"
 	@echo "make admin EMAIL=<주소>   첫 admin 계정 만들기(비밀번호는 프롬프트)"
@@ -116,6 +146,16 @@ define wait_healthy
 	  done; \
 	done
 endef
+
+# GUARDED 목표들이 맨 먼저 거치는 확인(위 "GUARDED" 참고)
+_guard_project:
+	@owner=$$(docker compose ls -a --format json 2>/dev/null | tr '{' '\n' | grep '"Name":"$(DEV_NAME)"' | sed 's/.*"ConfigFiles":"//; s/".*//'); \
+	case "$$owner" in \
+	  ""|"$(CURDIR)"/*) ;; \
+	  *) echo "✖ compose 프로젝트 '$(DEV_NAME)'은 다른 폴더의 스택입니다: $$owner"; \
+	     echo "  이 폴더에서 따로 띄우려면 이름과 포트를 주세요: COMPOSE_PROJECT_NAME=<이름> WEB_PORT=<포트> SUPERSET_PORT=<포트> make up"; \
+	     exit 1;; \
+	esac
 
 up: dirs env-secrets
 	$(COMPOSE) up -d --build
@@ -221,7 +261,7 @@ endif
 gen: unit-image
 	$(UNIT_RUN) python -m dashkit gen
 
-# 통합 테스트는 별도 compose 프로젝트(dashkit-test)에서 돈다. 개발 스택과 .state/, .build/는 건드리지 않는다.
+# 통합 테스트는 별도 compose 프로젝트(dashkit-test-<작업 폴더 식별자>)에서 돈다. 개발 스택과 .state/, .build/는 건드리지 않는다.
 # 1) devtracker로 up·apply → 전체 pytest(Studio 테스트는 ruamel.yaml이 있는 studio 이미지에서 따로 돈다: make test-unit)
 #    이어서 Studio를 띄워 tests/test_studio_integration.py(끝나면 원래 프로젝트를 다시 적용한다)
 # 2) sales-sample로 apply → 전환 검사(tests/test_switch.py)와 스냅샷 열 정보 대조
@@ -238,14 +278,23 @@ test:
 
 _test:
 	@[ "$$COMPOSE_PROJECT_NAME" = "$(TEST_NAME)" ] || { echo "✖ _test는 make test가 부른다"; exit 1; }
+	@echo "• 테스트 스택 $(TEST_NAME): 웹앱 :$(TEST_WEB_PORT), Superset :$(TEST_SUPERSET_PORT), Studio :$(TEST_STUDIO_PORT), 이미지 태그 접미사 $(IMAGE_SUFFIX)"
+	@for p in $(TEST_WEB_PORT) $(TEST_SUPERSET_PORT) $(TEST_STUDIO_PORT); do \
+	  owner=$$(docker ps --format '{{.Names}} {{.Ports}}' | grep ":$$p->" | grep -v "^$(TEST_NAME)-" | cut -d' ' -f1 | head -1); \
+	  [ -z "$$owner" ] || { echo "✖ 포트 $$p를 다른 컨테이너($$owner)가 쓰고 있습니다. 다른 구간으로: TEST_PORT_BASE=<값> make test"; exit 1; }; \
+	done
 	@mkdir -p .test/state .test/build
 	@rc=0; $(MAKE) --no-print-directory _test_run || rc=1; \
 	if [ "$(KEEP)" = 1 ]; then \
-	  echo "• KEEP=1: 테스트 스택을 남김(웹앱 :$(TEST_WEB_PORT), Superset :$(TEST_SUPERSET_PORT)). 내리기: make test-down"; \
+	  echo "• KEEP=1: 테스트 스택 $(TEST_NAME)을 남김(웹앱 :$(TEST_WEB_PORT), Superset :$(TEST_SUPERSET_PORT), Studio :$(TEST_STUDIO_PORT)). 내리기: make test-down"; \
 	else \
 	  $(MAKE) --no-print-directory test-down; \
 	fi; \
 	exit $$rc
+
+# 테스트 스택의 로그(실패했을 때 CI가 쓴다)
+test-logs:
+	$(COMPOSE) --profile studio --profile tools -p $(TEST_NAME) logs --tail=200
 
 # 테스트 스택과 그 볼륨만 지운다(프로젝트 이름을 직접 지정하므로 개발 스택에는 닿지 않는다)
 # studio·tools는 프로필에 속해 있어서 프로필을 함께 줘야 그 컨테이너까지 지워진다. 남으면 다음 실행이 지워진

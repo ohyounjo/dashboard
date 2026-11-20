@@ -339,13 +339,38 @@ make test        # 전체 스택이 필요한 통합 테스트
 
 **`make test`** 는 개발 스택과 분리된 테스트 스택에서 돕니다. 쓰던 화면(8080, 8088)과 `.state/`, `.build/`는 바뀌지 않습니다.
 
-- 테스트 스택: compose 프로젝트 `dashkit-test`, 웹앱 18080, Superset 18088, 별도 볼륨, 상태·번들은 `.test/`. 이미지는 개발 스택과 같이 씁니다.
+- 테스트 스택: compose 프로젝트 `dashkit-test-<식별자>`, 별도 포트·볼륨, 상태·번들은 `.test/`. 이름과 포트는 작업 폴더마다 다릅니다(`make info`로 확인, `make test`도 시작할 때 출력). 이미지는 같은 폴더의 개발 스택과 같이 씁니다.
 - 순서:
   1. devtracker로 `up`, `apply`한 뒤 `tests/` 전체를 실행합니다. 단위 테스트에 더해 로더(임시 DB), sync(임시 프로젝트 이름), 지표 정합성(Superset 차트 데이터 API), 백엔드와 guest token 권한 경계, plan(`tests/test_plan.py`: 적용 직후 "변경 없음", 고친 사본의 숫자, plan 전후로 DB·Superset·상태 파일이 그대로인지)을 봅니다.
   2. sales-sample로 `apply`한 뒤 전환을 검사합니다(`tests/test_switch.py`). 탭·차트·위젯 데이터가 바뀌고 이전 Superset 객체가 남지 않는지 봅니다.
   3. chart-gallery로 `apply`한 뒤 차트 유형마다 데이터 조회가 되는지 봅니다(`tests/test_gallery.py`).
   4. 성공하든 실패하든 테스트 스택과 그 볼륨, `.test/`를 지웁니다. `make test KEEP=1`이면 남기고, `make test-down`으로 내립니다.
 - Superset을 하나 더 띄우므로 메모리가 2GB쯤 더 필요합니다. 부족하면 `make down`으로 개발 스택을 내린 뒤 실행하세요.
+
+### 여러 작업 폴더에서 동시에
+
+같은 컴퓨터에서 이 저장소의 복제본이나 git worktree 여러 개로 동시에 작업할 수 있습니다(예: 브랜치마다 폴더 하나). git 브랜치는 소스 파일만 나눠 주고, Docker 이미지 태그·compose 프로젝트 이름·포트는 컴퓨터 전체가 함께 쓰는 자원이라 따로 나눠야 합니다. Makefile이 **작업 폴더 경로에서 만든 식별자**로 이를 나눕니다.
+
+```bash
+make info
+```
+
+| 자원 | 폴더마다 | 값 |
+|---|---|---|
+| 직접 빌드하는 이미지 | 다름 | `dashkit-app:local-<식별자>`, `dashkit-studio:local-<식별자>`, `dashkit-superset:<버전>-<식별자>` |
+| 테스트 스택(`make test`) | 다름 | 이름 `dashkit-test-<식별자>`, 포트는 20000~39999에서 폴더별로 정해지는 구간(웹앱 +0, Superset +8, Studio +9) |
+| 개발 스택(`make up`) | **폴더 이름이 같으면 같음** | compose 프로젝트 이름 = 폴더 이름, 포트 8080·8088(`.env`) |
+
+- 그래서 `make test`와 `make test-unit`은 폴더끼리 순서를 맞추지 않아도 됩니다. 다른 프로그램이 같은 포트를 쓰고 있으면 `make test`가 시작할 때 알려 주고 멈춥니다(`TEST_PORT_BASE=<값> make test`로 구간을 바꿉니다).
+- 개발 스택의 이름은 일부러 바꾸지 않았습니다. 이름을 바꾸면 지금 쓰는 스택과 데이터 볼륨이 새 이름과 끊어지기 때문입니다. 대신 **폴더 이름이 같은 다른 폴더가 이미 스택을 띄웠으면** `make up`·`apply`·`down`·`reset`·`studio` 등 그 스택에 닿는 명령이 실행 전에 멈춥니다. 두 번째 폴더에서도 개발 스택을 띄우려면 이름과 포트를 따로 줍니다.
+
+  ```bash
+  COMPOSE_PROJECT_NAME=dashboard-b WEB_PORT=8180 SUPERSET_PORT=8188 make up
+  ```
+
+  (`.env`의 `WEB_ORIGINS`, `SUPERSET_PUBLIC_URL`도 그 포트에 맞춰야 임베드가 됩니다.)
+- `make` 없이 `docker compose`를 직접 부르면 접미사 없는 이미지 이름(`dashkit-app:local`)을 씁니다.
+- 폴더를 지운 뒤 남은 이미지는 `docker image ls 'dashkit-*'`로 보고 지웁니다.
 
 CI: PR마다 `make test-unit`을 돌리고(`.github/workflows/tests.yml`), 코드·설정·계약이 바뀐 PR은 화면 캡처 워크플로가 `make test`도 돌립니다.
 
