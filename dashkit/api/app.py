@@ -105,6 +105,7 @@ app.add_middleware(Guard)
 app.include_router(auth_router)
 app.include_router(admin_routes.router)
 app.include_router(me_router)
+app.include_router(admin_routes.views_router)
 admin_routes.set_project_provider(lambda: ctx.current().project)
 
 

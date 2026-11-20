@@ -204,6 +204,21 @@
 | `GET /api/me` | → `{email, role, created_at, last_login_at, groups: [{id, name}], must_change_password}`. 비밀번호 변경이 필요한 계정도 읽는다(`require_session`) |
 | `POST /api/me/password` | `{current, new}` → 204. 현재 비밀번호가 틀리면 401 `invalid_credentials`, 정책 위반 422 `weak_password`(현재와 같으면 `reason: "same_as_current"`). 바꾸면 `must_change_password`를 끄고 **지금 세션만 남기고** 나머지 세션을 지운다. 저장은 사용자 행을 잠근 한 트랜잭션에서 검증에 쓴 해시와 이 세션이 그대로일 때만 한다(`store.change_own_password`). 그 사이 운용자의 임시 비밀번호·재설정으로 비밀번호가 바뀌었으면 401 `invalid_credentials`, 세션이 끊겼으면 401 `unauthenticated`이고 아무것도 바꾸지 않는다. 비밀번호 변경이 필요한 계정도 부를 수 있다 |
 
+### 접속 통계와 감사 로그
+
+| 메서드·경로 | 본문 → 결과 |
+|---|---|
+| `GET /stats/tabs?days=` | `days`는 7·30(기본)·90(아니면 422). → `{project, days, items, total}`. 항목은 현재 프로젝트의 탭마다 `{key, label, order, views, viewers, last_viewed_at, never}`(`never`: 그 기간에 한 번도 열리지 않음). 정렬 `order`(설정 순서, 기본)·`key`·`views`·`viewers`·`last_viewed_at` |
+| `GET /stats/users?days=` | → `{project, days, items, total}`. 계정마다 `{id, email, role, status, views, last_viewed_at, last_login_at, inactive}`(`views`: 그 기간 현재 프로젝트의 조회 수, `inactive`: 최근 접속이 30일보다 오래됐거나 없음). 정렬 `-views`(기본)·`email`·`last_viewed_at`·`last_login_at`·`inactive` |
+| `GET /audit?action=&from=&to=` | → `{items, total, actions}`. 최근 순. `action`은 동작 코드(`auth.login`) 또는 점으로 끝나는 묶음(`user.`). `from`·`to`는 `YYYY-MM-DD`(서버 `TZ` 기준, `to` 포함). 항목 `{id, at, actor_id, actor_email, action, target_type, target_id, target_label, detail, ip}`. `actions`는 기록에 있는 동작 코드 목록. 정렬은 없다. 수정·삭제 API는 없다 |
+
+## 접속 통계
+
+- 사용자별: `login_count`, `last_login_at`(로그인 성공 때 갱신). 사용자 표에 나온다.
+- 대시보드(탭)별: 웹앱이 탭을 열 때 `POST /api/views {"tab": "<키>"}`를 보낸다(로그인 필요, `require_user`). 볼 수 있는 탭이 아니면 403 `forbidden`. 서버는 `view_events`에 한 줄 남기되 **같은 사용자·같은 탭은 30분에 한 번만** 센다(사용자·프로젝트·탭마다 트랜잭션 잠금으로 동시 요청도 한 번). 응답은 항상 204(세지 않았을 때도).
+- 계정을 지우면 그 행은 사용자 연결만 끊기고(`user_id = NULL`) 탭별 조회 수에는 남는다.
+- 통계 화면: 기간(7·30·90일)을 골라 탭별 조회 수·본 사람 수·마지막 조회일, 사용자별 조회 수를 본다. 한 번도 열리지 않은 탭과 30일 넘게 접속이 없는 사용자를 따로 표시한다.
+
 ## 감사 로그
 
 `audit_log` 표에 남긴다(`store.record_audit`). 항목은 시각, 한 사람(id와 이메일 사본), 동작 코드, 대상(종류, id, 이름 사본), 변경 내용(`detail`, JSON), IP다. 이메일·이름을 사본으로 남겨 계정이나 그룹이 지워진 뒤에도 읽을 수 있다. `detail`에 비밀번호·토큰·해시를 넣지 않는다(키 이름에 `password`·`token`·`hash`·`secret`이 들어간 항목은 저장 전에 버린다).
@@ -306,7 +321,7 @@ class Mailer(Protocol):
 
 ## 보존 기간
 
-로그인·가입 요청을 처리하는 중에 하루 한 번(`dashkit/auth/maintenance.py`) 지운다: 인증 없이 7일 지난 `pending` 계정, 7일 지난 outbox 행, 만료된 일회용 토큰, 만료된 세션.
+로그인·가입 요청을 처리하는 중에 하루 한 번(`dashkit/auth/maintenance.py`) 지운다: 인증 없이 7일 지난 `pending` 계정, 7일 지난 outbox 행, 만료된 일회용 토큰, 만료된 세션, **180일 지난 `view_events`**, **1년(365일) 지난 `audit_log`**. 사내 규정에 맞는지는 회사에서 확인한다(설계서 14절 4번).
 
 ## DB 계정
 
@@ -390,5 +405,6 @@ class Mailer(Protocol):
 | `web/index.html`(웹앱 셸) | `/api/app`이 401이면 `/login.html?next=<지금 주소>`로 보낸다. 섹션의 guest token·데이터 요청이 401이면 `?reason=expired`를 붙여 보낸다. 레일 아래(테마 버튼 위)에 사용자 메뉴: 이메일, 등급, 로그아웃 |
 | `web/common.js` | 셸과 로그인 화면이 함께 쓰는 도우미(요소 생성, `next` 검사, JSON POST) |
 | `web/account.html` + `web/account.js` | 내 정보: 이메일, 등급, 가입일, 최근 접속일, 속한 그룹, 비밀번호 바꾸기(현재 비밀번호 확인). 로그인 응답의 `must_change_password`가 `true`이거나 웹앱·운용 화면이 403 `password_change_required`를 받으면 여기로 온다. 그동안은 "임시 비밀번호로 로그인했습니다" 안내만 있고 대시보드로 가는 링크는 숨긴다 |
+| `web/index.html` 탭 열기 | 탭을 처음 열거나 다시 열 때마다 `POST /api/views {tab}`를 보낸다(실패는 무시) |
 | `web/index.html` 사용자 메뉴 | 모두에게 "내 정보"(`/account.html`), 운용자에게만 "운용"(`/admin/`) 링크. user 계정의 탭이 하나도 없으면 "접근할 수 있는 대시보드가 없습니다. 운용자에게 요청하세요." |
-| `web/admin/`(`index.html`, `admin.js`, `admin.css`) | 운용 화면. 주소의 `#` 뒤로 메뉴를 고른다. 시작할 때 `/api/app`의 `user.role`이 운용자가 아니면(또는 API가 403 `forbidden`이면) 웹앱(`/`)으로 돌려보내고, 401이면 로그인 화면으로 보낸다. 테스트 모드면 위에 메일 테스트 모드 띠. 메뉴(기본은 사용자): **사용자**(`#users`: 표(이메일, 등급, 상태와 잠금 표시, 그룹, 가입일, 접속 횟수, 최근 접속일, 가입 경로), 열 제목으로 정렬, 50명씩, 체크박스로 여러 명을 골라 그룹에 넣기·빼기, "사용자 추가"(이메일·등급·그룹, operator에게는 user 외 등급이 꺼져 있음)·"일괄 초대"(붙여 넣기, 주소마다 결과) / `#user/<id>`: 상세 항목, 그룹 편집, 등급 변경(admin만), 재설정 메일, 임시 비밀번호(한 번만 표시, 복사), 초대 재발송, 잠금 해제, 모든 기기 로그아웃, 정지·해제, 삭제(이메일을 다시 입력해야 한다). 그룹 선택 목록은 그룹을 마지막 페이지까지 모두 읽은 뒤 그리고, 다 읽지 못하면 상세 화면을 그리지 않는다(일부 목록으로 사용자의 그룹을 통째로 저장해 소속을 지우지 않게)), **테스트 메일함**(`#outbox`, 테스트 모드에서만: 받는 사람·등급, 종류, 시각, 링크 열기, 다시 불러오기), **그룹**(`#groups`: 목록, 정렬, 50개씩, 그룹 만들기 / `#group/<id>`: 이름·설명·기본 그룹, 현재 프로젝트의 탭 체크 목록, 다른 프로젝트·없는 탭 묶음과 항목별 빼기(그 항목만), 구성원 목록과 빼기, 이메일로 추가(쉼표·줄바꿈 구분, 찾지 못한 주소 안내), 삭제 확인) |
+| `web/admin/`(`index.html`, `admin.js`, `admin.css`) | 운용 화면. 주소의 `#` 뒤로 메뉴를 고른다. 시작할 때 `/api/app`의 `user.role`이 운용자가 아니면(또는 API가 403 `forbidden`이면) 웹앱(`/`)으로 돌려보내고, 401이면 로그인 화면으로 보낸다. 테스트 모드면 위에 메일 테스트 모드 띠. 메뉴(기본은 사용자). **통계**(`#stats`: 기간 선택, 탭별·사용자별 표, "열리지 않음"·"30일 넘게 접속 없음" 표시), **감사 로그**(`#audit`: 동작(묶음 포함)·기간 선택, 최근 순 50개씩), 그리고 **사용자**(`#users`: 표(이메일, 등급, 상태와 잠금 표시, 그룹, 가입일, 접속 횟수, 최근 접속일, 가입 경로), 열 제목으로 정렬, 50명씩, 체크박스로 여러 명을 골라 그룹에 넣기·빼기, "사용자 추가"(이메일·등급·그룹, operator에게는 user 외 등급이 꺼져 있음)·"일괄 초대"(붙여 넣기, 주소마다 결과) / `#user/<id>`: 상세 항목, 그룹 편집, 등급 변경(admin만), 재설정 메일, 임시 비밀번호(한 번만 표시, 복사), 초대 재발송, 잠금 해제, 모든 기기 로그아웃, 정지·해제, 삭제(이메일을 다시 입력해야 한다). 그룹 선택 목록은 그룹을 마지막 페이지까지 모두 읽은 뒤 그리고, 다 읽지 못하면 상세 화면을 그리지 않는다(일부 목록으로 사용자의 그룹을 통째로 저장해 소속을 지우지 않게)), **테스트 메일함**(`#outbox`, 테스트 모드에서만: 받는 사람·등급, 종류, 시각, 링크 열기, 다시 불러오기), **그룹**(`#groups`: 목록, 정렬, 50개씩, 그룹 만들기 / `#group/<id>`: 이름·설명·기본 그룹, 현재 프로젝트의 탭 체크 목록, 다른 프로젝트·없는 탭 묶음과 항목별 빼기(그 항목만), 구성원 목록과 빼기, 이메일로 추가(쉼표·줄바꿈 구분, 찾지 못한 주소 안내), 삭제 확인) |

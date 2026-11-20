@@ -76,13 +76,14 @@ def test_ghost_locks_match_account_locks():
 def test_maintenance_runs_once_a_day(monkeypatch):
     calls = []
     monkeypatch.setattr(maintenance.store, "cleanup", lambda *a: calls.append(a) or {"outbox": 0})
+    monkeypatch.setattr(maintenance.store, "cleanup_history", lambda *a: calls.append(a) or {"audit_log": 0})
     maintenance.reset()
     clock = Clock()
     assert maintenance.maybe_run(clock) is True
     assert maintenance.maybe_run(clock) is False
     clock.t += 24 * 3600
     assert maintenance.maybe_run(clock) is True
-    assert calls == [(7, 7), (7, 7)]
+    assert calls == [(7, 7), (180, 365), (7, 7), (180, 365)]
     maintenance.reset()
 
 

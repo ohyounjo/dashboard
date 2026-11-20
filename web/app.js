@@ -501,6 +501,8 @@ function renderApp(cfg) {
     const cur = entries[idx];
     try { cur.link.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch (e) { /* 무시 */ }
     document.title = `${cur.tab.label} · ${app.title || ""}`;
+    // 접속 통계: 탭을 열 때 한 번 알린다(서버가 30분에 한 번만 센다). 실패해도 화면에는 영향이 없다
+    postJson("/api/views", { tab: cur.tab.key }).catch(() => {});
     if (!cur.rendered) {
       cur.rendered = true;
       (cur.tab.sections || []).forEach((sec) => renderSection(cur.view, sec, cur.ctx));

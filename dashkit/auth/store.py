@@ -959,3 +959,93 @@ def create_invited_user(email: str, role: str, created_by: str, group_ids: list[
         conn.execute("""INSERT INTO dashkit_auth.tokens (user_id, purpose, token_hash, expires_at)
                         VALUES (%s, 'invite', %s, %s)""", (row["id"], token_hash, expires_at))
     return User.from_row(row)
+
+
+# ---------------------------------------------------------------- 접속 통계
+
+VIEW_DEDUPE_MINUTES = 30
+
+
+def record_view(user_id: str, project: str, tab_key: str) -> bool:
+    """같은 사용자·같은 탭은 30분에 한 번만 센다. 새로 셌으면 True.
+    (사용자, 프로젝트, 탭)마다 트랜잭션 잠금(pg_advisory_xact_lock)으로 동시 요청을 줄 세워 두 번 세지 않는다."""
+    with connection() as conn, conn.transaction():
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"view:{user_id}:{project}:{tab_key}",))
+        recent = conn.execute(
+            """SELECT 1 FROM dashkit_auth.view_events
+                WHERE user_id = %s AND project = %s AND tab_key = %s
+                  AND viewed_at > now() - make_interval(mins => %s) LIMIT 1""",
+            (user_id, project, tab_key, VIEW_DEDUPE_MINUTES),
+        ).fetchone()
+        if recent:
+            return False
+        conn.execute("INSERT INTO dashkit_auth.view_events (user_id, project, tab_key) VALUES (%s, %s, %s)",
+                     (user_id, project, tab_key))
+    return True
+
+
+def tab_stats(project: str, days: int) -> dict[str, dict[str, Any]]:
+    """탭 키 → {views, viewers, last_viewed_at}(최근 days일, 그 프로젝트)."""
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT tab_key, count(*) AS views, count(DISTINCT user_id) AS viewers, max(viewed_at) AS last_viewed_at
+                 FROM dashkit_auth.view_events
+                WHERE project = %s AND viewed_at > now() - make_interval(days => %s)
+                GROUP BY tab_key""",
+            (project, days),
+        ).fetchall()
+    return {r["tab_key"]: {"views": r["views"], "viewers": r["viewers"], "last_viewed_at": r["last_viewed_at"]} for r in rows}
+
+
+def user_stats(project: str, days: int) -> list[dict[str, Any]]:
+    """계정마다 {id, email, role, status, views(최근 days일, 그 프로젝트), last_viewed_at, last_login_at}."""
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT u.id, u.email, u.role, u.status, u.last_login_at,
+                      count(v.id) AS views, max(v.viewed_at) AS last_viewed_at
+                 FROM dashkit_auth.users u
+                 LEFT JOIN dashkit_auth.view_events v
+                        ON v.user_id = u.id AND v.project = %s AND v.viewed_at > now() - make_interval(days => %s)
+                GROUP BY u.id ORDER BY u.email""",
+            (project, days),
+        ).fetchall()
+    return [{**r, "id": str(r["id"])} for r in rows]
+
+
+# ---------------------------------------------------------------- 감사 로그 읽기
+
+def audit_list(action: str | None, start: datetime | None, end: datetime | None,
+               limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+    """최근 순. action은 같은 코드, 또는 '<접두사>.'로 끝나면 그 묶음(user. 등). 기간은 [start, end)."""
+    prefix = action[:-1] if action and action.endswith(".") else None
+    exact = None if prefix is not None else action
+    where = """WHERE (%(exact)s::text IS NULL OR action = %(exact)s::text)
+                 AND (%(prefix)s::text IS NULL OR starts_with(action, %(prefix)s::text || '.'))
+                 AND (%(start)s::timestamptz IS NULL OR at >= %(start)s::timestamptz)
+                 AND (%(end)s::timestamptz IS NULL OR at < %(end)s::timestamptz)"""
+    params = {"exact": exact, "prefix": prefix, "start": start, "end": end, "limit": limit, "offset": offset}
+    with connection() as conn:
+        total = conn.execute(f"SELECT count(*) AS n FROM dashkit_auth.audit_log {where}", params).fetchone()["n"]
+        rows = conn.execute(
+            f"""SELECT id, at, actor_id, actor_email, action, target_type, target_id, target_label, detail, host(ip) AS ip
+                  FROM dashkit_auth.audit_log {where}
+                 ORDER BY at DESC, id DESC LIMIT %(limit)s OFFSET %(offset)s""",
+            params,
+        ).fetchall()
+    return [{**r, "actor_id": str(r["actor_id"]) if r["actor_id"] else None} for r in rows], int(total)
+
+
+def audit_actions() -> list[str]:
+    with connection() as conn:
+        rows = conn.execute("SELECT DISTINCT action FROM dashkit_auth.audit_log ORDER BY action").fetchall()
+    return [r["action"] for r in rows]
+
+
+def cleanup_history(view_days: int, audit_days: int) -> dict[str, int]:
+    """보존 기간이 지난 접속 기록·감사 로그를 지운다."""
+    with connection() as conn:
+        views = conn.execute("DELETE FROM dashkit_auth.view_events WHERE viewed_at < now() - make_interval(days => %s)",
+                             (view_days,)).rowcount
+        audit = conn.execute("DELETE FROM dashkit_auth.audit_log WHERE at < now() - make_interval(days => %s)",
+                             (audit_days,)).rowcount
+    return {"view_events": views, "audit_log": audit}
