@@ -69,7 +69,9 @@ export function columnUpdateOp(table, before, form) {
   const norm = (v) => (v == null ? "" : String(v).trim());
   const desc = norm(form.description);
   if (desc !== norm(before.description)) set.description = desc || null;
-  if (before.type === "enum" && form.values !== undefined) {
+  const leavingEnum = before.type === "enum" && !!form.type && form.type !== "enum";
+  if (leavingEnum) set.values = null;          // enum이 아닌 열은 values를 가질 수 없다(schema.schema.json)
+  else if (before.type === "enum" && form.values !== undefined) {
     const values = splitValues(form.values);
     if (!values.length) problems.push({ field: "values", code: "values" });
     else if (values.join("\n") !== (before.values || []).map(String).join("\n")) set.values = values;

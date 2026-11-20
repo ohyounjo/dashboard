@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from ... import config
 from ...auth import store as auth_store
 from ...auth.routes import Principal, client_ip, require_admin, require_operator
-from ...ingest import IngestError, batches, lineage, newtable, structure
+from ...ingest import IngestError, lineage, newtable, structure
 from ...ingest.compact import compact
 from ...project import store, upload
 from .. import context
@@ -88,10 +88,6 @@ def _check_ops(project: config.Project, op_list: Any) -> list[dict[str, Any]]:
             if charts or sections:
                 raise IngestError(409, "in_use", "그래프가 쓰는 데이터셋은 지우지 않습니다",
                                   [f"차트 {c}" for c in charts] + [f"섹션 {s}" for s in sections])
-        if o["op"] == "table.update" and spec is not None and isinstance(o.get("set"), dict) \
-                and (spec.get("mode") or "replace") == "append" and "mode" in o["set"] \
-                and o["set"]["mode"] in (None, "replace") and batches.list_batches(project.data_dir, name)[0]:
-            raise IngestError(422, "invalid_op", "배치 파일이 있는 누적 테이블은 replace로 바꾸지 않습니다(배치를 읽지 않게 됩니다)")
     return op_list
 
 

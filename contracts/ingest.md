@@ -205,11 +205,11 @@ projects/<프로젝트>/data/
 
 ### 끊김 복구(종류 `config`)
 
-묶음 기록 `{"id", "kind": "config", "project", "data_revision": <새 설정의 지문>, "history": <이력 id>, "action", "files": [{"path", "before": <변경 전 내용 base64 | null>, "after": <새 내용의 SHA-256 | null>}]}`.
+묶음 기록 `{"id", "kind": "config", "project", "data_revision": <새 설정의 지문>, "loaded_at": <작업 전 적재 시각>, "history": <이력 id>, "action", "files": [{"path", "before": <변경 전 내용 base64 | null>, "after": <새 내용의 SHA-256 | null>}]}`.
 
 | 남은 기록의 상태 | 처리 |
 |---|---|
-| DB의 `data_revision`이 기록의 것과 같고 모든 파일이 새 판이다(load까지 끝났다) | 파일을 그대로 두고, 이력이 아직 없으면 기록의 사본으로 쓴 뒤 기록을 지운다(sync가 남았으면 apply를 다시 돌린다) |
+| DB의 적재 시각(`loaded_at`)이 기록의 작업 전 값과 다르고(이 작업의 load가 커밋됐다) `data_revision`이 기록의 것과 같으며 모든 파일이 새 판이다 | 파일을 그대로 두고, 이력이 아직 없으면 기록의 사본으로 쓴 뒤 기록을 지운다(sync가 남았으면 apply를 다시 돌린다) |
 | 그 밖(파일을 일부만 바꿨거나, 다 바꿨지만 load 전이다. DB에 다른 프로젝트가 적재돼 있어도) | 변경 전 사본으로 **모든 파일을 되돌리고** 새로 만든 파일은 지운 뒤 기록을 지운다 |
 
 - 이 복구는 관리 서비스가 시작할 때와 작업 전(공통 순서 2), 그리고 **설정을 읽기 전에**(`dashkit check`·load·apply, `recover_before_read`) 한다. `schema.yaml`만 새 판이고 CSV는 옛 판인 채로 검증하는 일이 없다. 기록이 없으면 DB에 닿지 않고, DB에 닿지 못하면 기록을 그대로 둔다.

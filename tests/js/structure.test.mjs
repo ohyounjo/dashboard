@@ -48,6 +48,9 @@ test("열 규칙 고치기: 바뀐 키만, 비우면 null, 유형은 넓히기�
   assert.deepEqual(columnUpdateOp("t", e, { values: "a, b, c" }).op.set, { values: ["a", "b", "c"] });
   assert.equal(columnUpdateOp("t", e, { values: "a,b" }).op, null);
   assert.deepEqual(codes(columnUpdateOp("t", e, { values: " , " })), ["values:values"]);
+  // enum → text: enum이 아닌 열은 values를 가질 수 없으니 함께 지운다(값 칸을 비워 둬도 막지 않는다)
+  assert.deepEqual(columnUpdateOp("t", e, { values: "a, b", type: "text" }).op.set, { values: null, type: "text" });
+  assert.deepEqual(columnUpdateOp("t", e, { values: "", type: "text" }).op.set, { values: null, type: "text" });
   assert.deepEqual(columnUpdateOp("t", { name: "p", type: "text", pattern: "^A" }, { pattern: "" }).op.set, { pattern: null });
   assert.deepEqual(columnUpdateOp("t", { name: "d", type: "date" }, { min: "2026/01/01" }).op.set, { min: "2026-01-01" });
 });

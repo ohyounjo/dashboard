@@ -133,6 +133,27 @@ def test_narrowed_rule_fails_load_and_puts_every_file_back(root, scratch_db):
     assert structure.list_history("ledger") == []           # 되돌려진 변경은 이력에 남지 않는다
 
 
+def test_failed_load_puts_back_even_a_change_outside_the_data_fingerprint(root, scratch_db):
+    """설명처럼 데이터 설정 지문에 들지 않는 변경도, load가 실패하면 파일을 되돌린다(커밋 표식은 적재 시각)."""
+    load(load_project("ledger", root), dbname=scratch_db)
+    before = files(root)
+    (root / "ledger/data/entries/000020-20261121T0300Z.csv").write_text("id,qty\nE800,abc\n", encoding="utf-8")
+    err = pytest.raises(IngestError, change, root, scratch_db, [
+        {"op": "column.update", "table": "entries", "column": "memo", "set": {"description": "메모"}}]).value
+    assert (err.status, err.detail) == (422, "load_failed")
+    assert files(root) == before and leftovers(root) == [] and structure.list_history("ledger") == []
+
+
+def test_append_table_with_batches_cannot_switch_to_replace(root, scratch_db):
+    load(load_project("ledger", root), dbname=scratch_db)
+    before = files(root)
+    for mode in ("replace", None):
+        err = pytest.raises(IngestError, change, root, scratch_db, [
+            {"op": "table.update", "table": "entries", "set": {"mode": mode}}]).value     # 잠금 안에서도 본다
+        assert (err.status, err.detail) == (422, "invalid_op")
+    assert files(root) == before
+
+
 @pytest.mark.parametrize("point,kept", [("after_move", False), ("before_commit", False), ("after_commit", True)])
 def test_crash_during_structure_change_is_recovered_before_reading(root, scratch_db, fault, point, kept):
     load(load_project("ledger", root), dbname=scratch_db)

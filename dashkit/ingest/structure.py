@@ -139,10 +139,12 @@ def history_files(project: str, hid: str) -> dict[str, bytes | None]:
 # ---------------------------------------------------------------- 묶음 기록(종류 config)
 
 def _write_record(project: config.Project, files: Mapping[str, tuple[bytes | None, bytes | None]],
-                  new_revision: str, hid: str, action: str) -> tuple[Path, dict[str, Any]]:
+                  new_revision: str, hid: str, action: str, loaded_at: Any) -> tuple[Path, dict[str, Any]]:
     rid = pending.new_id()
+    # loaded_at: 작업 전 적재 시각. 이 작업의 load가 커밋되면 바뀐다(커밋 표식. data_revision만으로는 설명·aliases처럼
+    # 지문에 들지 않는 변경의 커밋 여부를 가를 수 없다)
     record = {"id": rid, "kind": "config", "project": project.name, "data_revision": new_revision,
-              "history": hid, "action": action,
+              "history": hid, "action": action, "loaded_at": loaded_at.isoformat() if loaded_at is not None else None,
               "files": [{"path": rel, "before": base64.b64encode(b).decode() if b is not None else None,
                          "after": _sha(a)} for rel, (b, a) in files.items()]}
     return pending.write_record(project.data_dir, record), record
@@ -152,15 +154,18 @@ def recover_config(project: config.Project, conn: psycopg.Connection | None, rec
     """종류 config의 복구(recover.RECOVERERS). conn이 없으면(DB를 볼 수 없음) 되돌린다."""
     rid = str(record.get("id"))
     files = record.get("files") or []
-    now_revision = None
+    loaded_now = False
     if conn is not None:
         with conn.cursor() as cur:
-            now_revision = ledger.loaded(cur).data_revision
+            now = ledger.loaded(cur)
         if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
             conn.commit()
+        stamp = now.loaded_at.isoformat() if now.loaded_at is not None else None
+        # 이 작업의 load가 커밋됐다: 적재 시각이 작업 전과 다르고(다시 만들었다) 지문이 새 설정의 것이다
+        loaded_now = stamp != record.get("loaded_at") and now.data_revision == record.get("data_revision")
     root = project.root
     all_new = all(_sha(_read(root / _safe_rel(f["path"]))) == f.get("after") for f in files)
-    if now_revision is not None and now_revision == record.get("data_revision") and all_new:
+    if loaded_now and all_new:
         _history_from_record(project.name, record)       # 커밋 뒤 이력을 쓰기 전에 끊겼으면 여기서 쓴다
         return recover.Outcome(rid, "config", "committed", [f["path"] for f in files])
     for f in files:
@@ -274,6 +279,22 @@ def plan_files(project: config.Project, op_list: list[Mapping[str, Any]],
     return {k: v for k, v in out.items() if v[0] != v[1]}
 
 
+def check_mode_switch(project: config.Project, op_list: list[Mapping[str, Any]]) -> None:
+    """배치 파일이 있는 append 테이블을 replace로 바꾸는 것은 거절한다(배치를 읽지 않게 되어 그 행이 사라진다).
+    폴더 상태를 보는 검사라 쓰기 잠금 안에서 파일을 바꾸기 전에 다시 한다(요청을 받을 때도 미리 본다)."""
+    from . import batches
+
+    for o in op_list:
+        name = o.get("table")
+        spec = project.schema["tables"].get(name) if isinstance(name, str) else None
+        values = o.get("set")
+        if o.get("op") != "table.update" or spec is None or not isinstance(values, dict) or "mode" not in values:
+            continue
+        if (spec.get("mode") or "replace") == "append" and values["mode"] in (None, "replace") \
+                and batches.list_batches(project.data_dir, name)[0]:
+            raise IngestError(422, "invalid_op", "배치 파일이 있는 누적 테이블은 replace로 바꾸지 않습니다(배치를 읽지 않게 됩니다)")
+
+
 def _staged(project: config.Project, changes: Mapping[str, tuple[bytes | None, bytes | None]]):
     """바뀐 설정·replace CSV를 사본에 덮어 검증한다(store.prepare). 실패하면 IngestError(422)."""
     from ..project import store
@@ -294,6 +315,7 @@ def validate(project_name: str, op_list: list[Mapping[str, Any]],
         project = config.load_project(project_name)
     except config.ConfigError as exc:
         raise IngestError(422, "invalid_config", "지금 설정이 검사를 통과하지 못합니다", exc.errors) from None
+    check_mode_switch(project, op_list)
     changes = plan_files(project, op_list, extra)
     if changes:
         _staged(project, changes)
@@ -327,11 +349,12 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
     try:
         # 같은 프로세스의 다른 설정 저장(aliases 저장 등)과도 겹치지 않게 프로젝트 잠금을 함께 잡는다
         with store.project_lock(project.name), \
-                locked(project, conn, revision=revision, check_data_revision=False, wait_ms=wait_ms):
+                locked(project, conn, revision=revision, check_data_revision=False, wait_ms=wait_ms) as session:
             if files is not None:
                 changes = {_safe_rel(k): (_read(project.root / k), v) for k, v in files.items()}
                 changes = {k: v for k, v in changes.items() if v[0] != v[1]}
             else:
+                check_mode_switch(project, op_list or [])          # 잠금 안에서 폴더를 다시 본다
                 changes = plan_files(project, op_list or [], extra)
             if not changes:
                 return {"changed": [], "history": None, "revision": store.revision(project.root), "counts": None,
@@ -340,7 +363,7 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
             staged = _staged(project, changes)
             new_revision = data_revision(staged.project.schema, staged.project.dashboard)
             hid = _new_history_id(action)
-            record_path, record = _write_record(project, changes, new_revision, hid, action)
+            record_path, record = _write_record(project, changes, new_revision, hid, action, session.loaded.loaded_at)
             for rel, (_b, after) in changes.items():
                 path = project.root / rel
                 if after is None:
