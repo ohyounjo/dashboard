@@ -324,7 +324,10 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
   const busy = (text) => out.replaceChildren(h("div", { class: "sk-note", role: "status", text }));
   const settle = (el) => { out.replaceChildren(el); el.tabIndex = -1; el.focus({ preventScroll: false }); };
 
-  async function send(src, { dry, columns, force }, prev = null) {
+  async function send(src, { dry, columns, force }, prev = null, my = gen) {
+    // 이 요청이 아직 마지막 요청일 때만 화면을 바꾸고 작업을 지켜본다(늦게 온 앞 요청의 진행 표시가 결과를 덮지 않게)
+    const current = () => alive() && my === gen;
+    const show = (text) => { if (current()) busy(text); };
     const extra = { ...(columns ? { columns } : {}), ...(force ? { force: true } : {}) };
     if (src.kind === "rows") return api("POST", path, { rows: src.rows, method: src.method, dry_run: dry, ...extra });
     let r = null;
@@ -337,7 +340,7 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
       }
     }
     if (!r) {
-      busy(D.uploading);
+      show(D.uploading);
       const form = new FormData();
       form.append("file", src.file, src.file.name);
       if (dry) form.append("dry_run", "1");
@@ -346,8 +349,8 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
       r = await apiForm(path, form);
     }
     if (!r || !r.job) return r;
-    busy(jobText(r.job));
-    return waitJob(r.job.id, { alive, onTick: (job) => busy(jobText(job)) });
+    show(jobText(r.job));
+    return waitJob(r.job.id, { alive: current, onTick: (job) => show(jobText(job)) });
   }
 
   async function preview(src, opts = {}) {
@@ -357,7 +360,7 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
     busy(src.kind === "file" ? D.uploading : D.previewing);
     let r;
     try {
-      r = await send(src, { dry: true, ...opts });
+      r = await send(src, { dry: true, ...opts }, null, my);
     } catch (err) {
       if (alive() && my === gen) failed(err, "preview");
       return;
@@ -378,7 +381,7 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
     busy(D.inserting);
     let r;
     try {
-      r = await send(src, { dry: false, ...opts }, prev);
+      r = await send(src, { dry: false, ...opts }, prev, my);
     } catch (err) {
       if (alive() && my === gen) failed(err, "commit");
       return null;
