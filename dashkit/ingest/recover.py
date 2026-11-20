@@ -200,8 +200,16 @@ def _apply_group(project: Project, conn: psycopg.Connection, files: list[Mapping
     return []
 
 
+def _recover_move(project: Project, conn: "psycopg.Connection | None", record: Mapping[str, Any], mode: str) -> Outcome:
+    from .remove import recover_move      # remove.py가 이 모듈을 쓰므로 부를 때 가져온다
+
+    return recover_move(project, conn, record, mode)
+
+
 RECOVERERS: dict[str, Recoverer] = {
     "add": recover_add,
+    "remove": _recover_move,       # 되돌리기(remove.py)
+    "restore": _recover_move,      # 되살리기(remove.py)
 }
 
 
@@ -217,7 +225,7 @@ def recover(project: Project, conn: psycopg.Connection | None = None, *, mode: s
         if record is None:
             raise RecoverError([f"data/_pending/{path.name}: 묶음 기록을 읽을 수 없음"])
         if only is not None and record.get("id") != only:
-            for item in record.get("files", []) or []:
+            for item in (record.get("files", []) if isinstance(record.get("files"), list) else []):
                 if isinstance(item, dict) and item.get("incoming"):
                     keep.add(str(item["incoming"]))
             continue

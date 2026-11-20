@@ -8,6 +8,7 @@ uvicorn dashkit.manage.app:app 으로 띄운다(`python -m dashkit manage`). 모
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -18,7 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from ..api.errors import ApiError
 from ..auth import settings as auth_settings
 from ..auth import store as auth_store
-from ..auth.guard import Guard
+from ..auth.guard import Guard, check, send_rejection
 from ..ingest.operation import IngestError
 from .routes import MODULES
 
@@ -118,5 +119,29 @@ async def _unhandled(_req: Request, exc: Exception):
     return _error(500, "internal_error", "서버 오류")
 
 
+class ManageGuard(Guard):
+    """backend와 같은 요청 보호. 업로드 경로(UPLOAD_PATHS)의 POST만 multipart/form-data 본문도 받는다
+    (출처 검사는 그대로 한다). contracts/manage.md "요청 보호"."""
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("method", "").upper() == "POST" \
+                and UPLOAD_PATHS.fullmatch(scope.get("path", "")):
+            headers = list(scope.get("headers") or [])
+            ctypes = [v for k, v in headers if k.lower() == b"content-type"]
+            if len(ctypes) == 1 and ctypes[0].split(b";", 1)[0].strip().lower() == b"multipart/form-data":
+                # 본문 형식 검사만 multipart로 통과시킨다. 원래 헤더는 앱에 그대로 넘긴다
+                checked = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in headers}
+                checked["content-type"] = "application/json"
+                rejected = check("POST", checked, self.origins)
+                if rejected is None:
+                    await self.app(scope, receive, send)
+                else:
+                    await send_rejection(send, rejected)
+                return
+        await super().__call__(scope, receive, send)
+
+
+UPLOAD_PATHS = re.compile(r"/api/manage/(?:tables/[a-z][a-z0-9_]{0,62}/batches|batches|tables/infer)")
+
 # 요청 보호를 씌운 ASGI 앱. uvicorn은 이것을 띄운다
-app = Guard(api)
+app = ManageGuard(api)

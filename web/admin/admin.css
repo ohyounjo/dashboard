@@ -86,6 +86,67 @@
 .a-filter { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 13px; color: var(--muted) }
 .a-filter .a-inline { margin-top: 0 }
 .a-detail { color: var(--muted); font-size: 12px; font-family: var(--font-mono); overflow-wrap: anywhere }
+/* 데이터 메뉴(menus/tables.js) */
+.mono { font-family: var(--font-mono); font-size: 12.5px }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0 }
+a.btn { text-decoration: none; color: var(--fg) }
+a.btn:visited { color: var(--fg) }
+.a-row-link { cursor: pointer }
+.a-row-link:hover td { background: var(--surface-2) }
+.d-stack { display: flex; flex-direction: column; gap: 2px; min-width: 0 }
+.d-stack.end { align-items: flex-end }
+.d-stack.gap { gap: 12px }
+.d-stack.gap > :empty { display: none }
+.d-nowrap { flex-wrap: nowrap }
+.d-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; margin-bottom: 14px }
+.d-tabs::-webkit-scrollbar { display: none }
+.d-tabs [role="tab"] { border: 0; background: none; padding: 8px 12px 10px; color: var(--muted); font-size: 13.5px; font-weight: 500; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap }
+.d-tabs [role="tab"]:hover { color: var(--fg) }
+.d-tabs [role="tab"][aria-selected="true"] { color: var(--fg); font-weight: 700; border-bottom-color: var(--primary) }
+.d-panel:focus { outline: none }
+.d-panel:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; border-radius: 4px }
+.d-add-head { margin-bottom: 0 }
+.d-add-head h3 { margin: 0; font-size: 15px; overflow-wrap: anywhere }
+.d-box { display: flex; flex-direction: column; gap: 8px; margin-bottom: 0 }
+.d-box:focus { outline: none }
+.d-box > strong { font-weight: 600 }
+.d-box p { margin: 0 }
+.d-box .a-infos { color: var(--fg) }
+.d-lines { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere }
+.d-lines.mono { font-size: 12px }
+.d-more { color: var(--muted); font-size: 12.5px }
+.d-counts { grid-template-columns: max-content max-content }
+.d-gap-top { margin-top: 6px }
+.d-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 14px 16px; align-items: start }
+.d-field { min-width: 0 }
+.d-field label { overflow-wrap: anywhere }
+.d-field .check { font-weight: 400; align-items: center; min-height: 40px }
+.d-field .check input { min-height: 0; padding: 0; margin: 0 }
+.d-req { color: var(--bad); font-weight: 500 }
+.d-err { color: var(--bad); font-size: 12.5px; font-weight: 400 }
+.d-err:empty { display: none }
+.d-form { display: flex; flex-direction: column; gap: 16px }
+.d-form-actions .check { margin-left: 4px }
+select.input, .field select { border: 1px solid var(--line); background: var(--surface); color: var(--fg); border-radius: 8px; padding: 8px 10px; font-size: 14px; min-height: 40px; max-width: 100% }
+select.input:focus-visible { outline: 2px solid var(--primary); outline-offset: 0; border-color: var(--primary) }
+select.input[aria-invalid="true"] { border-color: var(--bad) }
+.d-grid-wrap { max-height: 60vh; overflow: auto }
+.a-table.d-grid { width: max-content; min-width: 100% }
+.a-table.d-grid th { position: sticky; top: 0; z-index: 1; vertical-align: bottom }
+.a-table.d-grid th.d-off { opacity: .55 }
+.a-table.d-grid td { padding: 4px 6px }
+.a-table.d-grid td.d-cell input { width: 150px; min-height: 32px; padding: 5px 8px; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--fg) }
+.a-table.d-grid td.d-cell input:focus-visible { outline: 2px solid var(--primary); outline-offset: 0; border-color: var(--primary) }
+.a-table.d-grid td.d-cell input[aria-invalid="true"] { border-color: var(--bad); background: var(--bad-bg) }
+.a-table.d-grid td.d-cell input:disabled { background: var(--surface-2); color: var(--muted) }
+.btn.icon-only { padding: 5px }
+.btn.icon-only.small { padding: 3px }
+.btn.icon-only .icon { width: 16px; height: 16px }
+.d-linkish { border: 0; background: none; padding: 0; font: inherit; color: var(--primary); cursor: pointer; text-decoration: underline }
+.d-drop { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 16px; text-align: center; border: 2px dashed var(--line); border-radius: var(--radius); background: var(--surface-2); color: var(--muted) }
+.d-drop p { margin: 0; word-break: keep-all }
+.d-drop.is-over { border-color: var(--primary); background: var(--primary-soft); color: var(--fg) }
+.d-out:empty { display: none }
 @media (max-width: 800px) {
   .a-grid, .a-form { grid-template-columns: minmax(0, 1fr) }
 }
@@ -95,4 +156,5 @@
   .admin-who { margin-left: auto }
   .admin-main { padding: 16px max(12px, env(safe-area-inset-right, 0px)) 40px max(12px, env(safe-area-inset-left, 0px)) }
   .a-card { padding: 14px }
+  .a-table.d-grid td.d-cell input { width: 120px }
 }

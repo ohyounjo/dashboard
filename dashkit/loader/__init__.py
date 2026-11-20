@@ -90,12 +90,7 @@ def load(project: Project, *, dbname: str | None = None, lock_wait_ms: int = LOC
             ingest_recover.recover(project, mode="load")
         except ingest_recover.RecoverError as exc:
             raise LoadError(exc.errors) from None
-        sources, errors = _sources(project, order)
-        if errors:
-            raise LoadError(errors)
-        with conn.transaction():
-            with conn.cursor() as cur:
-                counts = _rebuild(project, cur, order, data, sources, as_of_sql)
+        counts = _rebuild_on(project, conn, data, order, as_of_sql)
     except _StepError as exc:
         raise LoadError(exc.errors) from None
     except psycopg.Error as exc:
@@ -104,6 +99,44 @@ def load(project: Project, *, dbname: str | None = None, lock_wait_ms: int = LOC
         locks.release(conn)
         conn.close()
     return counts
+
+
+def rebuild_locked(project: Project, conn: psycopg.Connection, *,
+                   exclude: frozenset[tuple[str, str]] = frozenset(), include: tuple = ()) -> dict[str, int]:
+    """쓰기 잠금을 이미 쥔 접속에서 다시 만든다(되돌리기·되살리기, 복구가 쓴다). 실패하면 LoadError.
+
+    부른 쪽의 트랜잭션 안이면 저장점으로 돌고 커밋은 부른 쪽이 한다. exclude의 (테이블, 배치 이름)은 읽지 않는다
+    (그 파일이 처음부터 없었을 때와 같은 결과). include의 원본 파일(batches.SourceFile, 예: 되살릴 `_removed/`의 파일)은
+    번호순 자리에 끼워 읽는다. 끊긴 폴더 작업의 복구는 부른 쪽이 먼저 한다.
+    """
+    order = table_order(project)
+    tables = project.schema["tables"]
+    data, errors = validate_csv(project.schema, project.data_dir, [t for t in order if table_mode(tables[t]) != "append"])
+    if errors:
+        raise LoadError(errors)
+    try:
+        return _rebuild_on(project, conn, data, order, _as_of_body(project), exclude, include)
+    except _StepError as exc:
+        raise LoadError(exc.errors) from None
+    except psycopg.Error as exc:
+        raise LoadError([f"DB 오류: {_pg_message(exc)}"]) from None
+
+
+def _rebuild_on(project: Project, conn: psycopg.Connection, data: dict[str, TableData], order: list[str],
+                as_of_sql: str, exclude: frozenset[tuple[str, str]] = frozenset(), include: tuple = ()) -> dict[str, int]:
+    sources, errors = _sources(project, order)
+    if errors:
+        raise LoadError(errors)
+    sources = {t: [f for f in files if (t, f.name) not in exclude] for t, files in sources.items()}
+    for extra in include:
+        files = sources.setdefault(extra.table, [])
+        if any(f.number == extra.number for f in files if f.number is not None):
+            raise LoadError([f"data/{extra.table}/{extra.name}:1:-: 배치 번호 {extra.number}가 폴더의 배치와 겹침"])
+        files.append(extra)
+        files.sort(key=lambda f: -1 if f.number is None else f.number)
+    with conn.transaction():
+        with conn.cursor() as cur:
+            return _rebuild(project, cur, order, data, sources, as_of_sql)
 
 
 def _sources(project: Project, order: list[str]) -> tuple[dict[str, list], list[str]]:
@@ -299,4 +332,4 @@ def _create_table_sql(tname: str, table: dict) -> sql.Composed:
         sql.Identifier(RAW), sql.Identifier(tname), sql.SQL(", ").join(parts))
 
 
-__all__ = ["LoadError", "load", "table_mode"]
+__all__ = ["LoadError", "load", "rebuild_locked", "table_mode"]

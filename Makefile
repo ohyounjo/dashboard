@@ -12,7 +12,7 @@ HOST_GID := $(shell id -g)
 TOOLS    := $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) tools
 
 .NOTPARALLEL:
-.PHONY: help info env env-secrets auth-init data-init manage manage-down admin outbox up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down test-logs unit-image golden gen reset down logs dirs _test _test_run _guard_project _guard_test
+.PHONY: help info env env-secrets auth-init data-init manage manage-down ingest admin outbox up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down test-logs unit-image golden gen reset down logs dirs _test _test_run _guard_project _guard_test
 
 # ---- 작업 폴더 식별자
 # 같은 컴퓨터에서 이 저장소의 복제본이나 git worktree 여러 개가 동시에 빌드·테스트할 수 있다. 브랜치는 소스 파일만
@@ -61,7 +61,7 @@ DEV_NAME := $(or $(COMPOSE_PROJECT_NAME),$(call env_value,COMPOSE_PROJECT_NAME,.
 # 폴더 이름이 같은 다른 복제본·worktree가 이미 같은 compose 프로젝트 이름으로 스택을 띄웠으면, 그 스택에 닿는 목표를
 # 모두 멈춘다(그대로 두면 그쪽 컨테이너를 이 폴더의 코드와 마운트로 다시 만들거나, 그쪽 DB에 적재하거나, 내려 버린다).
 # 각 목표의 실행부는 이 확인이 통과한 뒤에만 돈다(.env를 보충하는 env-secrets도 포함. 그 전에 도는 것은 폴더 만들기뿐이다).
-GUARDED := env-secrets up down reset logs check load sync apply plan migrate studio studio-down auth-init data-init manage manage-down admin outbox
+GUARDED := env-secrets up down reset logs check load sync apply plan migrate studio studio-down auth-init data-init manage manage-down ingest admin outbox
 $(GUARDED): _guard_project
 
 info:
@@ -84,6 +84,7 @@ help:
 	@echo "make load    CSV 적재"
 	@echo "make sync    Superset 반영"
 	@echo "make apply   check → load → sync (backend는 설정을 스스로 다시 읽는다)"
+	@echo "make ingest TABLE=<테이블> FILE=<CSV> [DRY_RUN=1] [SKIP_INVALID=1] [FORCE=1]   누적 테이블에 배치 하나 더하기"
 	@echo "make plan    적용 전에 바뀌는 것 보기(데이터, 뷰, Superset). 아무것도 바꾸지 않음"
 	@echo "make new NAME=<이름> FROM=<CSV 폴더>   CSV에서 프로젝트 초안 생성"
 	@echo "make migrate [CHECK=1]   설정 파일을 최신 설정 버전으로"
@@ -213,7 +214,9 @@ data-init: env-secrets
 # 관리 서비스(contracts/manage.md). 포트를 밖에 열지 않는다(웹앱의 /api/manage/로만 닿는다). make manage-down이 내린다
 manage: dirs env-secrets
 	$(COMPOSE) --profile manage up -d --build manager
-	$(call wait_healthy,manager)
+	@# nginx는 설정 틀(web/nginx.conf.template)을 시작할 때만 읽는다. /api/manage/ 경로가 생기기 전에 뜬 web이면 다시 시작한다
+	@$(COMPOSE) exec -T web grep -q "location /api/manage/" /etc/nginx/conf.d/default.conf 2>/dev/null || $(COMPOSE) restart web
+	$(call wait_healthy,manager web)
 	@echo "✔ 관리 서비스: 운용 화면(http://localhost:$(or $(WEB_PORT),8080)/admin/)의 데이터 메뉴  (끄기: make manage-down)"
 
 manage-down:
@@ -246,6 +249,16 @@ apply: check load sync
 	@# 템플릿 코드(dashkit/, web/widgets/*/widget.json)를 바꿨으면 make up으로 이미지를 다시 만든다.
 	$(COMPOSE) up -d --no-deps backend
 	$(call wait_healthy,backend)
+
+# 누적(append) 테이블에 CSV 하나를 배치로 더한다(contracts/ingest.md). 파일이 있는 폴더를 읽기 전용으로 붙인다.
+# 운용 화면의 파일 적재와 같은 함수다(검증·미리보기·중복 확인·쓰기 잠금·끊김 복구가 같다)
+ingest: dirs
+	@test -n "$(TABLE)" -a -n "$(FILE)" || { echo "사용법: make ingest TABLE=<테이블> FILE=<CSV> [DRY_RUN=1] [SKIP_INVALID=1] [FORCE=1]" >&2; exit 2; }
+	@dir=$$(cd -- "$$(dirname -- "$(FILE)")" 2>/dev/null && pwd) || { echo "FILE이 없음: $(FILE)" >&2; exit 2; }; \
+	base=$$(basename -- "$(FILE)"); \
+	$(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) -v "$$dir":/import:ro tools \
+	  python -m dashkit ingest --table "$(TABLE)" --file "/import/$$base" \
+	  $(if $(DRY_RUN),--dry-run) $(if $(SKIP_INVALID),--skip-invalid) $(if $(FORCE),--force)
 
 # 적용 전에 무엇이 바뀌는지 본다(데이터, 뷰, Superset). 아무것도 바꾸지 않는다. contracts/plan.md
 plan:
@@ -310,6 +323,7 @@ gen: unit-image
 # 2) sales-sample로 apply → 전환 검사(tests/test_switch.py)와 스냅샷 열 정보 대조
 # 3) chart-gallery로 apply → 차트 유형별 데이터 조회(tests/test_gallery.py)와 스냅샷 열 정보 대조
 # 4) make new로 예시 CSV 폴더에서 초안(projects/zz-newtest, 끝나면 지움)을 만들어 apply → tests/test_new_project.py
+# 5) 누적 테이블 프로젝트(tests/fixtures/ledger 사본 projects/zz-ingest, 끝나면 지움)를 apply → 관리 서비스의 데이터 경로(tests/test_manage_data.py)
 # 끝나면 테스트 스택과 그 볼륨, .test/를 지운다(KEEP=1이면 남긴다). 실패가 하나라도 있으면 종료 코드 1.
 test:
 	@before=$$(cat .state/*.json 2>/dev/null | cksum); \
@@ -374,6 +388,12 @@ _test_run:
 	  PROJECT=zz-newtest $(TOOLS) python -m pytest -q -p no:cacheprovider tests/test_new_project.py || rc=1; \
 	else rc=1; fi; \
 	rm -rf ./projects/zz-newtest; \
+	echo "== 5단계: 누적 테이블 프로젝트(tests/fixtures/ledger 사본, zz-ingest)로 관리 서비스의 데이터 운용 확인"; \
+	rm -rf ./projects/zz-ingest; cp -R tests/fixtures/ledger ./projects/zz-ingest; \
+	if PROJECT=zz-ingest $(MAKE) --no-print-directory apply; then \
+	  PROJECT=zz-ingest $(TOOLS) python -m pytest -q -p no:cacheprovider tests/test_manage_data.py || rc=1; \
+	else rc=1; fi; \
+	rm -rf ./projects/zz-ingest; \
 	exit $$rc
 
 # ---------------------------------------------------------------- 초기화

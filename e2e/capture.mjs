@@ -39,8 +39,26 @@ const ADMIN_PAGES = [
   { key: "_admin-stats", label: "운용: 통계", path: "/admin/#stats" },
   { key: "_admin-audit", label: "운용: 감사 로그", path: "/admin/#audit" },
   { key: "_admin-outbox", label: "운용: 테스트 메일함", path: "/admin/#outbox" },
+  // 데이터 메뉴: 관리 서비스가 떠 있는 버전에만 있다(메뉴가 없으면 건너뛴다). 상세는 목록의 첫 테이블을 눌러 들어가고
+  // 탭은 차례(0: 구조, 1: 배치)로 고른다. 프로젝트마다 테이블 이름이 다르므로 이름을 쓰지 않는다
+  { key: "_admin-data", label: "운용: 데이터 목록", path: "/admin/#tables", menu: "tables" },
+  { key: "_admin-data-columns", label: "운용: 테이블 구조", path: "/admin/#tables", menu: "tables", detailTab: 0 },
+  { key: "_admin-data-batches", label: "운용: 테이블 배치", path: "/admin/#tables", menu: "tables", detailTab: 1 },
   { key: "_account", label: "내 정보", path: "/account.html" },
 ];
+
+// 운용 화면의 데이터 상세로 들어간다: 목록의 첫 행 링크 → 탭 고르기 → 탭 내용이 다 그려질 때까지
+async function openDetail(page, tabIndex) {
+  const link = page.locator("#view .a-table tbody tr a.a-link").first();
+  await link.waitFor({ timeout: 30_000 });
+  await link.click();
+  await page.waitForSelector("#view [role=tablist] [role=tab]", { timeout: 30_000 });
+  await page.locator("#view [role=tablist] [role=tab]").nth(tabIndex).click();
+  await page.waitForFunction(() => {
+    const panel = document.querySelector("#view [role=tabpanel]");
+    return panel && !panel.querySelector(".sk-note") && panel.querySelector(".a-table, .a-empty");
+  }, null, { timeout: 30_000 }).catch(() => {});
+}
 
 // 로그인해서 세션 쿠키 값을 돌려준다. 로그인 기능이 없는 버전이면 null.
 async function login() {
@@ -175,6 +193,14 @@ async function main() {
         for (const pg of adminPages) {
           await page.goto(`${BASE_URL}${pg.path}`, { waitUntil: "domcontentloaded" });
           await page.waitForFunction(() => !document.querySelector("#view .sk-note"), null, { timeout: 30_000 }).catch(() => {});
+          if (pg.menu) {
+            // 그 메뉴가 없는 버전(관리 서비스가 없는 옛 버전 등)이면 이 장면은 찍지 않는다
+            await page.waitForSelector("#nav a", { timeout: 30_000 }).catch(() => {});
+            const hasMenu = await page.locator(`#nav a[data-key="${pg.menu}"]`).count().catch(() => 0);
+            if (!hasMenu) { console.log(`- ${pg.key}: 메뉴 없음, 건너뜀`); continue; }
+            await page.waitForSelector("#view .a-table tbody tr, #view .a-empty, #view .a-msg", { timeout: 30_000 }).catch(() => {});
+            if (pg.detailTab !== undefined) await openDetail(page, pg.detailTab);
+          }
           const warnings = await waitSettled(page);
           const file = `${pg.key}-${vp.name}-${theme}.png`;
           await page.screenshot({ path: path.join(OUT, file), fullPage: true });
@@ -189,7 +215,9 @@ async function main() {
   }
 
   const manifest = {
-    project: app.project, title: app.app?.title ?? "", tabs: [...tabs, ...[...pages, ...adminPages].map((p) => ({ key: p.key, label: p.label }))],
+    project: app.project, title: app.app?.title ?? "",
+    // 찍지 않은(건너뛴) 운용 장면은 탭 목록에서도 뺀다
+    tabs: [...tabs, ...[...pages, ...adminPages].filter((p) => shots.some((s) => s.tab === p.key)).map((p) => ({ key: p.key, label: p.label }))],
     shots, consoleErrors,
   };
   await writeFile(path.join(OUT, "manifest.json"), JSON.stringify(manifest, null, 2));

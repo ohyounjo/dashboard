@@ -65,11 +65,16 @@ class Guard:
         if rejected is None:
             await self.app(scope, receive, send)
             return
-        status, detail, message = rejected
-        body = json.dumps({"detail": detail, "message": message}, ensure_ascii=False).encode("utf-8")
-        await send({"type": "http.response.start", "status": status, "headers": [
-            (b"content-type", b"application/json; charset=utf-8"),
-            (b"content-length", str(len(body)).encode()),
-            (b"cache-control", b"no-store"),
-        ]})
-        await send({"type": "http.response.body", "body": body})
+        await send_rejection(send, rejected)
+
+
+async def send_rejection(send: Send, rejected: tuple[int, str, str]) -> None:
+    """거절 응답({"detail", "message"}, no-store)을 보낸다."""
+    status, detail, message = rejected
+    body = json.dumps({"detail": detail, "message": message}, ensure_ascii=False).encode("utf-8")
+    await send({"type": "http.response.start", "status": status, "headers": [
+        (b"content-type", b"application/json; charset=utf-8"),
+        (b"content-length", str(len(body)).encode()),
+        (b"cache-control", b"no-store"),
+    ]})
+    await send({"type": "http.response.body", "body": body})

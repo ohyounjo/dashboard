@@ -1049,3 +1049,21 @@ def cleanup_history(view_days: int, audit_days: int) -> dict[str, int]:
         audit = conn.execute("DELETE FROM dashkit_auth.audit_log WHERE at < now() - make_interval(days => %s)",
                              (audit_days,)).rowcount
     return {"view_events": views, "audit_log": audit}
+
+
+# ---------------------------------------------------------------- 데이터 운용(관리 서비스)
+
+def batch_log(project: str, table: str) -> dict[str, dict[str, Any]]:
+    """그 테이블의 배치를 더한 기록(감사 로그의 data.batch.create): {배치 파일: {actor_id, actor_email, method,
+    source_name, at}}. 같은 파일의 기록이 여럿이면 마지막 것. 운용자가 자기 배치만 되돌리는 판정과 이력 화면이 쓴다."""
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT DISTINCT ON (detail->>'file') detail->>'file' AS file, actor_id, actor_email,
+                      detail->>'method' AS method, detail->>'source_name' AS source_name, at
+                 FROM dashkit_auth.audit_log
+                WHERE action = 'data.batch.create' AND detail->>'project' = %s AND detail->>'table' = %s
+                ORDER BY detail->>'file', at DESC, id DESC""",
+            (project, table),
+        ).fetchall()
+    return {r["file"]: {"actor_id": str(r["actor_id"]) if r["actor_id"] else None, "actor_email": r["actor_email"],
+                        "method": r["method"], "source_name": r["source_name"], "at": r["at"]} for r in rows}

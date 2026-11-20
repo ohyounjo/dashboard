@@ -1,13 +1,16 @@
 """multipart/form-data 업로드 읽기. 계약: contracts/studio.md "요청 보호"의 업로드 줄.
 
 python-multipart를 들이지 않고(새 의존성 금지) 필요한 만큼만 읽는다: 파일 부분(`name`, `filename`, 내용)과 글 부분.
-본문은 한도까지만 메모리에 읽는다. 파일 이름은 표시와 추론(표 이름)에만 쓰고 **파일 경로로 쓰지 않는다**.
+Studio(parse_multipart)는 본문을 한도까지만 메모리에 읽고, 관리 서비스의 큰 파일(stream_multipart)은 조각씩 읽어
+파일 부분을 디스크의 임시 파일로 쓴다. 파일 이름은 표시와 추론(표 이름)에만 쓰고 **파일 경로로 쓰지 않는다**.
 """
 from __future__ import annotations
 
 import os
 import re
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import AsyncIterator
 
 MAX_FILES = 50
@@ -145,3 +148,166 @@ def csv_files(parts: list[Part], field: str, *, single: bool = False) -> dict[st
             raise UploadError(400, "invalid_filename", f"같은 이름의 파일이 두 번 있습니다: {name}")
         out[name] = p.content
     return out
+
+
+# ---------------------------------------------------------------- 디스크로 받는 multipart(관리 서비스의 큰 파일)
+
+@dataclass
+class DiskPart:
+    """디스크의 임시 파일로 받은 부분. 글 부분은 value(문자열), 파일 부분은 path와 size."""
+    name: str
+    filename: str | None
+    path: Path | None = None
+    size: int = 0
+    value: str | None = None
+
+
+class _Sink:
+    def __init__(self, folder: Path, limit: int):
+        fd, name = tempfile.mkstemp(prefix="upload-", suffix=".part", dir=folder)
+        self.path = Path(name)
+        self.file = os.fdopen(fd, "wb")
+        self.size = 0
+        self.limit = limit
+
+    def write(self, data: bytes) -> None:
+        self.size += len(data)
+        if self.size > self.limit:
+            raise UploadError(413, "upload_too_large", f"파일이 너무 큽니다(상한 {self.limit // (1024 * 1024)}MB)")
+        self.file.write(data)
+
+
+async def stream_multipart(content_type: str | None, stream: AsyncIterator[bytes], content_length: str | None, *,
+                           folder: Path, file_limit: int, request_limit: int, text_limit: int = 1024 * 1024,
+                           max_files: int = MAX_FILES) -> list[DiskPart]:
+    """multipart/form-data를 조각씩 읽어 파일 부분은 folder의 임시 파일로 쓴다(메모리에 전부 올리지 않는다).
+
+    실패하면 만든 임시 파일을 지우고 UploadError. 성공하면 부른 쪽이 파일을 지운다(discard_parts).
+    """
+    media = (content_type or "").split(";", 1)[0].strip().lower()
+    if media != "multipart/form-data":
+        raise UploadError(415, "unsupported_media_type", "업로드는 multipart/form-data로 보냅니다")
+    m = _BOUNDARY_RE.search(content_type or "")
+    if not m:
+        raise UploadError(400, "bad_request", "multipart 경계(boundary)가 없습니다")
+    if content_length is not None:
+        try:
+            if int(content_length) > request_limit:
+                raise UploadError(413, "upload_too_large", f"요청이 너무 큽니다(상한 {request_limit // (1024 * 1024)}MB)")
+        except ValueError:
+            raise UploadError(400, "bad_request", "Content-Length 형식 오류") from None
+    boundary = b"--" + (m.group(1) or m.group(2)).encode("latin-1")
+    delim = b"\r\n" + boundary
+    bad = UploadError(400, "bad_request", "multipart 본문 형식 오류")
+    folder.mkdir(parents=True, exist_ok=True)
+    parts: list[DiskPart] = []
+    buf = b""
+    total = 0
+    state = "preamble"           # preamble → headers → body → (headers | end)
+    sink: _Sink | None = None
+    text = bytearray()
+    current: DiskPart | None = None
+
+    def close_part() -> None:
+        nonlocal sink, current, text
+        assert current is not None
+        if sink is not None:
+            sink.file.close()
+            current.path, current.size = sink.path, sink.size
+            sink = None
+        else:
+            current.value = bytes(text).decode("utf-8", errors="replace")
+        parts.append(current)
+        current = None
+        text = bytearray()
+
+    try:
+        async for chunk in stream:
+            total += len(chunk)
+            if total > request_limit:
+                raise UploadError(413, "upload_too_large", f"요청이 너무 큽니다(상한 {request_limit // (1024 * 1024)}MB)")
+            buf += chunk
+            while True:
+                if state == "preamble":
+                    i = buf.find(boundary)
+                    if i < 0:
+                        buf = buf[-len(boundary):]
+                        break
+                    buf = buf[i + len(boundary):]
+                    state = "after_boundary"
+                if state == "after_boundary":
+                    if len(buf) < 2:
+                        break
+                    if buf[:2] == b"--":
+                        state = "end"
+                        break
+                    if buf[:2] != b"\r\n":
+                        raise bad
+                    buf = buf[2:]
+                    state = "headers"
+                if state == "headers":
+                    j = buf.find(b"\r\n\r\n")
+                    if j < 0:
+                        if len(buf) > 16 * 1024:
+                            raise bad
+                        break
+                    head, buf = buf[:j], buf[j + 4:]
+                    disposition = ""
+                    for line in head.split(b"\r\n"):
+                        key, _, value = line.decode("utf-8", errors="replace").partition(":")
+                        if key.strip().lower() == "content-disposition":
+                            disposition = value.strip()
+                    if not disposition.lower().startswith("form-data"):
+                        raise bad
+                    params = {k.lower(): re.sub(r"\\(.)", r"\1", v) for k, v in _PARAM_RE.findall(disposition)}
+                    if "name" not in params:
+                        raise bad
+                    current = DiskPart(params["name"], params.get("filename"))
+                    if current.filename is not None:
+                        if sum(1 for p in parts if p.filename is not None) >= max_files:
+                            raise UploadError(400, "too_many_files", f"한 번에 올릴 수 있는 파일은 {max_files}개까지입니다")
+                        sink = _Sink(folder, file_limit)
+                    state = "body"
+                if state == "body":
+                    k = buf.find(delim)
+                    if k < 0:
+                        keep = len(delim)
+                        if len(buf) > keep:
+                            data, buf = buf[:-keep], buf[-keep:]
+                            if sink is not None:
+                                sink.write(data)
+                            else:
+                                text.extend(data)
+                                if len(text) > text_limit:
+                                    raise UploadError(413, "upload_too_large", "글 부분이 너무 깁니다")
+                        break
+                    data, buf = buf[:k], buf[k + len(delim):]
+                    if sink is not None:
+                        sink.write(data)
+                    else:
+                        text.extend(data)
+                    close_part()
+                    state = "after_boundary"
+                    continue
+                if state == "end":
+                    break
+            if state == "end":
+                break
+        if state != "end":
+            raise bad
+    except BaseException:
+        if sink is not None:
+            sink.file.close()
+            parts.append(DiskPart("", None, sink.path))
+        discard_parts(parts)
+        raise
+    return parts
+
+
+def discard_parts(parts: list[DiskPart]) -> None:
+    for p in parts:
+        if p.path is not None:
+            try:
+                p.path.unlink()
+            except FileNotFoundError:
+                pass

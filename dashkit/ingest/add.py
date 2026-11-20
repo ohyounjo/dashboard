@@ -90,7 +90,7 @@ def check_table(project: Project, table: str) -> str:
 
 def ingest(project_name: str, items: list[Item], *, dry_run: bool = False, force: bool = False,
            strict: bool = False, skip_invalid: bool = False, projects_dir: Path | None = None,
-           dbname: str | None = None, wait_ms: int | None = None,
+           dbname: str | None = None, wait_ms: int | None = None, max_rows: int | None = None,
            progress: Callable[[str, Mapping[str, Any]], None] | None = None) -> dict[str, Any]:
     """데이터를 더한다. 성공하면 결과(contracts/ingest.md "결과 형식"), 실패하면 IngestError.
 
@@ -109,6 +109,10 @@ def ingest(project_name: str, items: list[Item], *, dry_run: bool = False, force
         try:
             prepared = _prepare(conn, project, items, tables, strict=strict, skip_invalid=skip_invalid,
                                 progress=progress)
+            big = [p for p in prepared if max_rows is not None and p.staged.total > max_rows]
+            if big:
+                raise IngestError(413, "too_many_rows", f"파일 하나는 {max_rows}행까지입니다. 나눠 올려 주세요",
+                                  [f"{p.staged.table}: {p.staged.total}행" for p in big])
             invalid = [p for p in prepared if not p.staged.ok]
             if invalid and not dry_run:
                 errors = [e for p in invalid for e in p.staged.errors]
