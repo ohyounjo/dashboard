@@ -523,6 +523,103 @@ async function userView(id) {
     h("div", { class: "a-grid" }, h("div", { class: "a-col" }, h("div", { class: "a-card" }, info), groupsCard), h("div", { class: "a-col" }, actions, delForm)));
 }
 
+/* ---------------- 통계 ---------------- */
+
+function statsView() {
+  const state = { days: 30 };
+  const note = notice();
+  const sel = h("select", { class: "sel", "aria-label": T.period }, [7, 30, 90].map((d) => h("option", { value: d, text: T.days(d), selected: d === state.days })));
+  const intro = h("p", { class: "a-note" });
+  const tabs = pagedTable({
+    defaultSort: "order",
+    empty: T.noStats,
+    load: async (st) => {
+      const r = await api("GET", `/api/admin/stats/tabs?days=${state.days}&page=${st.page}&size=${st.size}&sort=${encodeURIComponent(st.sort)}`);
+      intro.textContent = T.statsIntro(r.project);
+      return r;
+    },
+    columns: [
+      { key: "order", label: T.tab, sort: true, render: (t) => h("span", {}, t.label, " ", h("small", { class: "a-key", text: t.key })) },
+      { key: "views", label: T.views, sort: true, num: true, render: (t) => String(t.views) },
+      { key: "viewers", label: T.viewers, sort: true, num: true, render: (t) => String(t.viewers) },
+      { key: "last_viewed_at", label: T.lastViewed, sort: true, render: (t) => (t.never ? h("span", { class: "pill tone", "data-tone": "warn", text: T.neverOpened }) : h("span", { class: "num", text: T.fmtDateTime(t.last_viewed_at) })) },
+    ],
+  });
+  const users = pagedTable({
+    defaultSort: "-views",
+    empty: T.noStats,
+    load: (st) => api("GET", `/api/admin/stats/users?days=${state.days}&page=${st.page}&size=${st.size}&sort=${encodeURIComponent(st.sort)}`),
+    columns: [
+      { key: "email", label: T.email, sort: true, render: (u) => h("a", { class: "a-link", href: `#user/${encodeURIComponent(u.id)}`, text: u.email }) },
+      { key: "views", label: T.views, sort: true, num: true, render: (u) => String(u.views) },
+      { key: "last_viewed_at", label: T.lastViewed, sort: true, render: (u) => h("span", { class: "num", text: u.last_viewed_at ? T.fmtDateTime(u.last_viewed_at) : "—" }) },
+      { key: "last_login_at", label: T.lastLogin, sort: true, render: (u) => h("span", {}, h("span", { class: "num", text: u.last_login_at ? fmtDay(u.last_login_at) : "—" }),
+        u.inactive ? [" ", h("span", { class: "pill tone", "data-tone": "warn", text: T.inactive })] : null) },
+    ],
+  });
+  sel.addEventListener("change", () => { state.days = Number(sel.value); tabs.state.page = users.state.page = 1; tabs.draw(); users.draw(); });
+  view().replaceChildren(head(T.statsTitle, null, h("label", { class: "a-inline" }, T.period, sel)), intro, note.el,
+    h("h3", { class: "a-sub", text: T.byTab }), tabs.el, h("h3", { class: "a-sub", text: T.byUser }), users.el);
+  tabs.draw();
+  users.draw();
+}
+
+/* ---------------- 감사 로그 ---------------- */
+
+function auditDetail(d) {
+  if (!d || typeof d !== "object") return "";
+  return Object.entries(d).map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ");
+}
+
+function auditView() {
+  const filter = { action: "", from: "", to: "" };
+  const actionSel = h("select", { class: "sel", "aria-label": T.auditAction });
+  const from = h("input", { type: "date", class: "sel", "aria-label": T.from });
+  const to = h("input", { type: "date", class: "sel", "aria-label": T.to });
+  let known = null;
+  const fillActions = (actions) => {
+    if (known && known.join() === actions.join()) return;
+    known = actions;
+    const cur = actionSel.value;
+    actionSel.replaceChildren(h("option", { value: "", text: T.allActions }),
+      ...Object.entries(T.actionGroups).map(([v, l]) => h("option", { value: v, text: l })),
+      ...actions.map((a) => h("option", { value: a, text: T.actionLabel[a] ? `${T.actionLabel[a]} (${a})` : a })));
+    actionSel.value = cur;
+  };
+  fillActions([]);
+  const table = pagedTable({
+    defaultSort: "-at",
+    empty: T.noAudit,
+    load: async (st) => {
+      const q = new URLSearchParams({ page: st.page, size: st.size });
+      if (filter.action) q.set("action", filter.action);
+      if (filter.from) q.set("from", filter.from);
+      if (filter.to) q.set("to", filter.to);
+      const r = await api("GET", `/api/admin/audit?${q}`);
+      fillActions(r.actions || []);
+      return r;
+    },
+    columns: [
+      { key: "at", label: T.auditAt, render: (e) => h("span", { class: "num", text: T.fmtDateTime(e.at) }) },
+      { key: "actor_email", label: T.auditActor, render: (e) => e.actor_email || "—" },
+      { key: "action", label: T.auditAction, render: (e) => h("span", { title: e.action, text: T.actionLabel[e.action] || e.action }) },
+      { key: "target", label: T.auditTarget, wrap: true, render: (e) => e.target_label || "—" },
+      { key: "detail", label: T.auditDetail, wrap: true, render: (e) => h("span", { class: "a-detail", text: auditDetail(e.detail) }) },
+      { key: "ip", label: T.auditIp, render: (e) => h("span", { class: "num", text: e.ip || "—" }) },
+    ],
+  });
+  const form = h("form", { class: "a-filter" }, actionSel, h("label", { class: "a-inline" }, T.from, from), h("label", { class: "a-inline" }, T.to, to),
+    h("button", { type: "submit", class: "btn" }, T.apply));
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    Object.assign(filter, { action: actionSel.value, from: from.value, to: to.value });
+    table.state.page = 1;
+    table.draw();
+  });
+  view().replaceChildren(head(T.auditTitle, T.auditIntro), form, h("div", { class: "a-gap" }), table.el);
+  table.draw();
+}
+
 /* ---------------- 테스트 메일함 ---------------- */
 
 function outboxView() {
@@ -549,6 +646,8 @@ let mailMode = "test";
 const MENUS = [
   { key: "users", label: T.menu.users, match: /^(users|user\/.+)$/ },
   { key: "groups", label: T.menu.groups, match: /^(groups|group\/.+)$/ },
+  { key: "stats", label: T.menu.stats, match: /^stats$/ },
+  { key: "audit", label: T.menu.audit, match: /^audit$/ },
   { key: "outbox", label: T.menu.outbox, match: /^outbox$/, when: () => mailMode === "test" },
 ];
 const menus = () => MENUS.filter((m) => !m.when || m.when());
@@ -567,6 +666,8 @@ function route() {
   if (m && m[1] === "group") groupView(id);
   else if (m && m[1] === "user") userView(id);
   else if (menu.key === "outbox") outboxView();
+  else if (menu.key === "stats") statsView();
+  else if (menu.key === "audit") auditView();
   else if (menu.key === "groups") groupsView();
   else usersView();
   $("main").focus({ preventScroll: true });

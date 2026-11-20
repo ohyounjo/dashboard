@@ -7,17 +7,20 @@
 """
 from __future__ import annotations
 
+import os
 import re
 from contextlib import contextmanager
+from datetime import date, datetime, time as dtime, timedelta
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field, StrictBool, StrictStr
 
 from .. import config
 from ..api.errors import ApiError
-from . import emails, mailer, passwords, store
-from .routes import Principal, check_new_email, client_ip, issue_token, require_operator
+from . import access, emails, mailer, passwords, store
+from .routes import Principal, check_new_email, client_ip, issue_token, require_operator, require_user
 
 router = APIRouter(prefix="/api/admin")
 
@@ -672,3 +675,96 @@ def bulk_groups(body: BulkGroups, request: Request, actor: Principal = Depends(r
             audit(request, actor, "group.members", target_type="group", target_id=g["id"], target_label=g["name"],
                   detail={"added": [emails_of[i] for i in added], "removed": [emails_of[i] for i in removed], "bulk": True})
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------- 접속 통계와 감사 로그
+
+
+
+STATS_DAYS = (7, 30, 90)
+INACTIVE_DAYS = 30
+
+views_router = APIRouter(prefix="/api")
+
+
+class ViewEvent(BaseModel):
+    tab: StrictStr = Field(min_length=1, max_length=100)
+
+
+@views_router.post("/views", status_code=204)
+def post_view(body: ViewEvent, user: Principal = Depends(require_user)):
+    """웹앱이 탭을 열 때 보낸다. 볼 수 있는 탭이 아니면 403 forbidden. 같은 사용자·같은 탭은 30분에 한 번만 센다."""
+    project = current_project()
+    if body.tab not in access.allowed_tab_keys(user, project):
+        raise ApiError(403, "forbidden", "볼 수 없는 탭입니다")
+    store.record_view(user.id, project.name, body.tab)
+    return Response(status_code=204)
+
+
+def _days(days: int) -> int:
+    if days not in STATS_DAYS:
+        raise ApiError(422, "invalid_request", "days는 7 · 30 · 90 중 하나입니다")
+    return days
+
+
+@router.get("/stats/tabs")
+def stats_tabs(days: int = 30, page_no: int = PageNo, size: int = PageSize, sort: str | None = SortKey,
+               _actor: Principal = Depends(require_operator)):
+    """현재 프로젝트의 탭마다 조회 수·본 사람 수·마지막 조회일. 한 번도 열리지 않은 탭은 never: true."""
+    project = current_project()
+    stats = store.tab_stats(project.name, _days(days))
+    items = []
+    for i, tab in enumerate(project.dashboard["tabs"]):
+        st = stats.get(tab["key"], {"views": 0, "viewers": 0, "last_viewed_at": None})
+        items.append({"key": tab["key"], "label": tab["label"], "order": i, **st, "never": st["views"] == 0})
+    out = page(items, page_no, size, sort, {
+        "order": lambda t: t["order"], "key": lambda t: t["key"], "views": lambda t: t["views"],
+        "viewers": lambda t: t["viewers"], "last_viewed_at": lambda t: t["last_viewed_at"],
+    }, "order")
+    return {"project": project.name, "days": days, **out}
+
+
+@router.get("/stats/users")
+def stats_users(days: int = 30, page_no: int = PageNo, size: int = PageSize, sort: str | None = SortKey,
+                _actor: Principal = Depends(require_operator)):
+    """계정마다 현재 프로젝트의 조회 수(최근 days일)와 최근 접속일. 30일 넘게 접속이 없으면 inactive: true."""
+    project = current_project()
+    cutoff = store.now() - timedelta(days=INACTIVE_DAYS)
+    items = [{**u, "inactive": u["last_login_at"] is None or u["last_login_at"] < cutoff}
+             for u in store.user_stats(project.name, _days(days))]
+    out = page(items, page_no, size, sort, {
+        "email": lambda u: u["email"], "views": lambda u: u["views"], "last_viewed_at": lambda u: u["last_viewed_at"],
+        "last_login_at": lambda u: u["last_login_at"], "inactive": lambda u: u["inactive"],
+    }, "-views")
+    return {"project": project.name, "days": days, **out}
+
+
+def _tz() -> ZoneInfo:
+    try:
+        return ZoneInfo(os.environ.get("TZ") or "UTC")
+    except Exception:  # 형식이 틀린 TZ
+        return ZoneInfo("UTC")
+
+
+def _day_start(raw: str | None, name: str) -> datetime | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        d = date.fromisoformat(raw)
+    except ValueError:
+        raise ApiError(422, "invalid_request", f"{name}는 YYYY-MM-DD 형식이어야 합니다") from None
+    return datetime.combine(d, dtime.min, tzinfo=_tz())
+
+
+@router.get("/audit")
+def get_audit(action: str | None = Query(None, max_length=60), from_: str | None = Query(None, alias="from", max_length=10),
+              to: str | None = Query(None, max_length=10), page_no: int = PageNo, size: int = PageSize,
+              _actor: Principal = Depends(require_operator)):
+    """감사 로그(최근 순). action: 동작 코드, 또는 'user.'처럼 점으로 끝나는 묶음. from·to: 날짜(TZ 기준, to 포함).
+    수정·삭제 API는 없다."""
+    start = _day_start(from_, "from")
+    end = _day_start(to, "to")
+    if end is not None:
+        end += timedelta(days=1)
+    items, total = store.audit_list(action or None, start, end, size, (page_no - 1) * size)
+    return {"items": items, "total": total, "actions": store.audit_actions()}

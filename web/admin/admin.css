@@ -82,6 +82,10 @@
 .pills { display: inline-flex; flex-wrap: wrap; gap: 4px }
 .pill .icon { width: 12px; height: 12px }
 .danger-zone { border-color: var(--bad-bg) }
+.a-sub { margin: 22px 0 10px; font-size: 15px }
+.a-filter { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 13px; color: var(--muted) }
+.a-filter .a-inline { margin-top: 0 }
+.a-detail { color: var(--muted); font-size: 12px; font-family: var(--font-mono); overflow-wrap: anywhere }
 @media (max-width: 800px) {
   .a-grid, .a-form { grid-template-columns: minmax(0, 1fr) }
 }

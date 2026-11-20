@@ -1,6 +1,7 @@
 """보존 기간 정리(contracts/auth.md "보존 기간"). 인증 경로를 처리하는 중에 하루 한 번 돈다(별도 스케줄러 없음).
 
 - 메일 인증 없이 7일 지난 pending 계정, 7일 지난 테스트 메일(outbox), 만료된 일회용 토큰과 세션
+- 180일 지난 접속 기록(view_events), 1년(365일) 지난 감사 로그
 """
 from __future__ import annotations
 
@@ -14,6 +15,8 @@ log = logging.getLogger("dashkit.auth")
 
 PENDING_DAYS = 7
 OUTBOX_DAYS = 7
+VIEW_DAYS = 180
+AUDIT_DAYS = 365
 INTERVAL = 24 * 3600.0
 
 _lock = threading.Lock()
@@ -22,6 +25,7 @@ _last: float | None = None
 
 def run() -> dict[str, int]:
     removed = store.cleanup(PENDING_DAYS, OUTBOX_DAYS)
+    removed.update(store.cleanup_history(VIEW_DAYS, AUDIT_DAYS))
     if any(removed.values()):
         log.info("인증 DB 정리: %s", ", ".join(f"{k} {v}" for k, v in removed.items() if v))
     return removed

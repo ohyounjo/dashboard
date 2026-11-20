@@ -36,6 +36,8 @@ const AUTH_PAGES = [
 const ADMIN_PAGES = [
   { key: "_admin-users", label: "운용: 사용자", path: "/admin/#users" },
   { key: "_admin-groups", label: "운용: 그룹", path: "/admin/#groups" },
+  { key: "_admin-stats", label: "운용: 통계", path: "/admin/#stats" },
+  { key: "_admin-audit", label: "운용: 감사 로그", path: "/admin/#audit" },
   { key: "_admin-outbox", label: "운용: 테스트 메일함", path: "/admin/#outbox" },
   { key: "_account", label: "내 정보", path: "/account.html" },
 ];
