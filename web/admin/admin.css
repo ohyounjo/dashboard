@@ -148,6 +148,23 @@ select.input[aria-invalid="true"] { border-color: var(--bad) }
 .d-drop p { margin: 0; word-break: keep-all }
 .d-drop.is-over { border-color: var(--primary); background: var(--primary-soft); color: var(--fg) }
 .d-out:empty { display: none }
+/* 행 조회(rows.js) */
+.d-filter-form { display: flex; flex-direction: column; gap: 8px }
+.d-filter-rows { display: flex; flex-direction: column; gap: 8px }
+.d-filter-rows:empty { display: none }
+.d-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px }
+.d-filter select.input, .d-filter input.input { min-height: 34px; padding: 5px 8px; font-size: 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--fg) }
+.d-filter input.input { flex: 1 1 160px; min-width: 0 }
+.d-filter select.input { max-width: 100% }
+.d-filter .d-err { flex-basis: 100% }
+.a-table.d-rows td { vertical-align: top }
+.d-val { display: inline-block; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom }
+.d-null { color: var(--muted) }
+.d-cut { margin-left: 2px; padding: 0 4px; border-radius: 4px; background: var(--warn-bg); color: var(--warn); font-weight: 700; cursor: help }
+.d-rows-pager { flex-wrap: wrap }
+.d-field.is-changed label { color: var(--primary) }
+.d-field.is-changed input, .d-field.is-changed select { border-color: var(--primary) }
+.d-field input[readonly] { background: var(--surface-2); color: var(--muted) }
 .d-progress { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); font-size: 13px; color: var(--fg) }
 .d-progress progress { width: 100%; height: 10px; accent-color: var(--primary); border: 0; border-radius: 5px; background: var(--line); overflow: hidden }
 .d-progress progress::-webkit-progress-bar { background: var(--line); border-radius: 5px }

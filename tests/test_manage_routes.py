@@ -73,3 +73,44 @@ def test_direct_upload_file_is_removed_after_the_job(client):
                headers={**headers, "content-type": "multipart/form-data; boundary=zz"})
     assert r.status == 400 and json.loads(r.body)["detail"] == "bad_request"
     assert _leftovers() == before
+
+
+def test_read_paths_never_open_the_owner_account(client, monkeypatch):
+    """관리 서비스의 읽기 경로(목록·행 조회·데이터셋)는 dash_inspect만 쓴다. owner 접속을 열면 실패하게 해 둔다."""
+    from dashkit import config, db
+    from dashkit.manage import context
+
+    def no_owner(*_a, **_k):
+        raise AssertionError("읽기 경로가 owner 접속을 열었다")
+
+    monkeypatch.setattr(db, "owner_conn", no_owner)
+    c, headers = client
+    project = config.load_project(context.current_project())
+    table = next(iter(project.schema["tables"]))
+    pk = project.schema["tables"][table]["primary_key"]
+    for method, path, body in (("GET", "/api/manage/tables", None), ("GET", f"/api/manage/tables/{table}", None),
+                               ("GET", f"/api/manage/tables/{table}/batches", None), ("GET", "/api/manage/datasets", None),
+                               ("POST", f"/api/manage/tables/{table}/rows/query", {"limit": 5})):
+        r = c.request(method, path, json=body, headers=headers)
+        assert r.status == 200, (path, r.body)
+    page = json.loads(c.post(f"/api/manage/tables/{table}/rows/query", json={"limit": 2}, headers=headers).body)
+    assert len(page["rows"]) == 2 and page["total"] is not None
+    first = page["rows"][0]
+    one = json.loads(c.post(f"/api/manage/tables/{table}/rows/query",
+                            json={"key": {k: first[k] for k in pk}}, headers=headers).body)
+    assert one["row"] == first
+    key = next(iter(project.dashboard["datasets"]))
+    r = c.post(f"/api/manage/datasets/{key}/rows/query", json={"limit": 3, "count": True}, headers=headers)
+    assert r.status == 200, r.body
+
+
+def test_filter_injection_is_rejected(client):
+    from dashkit import config
+    from dashkit.manage import context
+
+    c, headers = client
+    table = next(iter(config.load_project(context.current_project()).schema["tables"]))
+    for body in ({"filters": [{"column": "x; DROP TABLE raw.y", "op": "eq", "value": 1}]},
+                 {"sort": [{"column": "1; --"}]}, {"limit": 1000}):
+        r = c.post(f"/api/manage/tables/{table}/rows/query", json=body, headers=headers)
+        assert r.status == 422 and json.loads(r.body)["detail"] in ("invalid_filter", "invalid_query"), body

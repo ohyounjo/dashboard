@@ -9,6 +9,9 @@ datasets:
   summary:
     sql: |
       SELECT e.group_id, count(*) AS n, sum(e.amount) AS total FROM raw.entries e GROUP BY e.group_id
+  states:
+    sql: |
+      SELECT e.state, e.group_id FROM raw.entries e
 
 dashboards:
   main:

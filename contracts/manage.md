@@ -50,6 +50,9 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `POST /batches` | 운용자 | **여러 파일 한꺼번에**(아래 "여러 파일") → 202 작업 |
 | `GET /tables/{t}/template` | 운용자 | 빈 양식: 열 이름 머리글 + 예시 한 줄(`default`, enum의 첫 값, 유형별 예시)의 CSV(UTF-8 BOM) |
 | `POST /tables/{t}/aliases` | admin | 머리글 맞춤 저장: `{"aliases": {"<머리글>": "<열>"}, "revision"}` → 200 `{"revision", "changed"}`. `column.update` 연산으로 그 열의 `aliases`에 더한다(Studio와 같은 저장. [studio.md](studio.md) "변경 연산"). `revision`은 `GET /tables/{t}`가 준 값이고 다르면 409 `stale_config`. aliases는 DB와 상관없어 적용이 필요 없다. 감사 로그 `data.table.alter` |
+| `POST /tables/{t}/rows/query` | 운용자 | 테이블 원본(`raw.<t>`)의 행 조회(아래 "행 조회") |
+| `POST /datasets/{d}/rows/query` | 운용자 | 그래프가 실제로 보는 뷰(`dash.<d>`)의 행 조회 |
+| `GET /datasets` | 운용자 | 데이터셋 목록 `{"items", "total"}`: `{key, kind: "table" \| "sql", table, description, used_by, labels}`. `used_by`는 그 데이터셋을 쓰는 차트·위젯 섹션의 수(설정에서 센다) |
 | `GET /jobs`, `GET /jobs/{id}` | 운용자 | 작업 목록(최근 것부터, 로그 없이), 작업 하나(아래 "작업") |
 | `GET /jobs/{id}/rejects` | 운용자 | 오류 행을 빼고 넣은 작업의 빠진 행: 올린 행(정규형 머리글) + `오류` 열의 CSV(UTF-8 BOM). 여러 파일이면 파일마다 하나씩 담은 zip. 없으면 404 `unknown_job` |
 
@@ -79,6 +82,27 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 - **한 트랜잭션이다**(설계서 D12): 참조 순서(`config.table_order`)대로 넣고, 하나라도 실패하면 어느 파일도 들어가지 않는다. 확정 도중에 끊겨도 묶음 단위로 복구한다([ingest.md](ingest.md) "묶음 기록과 끊김 복구").
 - `map`을 빼면 파일 이름(확장자 제외)이 테이블 이름이어야 한다. 짝지을 수 없으면 422 `unknown_table`(`errors`에 파일별 이유). 같은 테이블에 파일 여럿도 된다(번호를 이어 매긴다).
 - 한 번에 50개까지(넘으면 400 `too_many_files`), 합계 `INGEST_MAX_REQUEST_MB`.
+
+### 행 조회 (`POST /tables/{t}/rows/query`, `POST /datasets/{d}/rows/query`)
+
+```json
+{ "filters": [ { "column": "<열>", "op": "in", "value": ["a", "b"] }, { "column": "<열>", "op": "ge", "value": "2026-11-01" } ],
+  "sort":    [ { "column": "<열>", "dir": "desc" } ],
+  "columns": ["<열>", "…"],
+  "limit": 50, "cursor": null, "count": false }
+```
+
+→ `{"columns": [{"name", "type"}], "rows": [{…}], "next_cursor": "…" | null, "total": n | "100000+" | null, "changed": false, "truncated_cells": [[행 번호, "열"]]}`. 값의 형식은 `/api/data`와 같다([api.md](api.md)).
+
+- **읽기는 `dash_inspect`만** 쓴다(읽기 전용 트랜잭션, `MANAGE_STATEMENT_TIMEOUT_MS` 시간 제한 → 넘으면 504 `query_timeout`). owner 접속을 열지 않는다.
+- 연산: `eq` `ne` `lt` `le` `gt` `ge` `in`(1~1000개) `contains` `starts_with` `is_null` `not_null`. `lt`~`ge`는 글·숫자·날짜·시각 열, `contains`·`starts_with`는 글 열만(글자 그대로 찾는다. `%`·`_`는 와일드카드가 아니다). 열 이름·연산·유형이 맞지 않으면 422 `invalid_filter`. 열 이름은 목록과 대조한 뒤 `Identifier`로, 값은 모두 매개변수로 넣는다.
+- `limit`은 1~200(기본 50, 넘으면 422 `invalid_query`). 구현은 `dashkit/paging.py` 하나다(backend의 `/api/data`와 함께 쓴다).
+- **커서**: 테이블과, 원본 테이블의 기본 키 열을 모두 내보내는 `table:` 데이터셋은 **키 방식**(정렬 열 + 기본 키의 다음 값부터. 깊은 페이지도 속도가 같다. 기본 키로 정렬하면(기본) 첫 페이지 때 있던 행은 겹치거나 빠지지 않는다. 다른 열로 정렬하면 그 사이 `update` 배치로 값이 바뀐 행은 겹치거나 빠질 수 있다). 그 밖(`sql:` 뷰, 기본 키 열이 빠진 뷰)은 **건너뛰기 방식**: 요청한 정렬 열 뒤에 나머지 모든 열로 순서를 고정하고 100,000행까지(넘으면 422). 정렬은 NULL을 맨 뒤에 둔다. 커서는 서버만 읽는 값(서명)이고 그 조회(필터·열)의 것만 받는다(다르면 422 `invalid_query`). 관리 서비스가 다시 뜨면 이전 커서는 받지 않는다.
+- **데이터 판**: 커서에 첫 페이지 때의 판(마지막으로 다시 만든 시각 + 그 테이블의 배치 기록 이름·해시)을 넣고, 다음 페이지에서 다르면 `changed: true`다(화면은 "조회하는 사이 데이터가 바뀌었습니다. 처음부터 다시 보기"). 데이터셋은 `table:`이면 그 테이블, `sql:`이면 모든 테이블의 판을 합친다(계보가 생기면 읽는 테이블로 좁힌다).
+- **전체 행 수**: 테이블과 `table:` 데이터셋은 필터가 없으면 배치 기록의 `inserted` 합(세지 않는다). `sql:` 데이터셋이나 필터가 있으면 `null`. `"count": true`면 결과 행을 100,000까지 센다(넘으면 `"100000+"`).
+- **긴 값**: 목록에서는 칸 하나를 2,000자에서 자르고 `truncated_cells`에 적는다. 잘린 값은 보여 주기만 하고 저장에 쓰지 않는다.
+- **한 행 읽기**: `"key": {"<기본 키 열>": 값, …}`(기본 키 열 전부)를 주면 그 한 행을 자르지 않고 돌려준다: `{"columns", "row", "truncated_cells": ["열"]}`(응답이 2MB를 넘을 때만 큰 칸부터 자른다). 없으면 404 `unknown_row`. 고치기 폼이 쓴다. 키가 없는 데이터셋은 422.
+- DB에 그 테이블·뷰가 없으면(적용 전) 409 `rebuild_required`.
 
 ### 되돌리기와 되살리기
 

@@ -40,26 +40,38 @@ const ADMIN_PAGES = [
   { key: "_admin-audit", label: "운용: 감사 로그", path: "/admin/#audit" },
   { key: "_admin-outbox", label: "운용: 테스트 메일함", path: "/admin/#outbox" },
   // 데이터 메뉴: 관리 서비스가 떠 있는 버전에만 있다(메뉴가 없으면 건너뛴다). 상세는 목록의 첫 테이블을 눌러 들어가고
-  // 탭은 차례(0: 구조, 1: 배치)로 고른다. 프로젝트마다 테이블 이름이 다르므로 이름을 쓰지 않는다
+  // 탭은 data-tab 값으로 고른다(없던 옛 버전은 차례로, 그 버전에 없는 탭은 건너뛴다). 프로젝트마다 테이블 이름이 다르므로 이름을 쓰지 않는다
   { key: "_admin-data", label: "운용: 데이터 목록", path: "/admin/#tables", menu: "tables" },
-  { key: "_admin-data-columns", label: "운용: 테이블 구조", path: "/admin/#tables", menu: "tables", detailTab: 0 },
-  { key: "_admin-data-batches", label: "운용: 테이블 배치", path: "/admin/#tables", menu: "tables", detailTab: 1 },
+  { key: "_admin-data-preview", label: "운용: 테이블 미리보기", path: "/admin/#tables", menu: "tables", detailTab: "preview" },
+  { key: "_admin-data-columns", label: "운용: 테이블 구조", path: "/admin/#tables", menu: "tables", detailTab: "columns" },
+  { key: "_admin-data-batches", label: "운용: 테이블 배치", path: "/admin/#tables", menu: "tables", detailTab: "batches" },
   // 여러 파일 올리기(빈 화면): 그 버튼이 없는 버전(2a 이전)이면 건너뛴다
   { key: "_admin-data-bulk", label: "운용: 여러 파일 올리기", path: "/admin/#tables", menu: "tables", open: "[data-action=bulk]" },
+  // 데이터셋 목록: 그 메뉴가 없는 버전(3단계 이전)이면 건너뛴다
+  { key: "_admin-datasets", label: "운용: 데이터셋", path: "/admin/#datasets", menu: "datasets" },
   { key: "_account", label: "내 정보", path: "/account.html" },
 ];
 
-// 운용 화면의 데이터 상세로 들어간다: 목록의 첫 행 링크 → 탭 고르기 → 탭 내용이 다 그려질 때까지
-async function openDetail(page, tabIndex) {
+// data-tab이 없던 버전(2b까지)의 상세 탭 차례
+const OLD_TAB_ORDER = { columns: 0, batches: 1 };
+
+// 운용 화면의 데이터 상세로 들어간다: 목록의 첫 행 링크 → 탭 고르기 → 탭 내용이 다 그려질 때까지.
+// 그 버전에 없는 탭이면 false(이 장면은 건너뛴다)
+async function openDetail(page, tab) {
   const link = page.locator("#view .a-table tbody tr a.a-link").first();
   await link.waitFor({ timeout: 30_000 });
   await link.click();
   await page.waitForSelector("#view [role=tablist] [role=tab]", { timeout: 30_000 });
-  await page.locator("#view [role=tablist] [role=tab]").nth(tabIndex).click();
+  const tabs = page.locator("#view [role=tablist] [role=tab]");
+  const byKey = page.locator(`#view [role=tablist] [role=tab][data-tab="${tab}"]`);
+  if (await byKey.count()) await byKey.click();
+  else if (tab in OLD_TAB_ORDER && !(await page.locator("#view [role=tab][data-tab]").count())) await tabs.nth(OLD_TAB_ORDER[tab]).click();
+  else return false;
   await page.waitForFunction(() => {
     const panel = document.querySelector("#view [role=tabpanel]");
-    return panel && !panel.querySelector(".sk-note") && panel.querySelector(".a-table, .a-empty");
+    return panel && !panel.querySelector(".sk-note") && panel.querySelector(".a-table, .a-empty, .a-msg");
   }, null, { timeout: 30_000 }).catch(() => {});
+  return true;
 }
 
 // 로그인해서 세션 쿠키 값을 돌려준다. 로그인 기능이 없는 버전이면 null.
@@ -201,7 +213,7 @@ async function main() {
             const hasMenu = await page.locator(`#nav a[data-key="${pg.menu}"]`).count().catch(() => 0);
             if (!hasMenu) { console.log(`- ${pg.key}: 메뉴 없음, 건너뜀`); continue; }
             await page.waitForSelector("#view .a-table tbody tr, #view .a-empty, #view .a-msg", { timeout: 30_000 }).catch(() => {});
-            if (pg.detailTab !== undefined) await openDetail(page, pg.detailTab);
+            if (pg.detailTab !== undefined && !(await openDetail(page, pg.detailTab))) { console.log(`- ${pg.key}: 탭 없음, 건너뜀`); continue; }
             if (pg.open) {
               const opener = page.locator(`#view ${pg.open}`);
               if (!(await opener.count())) { console.log(`- ${pg.key}: 화면 없음, 건너뜀`); continue; }

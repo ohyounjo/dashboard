@@ -42,6 +42,9 @@ def test_new_modules_exist():
     assert (ADMIN / "menus" / "tables.js").is_file()
     assert (SHARED / "fields.js").is_file()
     assert (SHARED / "ingest.js").is_file()
+    assert (SHARED / "query.js").is_file()
+    assert (ADMIN / "rows.js").is_file()
+    assert (ADMIN / "menus" / "datasets.js").is_file()
 
 
 def test_html_has_no_inline_code():
@@ -94,9 +97,12 @@ def _data_block_keys() -> set[str]:
 
 def test_data_menu_strings_match():
     keys = _data_block_keys()
-    code = _read(ADMIN / "menus" / "tables.js")
-    assert "const D = T.data;" in code
-    used = set(re.findall(r"\bD\.([A-Za-z][A-Za-z0-9_]*)", code))
+    used: set[str] = set()
+    # 데이터 쪽 화면(테이블, 행 표, 데이터셋)은 모두 S.admin.data(D)의 문구를 쓴다
+    for f in (ADMIN / "menus" / "tables.js", ADMIN / "rows.js", ADMIN / "menus" / "datasets.js"):
+        code = _read(f)
+        assert "const D = T.data;" in code, f"{f.name}: const D = T.data;"
+        used |= set(re.findall(r"\bD\.([A-Za-z][A-Za-z0-9_]*)", code))
     assert used - keys == set(), f"strings.js의 S.admin.data에 없는 문구 키: {sorted(used - keys)}"
     assert keys - used == set(), f"쓰이지 않는 문구 키: {sorted(keys - used)}"
     assert re.search(r"menu: \{[^}]*\btables: ", _read(WEB / "strings.js")), "메뉴 이름(S.admin.menu.tables)이 없음"
@@ -173,3 +179,22 @@ def test_aliases_saving_is_admin_only_in_screen():
     # "다음에도 이렇게"는 admin에게만 보인다(서버도 require_admin)
     code = _without_comments(_read(ADMIN / "menus" / "tables.js"))
     assert re.search(r"isAdmin\(\)\s*\?\s*checkbox\(D\.rememberMatch", code)
+
+
+def test_rows_query_screens():
+    # 3단계: 미리보기 탭과 데이터셋 상세는 같은 행 표(rows.js)를 쓰고, 계약의 응답 키를 다룬다
+    rows = _without_comments(_read(ADMIN / "rows.js"))
+    for needle in ("next_cursor", "res.changed", "truncated_cells", "res.total", "count = true", '"invalid_filter"'):
+        assert needle in rows, f"rows.js에 {needle}가 없음"
+    tables = _without_comments(_read(ADMIN / "menus" / "tables.js"))
+    assert "/rows/query`" in tables and "{ key }" in tables, "고치기 폼은 한 행을 key로 따로 읽는다"
+    assert 't.on_conflict === "update"' in tables, "이 행 고치기는 update 테이블에만"
+    assert 'method: "form"' in tables
+    datasets = _without_comments(_read(ADMIN / "menus" / "datasets.js"))
+    assert "/rows/query`" in datasets and "`${BASE}/datasets`" in datasets
+    assert re.search(r"when:\s*\(\)\s*=>\s*!!session\.manage", datasets)
+    listed = re.search(r"const MENUS = \[([^\]]*)\]", _read(ADMIN / "admin.js")).group(1)
+    assert re.search(r"\btables,\s*datasets\b", listed), "데이터셋 메뉴는 데이터 다음"
+    shared = _without_comments(_read(SHARED / "query.js"))
+    assert not re.search(r"\bdocument\b|\bwindow\b", shared)
+    assert (ROOT / "tests" / "js" / "query.test.mjs").is_file()

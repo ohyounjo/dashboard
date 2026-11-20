@@ -146,6 +146,7 @@ JWT(HS256, 키 `GUEST_TOKEN_JWT_SECRET`):
 - 값: date → `"YYYY-MM-DD"`, timestamp → ISO 8601, numeric → JSON 숫자, NULL → `null`.
 - 실행 SQL은 `SELECT * FROM dash.<dataset> LIMIT <DATA_MAX_ROWS + 1>`이다. 식별자는 허용 목록과 대조한 뒤 `psycopg.sql.Identifier`로 넣는다. 사용자 입력이 SQL에 들어가는 경로는 없다.
 - 행 수 상한은 `DATA_MAX_ROWS`(기본 5000)다. 넘으면 앞 5000행과 `truncated: true`를 돌려준다.
+- **선택: 페이지로 받기** `?limit=<1~200>&cursor=<다음 커서>`(설계서 8-5). 둘 다 없으면 위와 같다(간트·칸반은 전체가 필요하므로 그대로 쓴다). 있으면 `{"columns", "rows", "next_cursor", "changed", "truncated": false}`. 규칙은 관리 서비스의 행 조회와 같은 `dashkit/paging.py`다([manage.md](manage.md) "행 조회"): 행을 가리킬 키(그 테이블의 기본 키 열 전부)가 뷰에 있는 `table:` 데이터셋은 기본 키 순서의 키 방식 커서, 그 밖은 모든 열 순서의 건너뛰기 방식(100,000행까지). `next_cursor`가 `null`이면 마지막 페이지다. 커서에는 첫 페이지 때의 데이터 판(다시 만든 시각과 배치 기록)이 들어 있고, 그 사이 데이터가 바뀌었으면 `changed: true`다. `limit`이 범위 밖이거나 커서가 틀리면 422 `invalid_query`.
 - DB 연결 실패·쿼리 시간 초과(`DATA_STATEMENT_TIMEOUT_MS`, 기본 10000)·그 밖의 DB 오류는 503 `db_unavailable`, 뷰가 없으면(적재 전) 503 `not_loaded`.
 - 연결은 읽기 전용 트랜잭션(`default_transaction_read_only=on`)이다.
 - 접속 계정은 `dash_reader`다.
