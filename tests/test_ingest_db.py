@@ -600,3 +600,41 @@ def test_plan_counts_rows_added_since_the_last_load(tmp_path, scratch_db, monkey
     (root / "ledger" / "data" / "entries" / r["batches"][0]["file"]).unlink()
     entry = next(t for t in plan.make_plan(load_project("ledger", root), dbname=scratch_db)["data"] if t["table"] == "entries")
     assert entry["batches"]["removed"] == [r["batches"][0]["file"]] and entry["rows"] == 3 and entry["removed"] == 4
+
+
+def _crash_before_commit(root, scratch_db, fault, row_id):
+    fault("before_commit", operation.SimulatedCrash())
+    with pytest.raises(operation.SimulatedCrash):
+        add(root, scratch_db, "entries", [{"id": row_id}])
+    operation.FAULTS.clear()
+    assert len(pending.list_records(root / "ledger" / "data")) == 1
+
+
+def test_start_recovery_waits_when_the_config_is_not_applied(tmp_path, scratch_db, fault):
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    _crash_before_commit(root, scratch_db, fault, "E120")
+    schema = root / "ledger" / "schema.yaml"
+    schema.write_text(schema.read_text(encoding="utf-8").replace(
+        "      memo:     { type: text, aliases: [note, \"비고\"] }",
+        "      memo:     { type: text, aliases: [note, \"비고\"] }\n      extra:    { type: text }"), encoding="utf-8")
+    assert operation.recover_on_start(load_project("ledger", root), dbname=scratch_db) == []
+    assert len(pending.list_records(root / "ledger" / "data")) == 1          # 파일과 기록을 그대로 둔다
+    load(load_project("ledger", root), dbname=scratch_db)                     # load가 파일로 처리한다
+    assert "E120" in {x[0] for x in rows(scratch_db, "entries")} and leftovers(root) == []
+
+
+def test_recovery_keeps_files_when_its_own_commit_result_is_unknown(tmp_path, scratch_db, fault):
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+    _crash_before_commit(root, scratch_db, fault, "E121")
+    files = folder(root, "entries")
+    fault("recover_before_commit", psycopg.OperationalError("접속 끊김"))
+    e = expect_error("recovery_unknown", add, root, scratch_db, "entries", [{"id": "E122"}])
+    assert e.status == 503 and folder(root, "entries") == files
+    assert len(pending.list_records(root / "ledger" / "data")) == 1
+    operation.FAULTS.clear()
+    r = add(root, scratch_db, "entries", [{"id": "E122"}])
+    assert r["recovered"][0]["result"] == "applied"
+    assert {"E121", "E122"} <= {x[0] for x in rows(scratch_db, "entries")}
+    rebuilt_equals_current(root, scratch_db)

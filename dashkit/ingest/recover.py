@@ -23,6 +23,7 @@ from ..config import Project, table_order
 from . import ledger, pending
 from .apply import apply_batch, drop_stage, pg_message, run_checks, stage_source
 from .batches import BATCH_RE, SourceFile, table_dir
+from .faults import fault
 from .policies import BatchError
 
 log = logging.getLogger("dashkit.ingest")
@@ -30,6 +31,18 @@ log = logging.getLogger("dashkit.ingest")
 
 class RecoverError(Exception):
     """복구할 수 없는 기록(형식이 틀렸거나 이 dashkit이 모르는 종류)."""
+
+    def __init__(self, errors: list[str]):
+        self.errors = errors
+        super().__init__("\n".join(errors))
+
+
+class RecoverUnknown(RecoverError):
+    """복구의 반영을 커밋했는지 알 수 없다(접속이 끊김). 파일과 묶음 기록을 그대로 두고 다음 복구가 다시 판정한다."""
+
+
+class _Rejected(Exception):
+    """반영이 확정적으로 거절됐다(검증·참조·checks·DB 제약). 트랜잭션을 되돌린다."""
 
     def __init__(self, errors: list[str]):
         self.errors = errors
@@ -144,37 +157,47 @@ def _apply_group(project: Project, conn: psycopg.Connection, files: list[Mapping
     first = [f for f in first if f["name"] not in done.get(f["table"], {})]
     items = sorted(first, key=lambda f: (rank[f["table"]], _number(f["name"]))) + \
         sorted(files, key=lambda f: rank[f["table"]])
-    errors: list[str] = []
     if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
         conn.commit()          # 앞의 조회가 연 트랜잭션을 끝낸다. 아래 블록이 저장점이 아니라 진짜 트랜잭션이 되게
     try:
         with conn.transaction():
-            with conn.cursor() as cur:
-                for f in items:
-                    path = _final_path(project, f)
-                    m = BATCH_RE.fullmatch(f["name"])
-                    src = SourceFile(f["table"], f["name"], path, int(m.group(1)) if m else None)
-                    staged = stage_source(cur, project.schema, src)
-                    try:
-                        counts = apply_batch(cur, project.schema, staged)
-                    finally:
-                        drop_stage(cur, staged)
-                    ledger.add(cur, f["table"], f["name"], staged.sha256 or "", counts)
-                errors = run_checks(cur, project.schema, order)
-                if errors:
-                    raise BatchError("check_failed", "checks 위반", errors)
-    except BatchError as exc:
-        return exc.errors or [exc.message]
+            try:
+                with conn.cursor() as cur:
+                    for f in items:
+                        path = _final_path(project, f)
+                        m = BATCH_RE.fullmatch(f["name"])
+                        src = SourceFile(f["table"], f["name"], path, int(m.group(1)) if m else None)
+                        staged = stage_source(cur, project.schema, src)
+                        try:
+                            counts = apply_batch(cur, project.schema, staged)
+                        finally:
+                            drop_stage(cur, staged)
+                        ledger.add(cur, f["table"], f["name"], staged.sha256 or "", counts)
+                    errors = run_checks(cur, project.schema, order)
+                    if errors:
+                        raise _Rejected(errors)
+                    fault("recover_before_commit")
+            except BatchError as exc:
+                raise _Rejected(exc.errors or [exc.message]) from None
+            except (psycopg.errors.IntegrityError, psycopg.errors.DataError,
+                    psycopg.errors.ProgrammingError) as exc:      # DB가 행·문장을 거절했다(커밋 전)
+                raise _Rejected([f"DB 오류: {pg_message(exc)}"]) from None
+    except _Rejected as exc:
+        return exc.errors
     except psycopg.Error as exc:
-        return [f"DB 오류: {pg_message(exc)}"]
+        # 접속이 끊겼거나 COMMIT의 응답을 받지 못했다: 반영됐는지 모른다. 파일을 지우지 않는다
+        raise RecoverUnknown([f"복구 반영의 결과를 확인하지 못함({pg_message(exc)}). 다음 복구가 다시 판정한다"]) from None
     # 반영이 실제로 커밋됐는지 새 조회로 확인한다(묶음 기록은 그 뒤에만 지운다)
-    with conn.cursor() as cur:
-        recorded = ledger.read(cur, {f["table"] for f in [*files, *first]})
-    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
-        conn.commit()
+    try:
+        with conn.cursor() as cur:
+            recorded = ledger.read(cur, {f["table"] for f in [*files, *first]})
+        if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+            conn.commit()
+    except psycopg.Error as exc:
+        raise RecoverUnknown([f"복구 반영의 결과를 확인하지 못함({pg_message(exc)})"]) from None
     if not all(f["name"] in recorded.get(f["table"], {}) for f in [*files, *first]):
-        return ["반영을 커밋하지 못함"]
-    return errors
+        raise RecoverUnknown(["복구 반영 뒤 배치 기록이 보이지 않음. 다음 복구가 다시 판정한다"])
+    return []
 
 
 RECOVERERS: dict[str, Recoverer] = {

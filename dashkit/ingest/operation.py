@@ -58,20 +58,8 @@ class IngestError(Exception):
         super().__init__(message)
 
 
-class SimulatedCrash(BaseException):
-    """테스트 전용: 프로세스가 그 자리에서 죽은 것처럼 뒷정리 없이 빠져나간다(FAULTS)."""
-
-
-# 테스트 전용 실패 주입 자리(설계서 프롬프트 "죽인 뒤 복구" 테스트). 이름 → 부를 함수. 운영 코드는 비워 둔다.
-# 자리: after_record(묶음 기록을 쓴 뒤), after_move(파일 하나를 옮긴 뒤), before_commit(배치 기록까지 쓰고 커밋 전),
-#       after_commit(커밋 뒤, 묶음 기록을 지우기 전)
-FAULTS: dict[str, Callable[[], None]] = {}
-
-
-def _fault(point: str) -> None:
-    fn = FAULTS.get(point)
-    if fn is not None:
-        fn()
+from .faults import FAULTS, SimulatedCrash  # noqa: E402,F401  (테스트 전용 실패 주입 자리)
+from .faults import fault as _fault  # noqa: E402
 
 
 class StaleConfig(Exception):
@@ -190,6 +178,9 @@ def locked(project: Project, conn: psycopg.Connection, *, revision: str | None, 
                               "설정이 바뀌었는데 아직 적용(apply)하지 않았습니다. 먼저 적용하세요")
         try:
             outcomes = recover.recover(project, conn, mode="online")
+        except recover.RecoverUnknown as exc:
+            raise IngestError(503, "recovery_unknown", "끝나지 않은 폴더 작업의 복구 결과를 확인하지 못했습니다. "
+                              "잠시 뒤 다시 시도하세요(파일은 그대로입니다)", exc.errors) from None
         except recover.RecoverError as exc:
             raise IngestError(409, "rebuild_required", "끝나지 않은 폴더 작업을 처리할 수 없습니다", exc.errors) from None
         with conn.cursor() as cur:
@@ -307,6 +298,8 @@ def resolve(project: Project, record: Mapping[str, Any], *, dbname: str | None =
         conn.commit()
         if now.project != project.name:
             return "project_mismatch"
+        if now.data_revision != data_revision(project.schema, project.dashboard):
+            raise recover.RecoverUnknown(["DB에 적용된 설정이 이 작업의 설정과 다름. 다음 load가 파일로 처리한다"])
         outcomes = recover.recover(project, conn, mode="online", only=str(rid))
         if outcomes:
             return outcomes[0].result
@@ -334,7 +327,8 @@ def recover_on_start(project: Project, *, dbname: str | None = None) -> list[rec
             with conn.cursor() as cur:
                 now = ledger.loaded(cur)
             conn.commit()
-            if now.project != project.name:
+            # 온라인 복구는 지금 설정이 DB에 적용된 설정일 때만 한다(아니면 다음 load가 파일로 처리한다)
+            if now.project != project.name or now.data_revision != data_revision(project.schema, project.dashboard):
                 return []
             return recover.recover(project, conn, mode="online")
         finally:
