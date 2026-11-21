@@ -30,30 +30,30 @@
 - params에 쓰는 순서: `viz_type` → 필드(선언 순서) → "함께 쓰는 파라미터" → `format` → `where`.
 
 <!-- 생성 시작: chart-types -->
-| 축약 `viz` | 이름 | `viz_type` | 축약 필드 → 파라미터 | 함께 쓰는 파라미터 |
-|---|---|---|---|---|
-| `area` | 영역 | `echarts_area` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metrics` → `metrics` (metrics, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`stacked` → `stack` (true → `"Stack"`, false → `null`) (bool)<br>`format` → `y_axis_format` (d3format) | — |
-| `bar` | 막대 | `echarts_timeseries_bar` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metrics` → `metrics` (metrics, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`horizontal` → `orientation` (true → `"horizontal"`, false → `"vertical"`) (bool, 생략 시 `false`)<br>`format` → `y_axis_format` (d3format) | — |
-| `big_number` | 숫자와 추이 | `big_number` | `metric` → `metric` (metric, 필수)<br>`time_column` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain, 생략 시 `"P1D"`)<br>`compare_lag` → `compare_lag` (int, 생략 시 `1`)<br>`compare_suffix` → `compare_suffix` (string)<br>`format` → `y_axis_format` (d3format) | `show_trend_line: true`, `aggregation: "LAST_VALUE"` |
-| `big_number_total` | 숫자 | `big_number_total` | `metric` → `metric` (metric, 필수)<br>`subtitle` → `subtitle` (string)<br>`format` → `y_axis_format` (d3format) | — |
-| `box_plot` | 상자 수염 | `box_plot` | `groupby` → `groupby` (columns, 생략 시 `[]`)<br>`columns` → `columns` (columns, 필수)<br>`metrics` → `metrics` (metrics, 필수)<br>`whiskers` → `whiskerOptions` (tukey → `"Tukey"`, min_max → `"Min/max (no outliers)"`, p2_98 → `"2/98 percentiles"`, p9_91 → `"9/91 percentiles"`) (enum, 생략 시 `"tukey"`)<br>`format` → `number_format` (d3format) | — |
-| `bubble` | 버블 | `bubble_v2` | `entity` → `entity` (column, 필수)<br>`series` → `series` (column)<br>`x` → `x` (metric, 필수)<br>`y` → `y` (metric, 필수)<br>`size` → `size` (metric, 필수) | — |
-| `funnel` | 퍼널 | `funnel` | `groupby` → `groupby` (columns, 필수)<br>`metric` → `metric` (metric, 필수)<br>`format` → `number_format` (d3format) | `sort_by_metric: true` |
-| `gauge` | 게이지 | `gauge_chart` | `metric` → `metric` (metric, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`min_value` → `min_val` (int)<br>`max_value` → `max_val` (int)<br>`format` → `number_format` (d3format) | — |
-| `heatmap` | 히트맵 | `heatmap_v2` | `x` → `x_axis` (column, 필수)<br>`y` → `groupby` (column, 필수)<br>`metric` → `metric` (metric, 필수)<br>`format` → `y_axis_format` (d3format) | — |
-| `histogram` | 히스토그램 | `histogram_v2` | `column` → `column` (column, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`bins` → `bins` (int) | — |
-| `line` | 선 | `echarts_timeseries_line` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metrics` → `metrics` (metrics, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`format` → `y_axis_format` (d3format) | — |
-| `mixed` | 혼합(두 묶음) | `mixed_timeseries` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metrics` → `metrics` (metrics, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`series_type` → `seriesType` (`line`, `bar`, `scatter`, `smooth`) (enum, 생략 시 `"line"`)<br>`metrics_b` → `metrics_b` (metrics, 필수)<br>`groupby_b` → `groupby_b` (columns, 생략 시 `[]`)<br>`series_type_b` → `seriesTypeB` (`line`, `bar`, `scatter`, `smooth`) (enum, 생략 시 `"bar"`)<br>`secondary_axis` → `yAxisIndexB` (true → `1`, false → `0`) (bool)<br>`format` → `y_axis_format` (d3format)<br>`format_b` → `y_axis_format_secondary` (d3format) | — |
-| `pie` | 원 | `pie` | `groupby` → `groupby` (columns, 필수)<br>`metric` → `metric` (metric, 필수)<br>`donut` → `donut` (bool)<br>`format` → `number_format` (d3format) | — |
-| `pivot_table` | 피벗 테이블 | `pivot_table_v2` | `rows` → `groupbyRows` (columns, 생략 시 `[]`)<br>`columns` → `groupbyColumns` (columns, 생략 시 `[]`)<br>`metrics` → `metrics` (metrics, 필수)<br>`aggregate` → `aggregateFunction` (`Sum`, `Average`, `Median`, `Minimum`, `Maximum`, `Count`) (enum, 생략 시 `"Sum"`)<br>`format` → `valueFormat` (d3format) | `metricsLayout: "COLUMNS"` |
-| `radar` | 레이더 | `radar` | `groupby` → `groupby` (columns, 필수)<br>`metrics` → `metrics` (metrics, 필수)<br>`format` → `number_format` (d3format) | — |
-| `sankey` | 생키 | `sankey_v2` | `source` → `source` (column, 필수)<br>`target` → `target` (column, 필수)<br>`metric` → `metric` (metric, 필수) | — |
-| `scatter` | 시계열 산점 | `echarts_timeseries_scatter` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metrics` → `metrics` (metrics, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`format` → `y_axis_format` (d3format) | — |
-| `sunburst` | 선버스트 | `sunburst_v2` | `columns` → `columns` (columns, 필수)<br>`metric` → `metric` (metric, 필수)<br>`format` → `number_format` (d3format) | — |
-| `table` | 표 | `table` | `columns` → 설명 참고 (columns)<br>`groupby` → 설명 참고 (columns)<br>`metrics` → 설명 참고 (metrics)<br>`order_by` → 설명 참고 (order_by)<br>`row_limit` → 설명 참고 (int)<br>`search` → 설명 참고 (bool)<br>`format` → 쓰지 않음 (d3format)<br>원본 행 모드(`columns`): `columns` → `all_columns`, `order_by: [[c, asc\|desc]]` → `order_by_cols: ["[\"c\", true\|false]"]`(JSON 문자열, asc=true), `query_mode: "raw"`. 집계 모드(`metrics`): `groupby` → `groupby`(생략 시 `[]`), `metrics` → `metrics`, `order_by`는 지표면 `timeseries_limit_metric` + `order_desc`(첫 지표 항목만), 열이면 `order_by_cols`, `query_mode: "aggregate"`. 공통: `row_limit` → `row_limit`, `search` → `include_search`, `table_timestamp_format: "%Y-%m-%d"`. | — |
-| `treemap` | 트리맵 | `treemap_v2` | `groupby` → `groupby` (columns, 필수)<br>`metric` → `metric` (metric, 필수)<br>`format` → `number_format` (d3format) | — |
-| `waterfall` | 폭포 | `waterfall` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metric` → `metric` (metric, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`show_value` → `show_value` (bool)<br>`format` → `y_axis_format` (d3format) | — |
-| `word_cloud` | 워드 클라우드 | `word_cloud` | `series` → `series` (column, 필수)<br>`metric` → `metric` (metric, 필수)<br>`rotation` → `rotation` (`square`, `flat`, `random`) (enum) | — |
+| 축약 `viz` | 이름 | `viz_type` | 축약 필드 → 파라미터 | 함께 쓰는 파라미터 | 한 쿼리의 열·지표(중복 라벨 검사) |
+|---|---|---|---|---|---|
+| `area` | 영역 | `echarts_area` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metrics` → `metrics` (metrics, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`stacked` → `stack` (true → `"Stack"`, false → `null`) (bool)<br>`format` → `y_axis_format` (d3format) | — | `x`·`metrics`·`groupby` |
+| `bar` | 막대 | `echarts_timeseries_bar` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metrics` → `metrics` (metrics, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`horizontal` → `orientation` (true → `"horizontal"`, false → `"vertical"`) (bool, 생략 시 `false`)<br>`format` → `y_axis_format` (d3format) | — | `x`·`metrics`·`groupby` |
+| `big_number` | 숫자와 추이 | `big_number` | `metric` → `metric` (metric, 필수)<br>`time_column` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain, 생략 시 `"P1D"`)<br>`compare_lag` → `compare_lag` (int, 생략 시 `1`)<br>`compare_suffix` → `compare_suffix` (string)<br>`format` → `y_axis_format` (d3format) | `show_trend_line: true`, `aggregation: "LAST_VALUE"` | `metric`·`time_column` |
+| `big_number_total` | 숫자 | `big_number_total` | `metric` → `metric` (metric, 필수)<br>`subtitle` → `subtitle` (string)<br>`format` → `y_axis_format` (d3format) | — | `metric` |
+| `box_plot` | 상자 수염 | `box_plot` | `groupby` → `groupby` (columns, 생략 시 `[]`)<br>`columns` → `columns` (columns, 필수)<br>`metrics` → `metrics` (metrics, 필수)<br>`whiskers` → `whiskerOptions` (tukey → `"Tukey"`, min_max → `"Min/max (no outliers)"`, p2_98 → `"2/98 percentiles"`, p9_91 → `"9/91 percentiles"`) (enum, 생략 시 `"tukey"`)<br>`format` → `number_format` (d3format) | — | `groupby`·`columns`·`metrics` |
+| `bubble` | 버블 | `bubble_v2` | `entity` → `entity` (column, 필수)<br>`series` → `series` (column)<br>`x` → `x` (metric, 필수)<br>`y` → `y` (metric, 필수)<br>`size` → `size` (metric, 필수) | — | `entity`·`series`·`x`·`y`·`size` |
+| `funnel` | 퍼널 | `funnel` | `groupby` → `groupby` (columns, 필수)<br>`metric` → `metric` (metric, 필수)<br>`format` → `number_format` (d3format) | `sort_by_metric: true` | `groupby`·`metric`<br>같은 열은 합침 |
+| `gauge` | 게이지 | `gauge_chart` | `metric` → `metric` (metric, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`min_value` → `min_val` (int)<br>`max_value` → `max_val` (int)<br>`format` → `number_format` (d3format) | — | `metric`·`groupby`<br>같은 열은 합침 |
+| `heatmap` | 히트맵 | `heatmap_v2` | `x` → `x_axis` (column, 필수)<br>`y` → `groupby` (column, 필수)<br>`metric` → `metric` (metric, 필수)<br>`format` → `y_axis_format` (d3format) | — | `x`·`y`·`metric` |
+| `histogram` | 히스토그램 | `histogram_v2` | `column` → `column` (column, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`bins` → `bins` (int) | — | `column`·`groupby` |
+| `line` | 선 | `echarts_timeseries_line` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metrics` → `metrics` (metrics, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`format` → `y_axis_format` (d3format) | — | `x`·`metrics`·`groupby` |
+| `mixed` | 혼합(두 묶음) | `mixed_timeseries` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metrics` → `metrics` (metrics, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`series_type` → `seriesType` (`line`, `bar`, `scatter`, `smooth`) (enum, 생략 시 `"line"`)<br>`metrics_b` → `metrics_b` (metrics, 필수)<br>`groupby_b` → `groupby_b` (columns, 생략 시 `[]`)<br>`series_type_b` → `seriesTypeB` (`line`, `bar`, `scatter`, `smooth`) (enum, 생략 시 `"bar"`)<br>`secondary_axis` → `yAxisIndexB` (true → `1`, false → `0`) (bool)<br>`format` → `y_axis_format` (d3format)<br>`format_b` → `y_axis_format_secondary` (d3format) | — | `x`·`groupby`·`metrics`<br>`x`·`groupby_b`·`metrics_b` |
+| `pie` | 원 | `pie` | `groupby` → `groupby` (columns, 필수)<br>`metric` → `metric` (metric, 필수)<br>`donut` → `donut` (bool)<br>`format` → `number_format` (d3format) | — | `groupby`·`metric`<br>같은 열은 합침 |
+| `pivot_table` | 피벗 테이블 | `pivot_table_v2` | `rows` → `groupbyRows` (columns, 생략 시 `[]`)<br>`columns` → `groupbyColumns` (columns, 생략 시 `[]`)<br>`metrics` → `metrics` (metrics, 필수)<br>`aggregate` → `aggregateFunction` (`Sum`, `Average`, `Median`, `Minimum`, `Maximum`, `Count`) (enum, 생략 시 `"Sum"`)<br>`format` → `valueFormat` (d3format) | `metricsLayout: "COLUMNS"` | `rows`·`columns`·`metrics`<br>같은 열은 합침 |
+| `radar` | 레이더 | `radar` | `groupby` → `groupby` (columns, 필수)<br>`metrics` → `metrics` (metrics, 필수)<br>`format` → `number_format` (d3format) | — | `groupby`·`metrics`<br>같은 열은 합침 |
+| `sankey` | 생키 | `sankey_v2` | `source` → `source` (column, 필수)<br>`target` → `target` (column, 필수)<br>`metric` → `metric` (metric, 필수) | — | `source`·`target`·`metric` |
+| `scatter` | 시계열 산점 | `echarts_timeseries_scatter` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metrics` → `metrics` (metrics, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`format` → `y_axis_format` (d3format) | — | `x`·`metrics`·`groupby` |
+| `sunburst` | 선버스트 | `sunburst_v2` | `columns` → `columns` (columns, 필수)<br>`metric` → `metric` (metric, 필수)<br>`format` → `number_format` (d3format) | — | `columns`·`metric`<br>같은 열은 합침 |
+| `table` | 표 | `table` | `columns` → 설명 참고 (columns)<br>`groupby` → 설명 참고 (columns)<br>`metrics` → 설명 참고 (metrics)<br>`order_by` → 설명 참고 (order_by)<br>`row_limit` → 설명 참고 (int)<br>`search` → 설명 참고 (bool)<br>`format` → 쓰지 않음 (d3format)<br>원본 행 모드(`columns`): `columns` → `all_columns`, `order_by: [[c, asc\|desc]]` → `order_by_cols: ["[\"c\", true\|false]"]`(JSON 문자열, asc=true), `query_mode: "raw"`. 집계 모드(`metrics`): `groupby` → `groupby`(생략 시 `[]`), `metrics` → `metrics`, `order_by`는 지표면 `timeseries_limit_metric` + `order_desc`(첫 지표 항목만), 열이면 `order_by_cols`, `query_mode: "aggregate"`. 공통: `row_limit` → `row_limit`, `search` → `include_search`, `table_timestamp_format: "%Y-%m-%d"`. | — | `columns`·`groupby`·`metrics`<br>같은 열은 합침 |
+| `treemap` | 트리맵 | `treemap_v2` | `groupby` → `groupby` (columns, 필수)<br>`metric` → `metric` (metric, 필수)<br>`format` → `number_format` (d3format) | — | `groupby`·`metric`<br>같은 열은 합침 |
+| `waterfall` | 폭포 | `waterfall` | `x` → `x_axis` (column, 필수)<br>`time_grain` → `time_grain_sqla` (time_grain)<br>`metric` → `metric` (metric, 필수)<br>`groupby` → `groupby` (columns, 생략 시 `[]`)<br>`show_value` → `show_value` (bool)<br>`format` → `y_axis_format` (d3format) | — | `x`·`metric`·`groupby` |
+| `word_cloud` | 워드 클라우드 | `word_cloud` | `series` → `series` (column, 필수)<br>`metric` → `metric` (metric, 필수)<br>`rotation` → `rotation` (`square`, `flat`, `random`) (enum) | — | `series`·`metric` |
 <!-- 생성 끝: chart-types -->
 
 ### 유형 추가
@@ -85,6 +85,24 @@
 - `bool` 필드에 `values: { true: a, false: b }`를 주면 참·거짓을 그 값으로 바꿔 쓴다.
 - 필드 하나가 파라미터 하나로 대응되지 않으면 `hook: <모듈>:<함수>`로 함수를 지정한다(`dashkit/charts/hooks.py`의 `table`).
 - 스키마(`contracts/dashboard.schema.json`)의 `viz` 허용 값과 유형별 정의 `v_<viz>`는 파일에 없고 로딩 때 합성한다(`dashkit.charts.extend_schema`).
+- `query`는 Superset 화면이 그 유형으로 보내는 쿼리의 모양이다. 위 표의 마지막 열이 이것이고, `make check`의 **중복 라벨 검사**가 쓴다(규칙과 실측은 `superset-notes.md` 14절).
+  - `groups: [[필드, …], …]`: 한 쿼리에 함께 들어가는 필드. 생략하면 `kind`가 `column`·`columns`·`metric`·`metrics`인 필드 전부가 쿼리 하나다. 쿼리를 둘 보내는 유형(`mixed`)만 쓴다.
+  - `merge_columns: true`: 화면이 같은 열을 하나로 합쳐 보내는 유형(같은 열을 두 번 넣어도 오류가 나지 않는다). 생략하면 `false`.
+  - 새 유형을 더할 때는 `x`와 `groupby`에 같은 열을 넣은 차트, `groupby`에 같은 열을 두 번 넣은 차트를 테스트 스택에서 그려 보고 정한다(14절의 방법).
+
+#### 중복 라벨 검사
+
+한 쿼리 안에서 열·지표의 **Superset 라벨**이 겹치면 Superset이 차트 자리에 `Duplicate column/metric labels` 오류를 그린다. `make check`(그리고 같은 검사를 쓰는 Studio·관리 서비스의 저장)는 이것을 `dashboard.yaml:<차트 경로>.<필드>: 열·지표 라벨 '<라벨>'가 한 쿼리에서 겹침(<겹친 자리들>). Superset이 차트 자리에 "Duplicate column/metric labels" 오류를 냄`으로 보고한다. 경로는 겹친 자리 가운데 마지막이다.
+
+| 항목 | Superset 라벨 |
+|---|---|
+| 열(`column`·`columns`) | 열 이름 그대로. 데이터셋 `labels`의 표시 이름은 쓰지 않는다 |
+| 데이터셋 지표 이름 | 데이터셋 `labels`에 표시 이름이 있으면 **표시 이름**, 없으면 이름 |
+| `{ sql, label }` 지표 | `label` |
+
+- 화면이 먼저 정리하는 것은 겹침이 아니다: 같은 지표(이름이 같거나 adhoc `label`이 같음)는 하나만 보낸다. `merge_columns` 유형은 같은 열도 하나만 보낸다.
+- 예: `bar`의 `x: region`, `groupby: [region]`(열 겹침), `metrics: [{ sql: "COUNT(*)", label: region }]`(지표 라벨이 열 이름), 표시 이름이 같은 두 지표 `metrics: [a, b]`(`labels: { a: 건수, b: 건수 }`).
+- 차트의 `params`가 축약 필드의 파라미터를 덮어쓰면 그 값으로 본다. 원본(`viz_type`) 차트는 `viz_type`이 레지스트리 유형 하나와 같고 그 유형에 `hook`이 없을 때만 그 유형의 파라미터 이름으로 `params`를 읽어 본다(예: `echarts_timeseries_bar`, `pie`). 그 밖의 원본 차트는 보지 않는다.
 
 `time_grain`은 x 열이 date/timestamp일 때만 의미가 있다. 범주 열(text)이면 쓰지 않는다(쓰면 `make check`가 경고하지 않고 Superset이 무시한다).
 

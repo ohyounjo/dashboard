@@ -325,3 +325,52 @@ metadata:
 - **TimeRange를 넓힌다면 함께 할 것:** `superset/init_guest_role.py`의 `REQUIRED`에 `("can_time_range", "Api")`를 더하고 5절의 "권한 3개"를 4개로, 12-3절과 `reference/enhancement-report.md` 7절 첫 항목을 고친다(권한 이름은 `can_read on TimeRange`가 아니다). `tests/test_api.py`에 guest의 `GET /api/v1/time_range/` 200, `GET /api/v1/form_data/` 403(같은 뷰의 다른 메서드가 닫혀 있음)을 더한다.
 - **explore_json을 넓힌다면 함께 할 것:** (1) "guest가 생성 SQL(스키마·뷰 이름, 지표식)을 볼 수 있다"를 받아들이는 결정을 이 문서 5절에 남긴다. dash 뷰 이름과 지표식에 숨길 정보가 없어야 한다. (2) `init_guest_role.py`에 권한을 더하고 `tests/test_api.py`에 `explore_json` 경계(다른 데이터셋·다른 대시보드 차트 403, 서브쿼리 400, `?csv=true` 403)를 `chart/data`와 같은 꼴로 더한다. (3) Superset을 올릴 때 이 경로가 사라지거나 판정이 바뀌는지 다시 잰다. 넓히지 않는다면 지금처럼 세 유형을 갤러리에서 빼 두고, 관계도는 `graph_chart`(10-2절)를 쓴다.
 - 확인하지 않은 것: `DASHBOARD_RBAC`·`GLOBAL_ASYNC_QUERIES`·`ENABLE_TEMPLATE_PROCESSING`을 켠 구성, `rls_rules`가 있는 토큰, `deck_*`·`mapbox` 등 다른 예전 viz 유형의 화면.
+
+## 14. 중복 열·지표 라벨("Duplicate column/metric labels")
+
+- 확인일: 2026-11-21. 방법: `projects/chart-gallery`의 스키마·데이터를 복사한 임시 프로젝트(차트 85개: 축약 81, 원본 4)를 테스트 스택에 적용하고, 헤드리스 Chromium으로 **관리자 대시보드 화면**을 열어 차트마다 화면이 보낸 `POST /api/v1/chart/data`의 요청(쿼리의 `columns`·`metrics`)과 응답(상태, 오류 문구)을 모았다. 그래서 아래 결과에는 화면(프론트엔드)이 쿼리를 만들 때 하는 정리가 들어 있다. 데이터셋은 `harvests`, 지표 `crate_total`·`crate_again`의 표시 이름(`labels`)은 둘 다 "상자 수", 지표 `fruit_cnt`의 표시 이름은 "fruit", 열 `orchard`의 표시 이름도 "상자 수", 지표 이름 `grade`는 열 이름과 같게 두었다.
+- 오류는 응답 400 `{"message": "Duplicate column/metric labels: \"valley\". Please make sure all columns and metrics have a unique label."}`이고, 화면은 차트 자리에 이 문구를 그린다. 쿼리 하나라도 오류면 차트 전체가 안 그려진다(`mixed`).
+
+### 14-1. 소스 근거 [소스]
+
+- `superset/common/query_object.py:279-305` `QueryObject.validate()`가 `_validate_no_have_duplicate_labels()`를 부른다: `all_labels = self.metric_names + self.column_names`에 같은 값이 있으면 `QueryObjectValidationError("Duplicate column/metric labels: …")`. 중복 찾기는 `utils/core.py:1884` `find_duplicates`(Counter).
+- `metric_names`(`query_object.py:262-271`)는 `get_metric_names(self.metrics, self.datasource.verbose_map)`이다. `utils/core.py:1297` `get_metric_name`: adhoc 지표는 `label`(없으면 SQL 식, SIMPLE은 `AGG(열)`), **문자열(데이터셋 지표 이름)은 `verbose_map.get(이름, 이름)`**, 곧 표시 이름(`verbose_name`)으로 바뀐다. `connectors/sqla/models.py:428-439` `verbose_map`은 지표, 그다음 열의 `verbose_name or 이름`이다.
+- `column_names`(`query_object.py:273-277`)는 `get_column_names(self.columns)`로 **`verbose_map` 없이** 부른다(`utils/core.py:1269` `get_column_name`: 문자열은 이름 그대로, adhoc 열은 `label` 또는 식). 그래서 열은 표시 이름이 아니라 열 이름으로 비교된다.
+- 이 검증은 조회 경로에서 항상 돈다: `common/query_context_processor.py:89`(`get_df_payload`, 캐시 키 만들기 전), `:532`(`raise_for_access`). 사용자 종류와 무관하므로 guest 임베드 화면도 같다(관리자 화면으로 실측했다).
+- x축 유형에서 화면은 `x_axis`를 쿼리 `columns`의 맨 앞에 `{columnType: "BASE_AXIS", label: <열 이름>, sqlExpression: <열 이름>}`으로 넣는다(시간 열이면 `timeGrain`도). 라벨이 열 이름이라 `groupby`의 같은 열과 겹친다. [실측] 요청 본문. 시간 단위(`time_grain`) 유무는 상관없다.
+- 참고: `superset/mcp_service/chart/schemas.py:1049,1152`에도 같은 문구의 사전 검사가 있다(MCP 서비스용, dashkit은 쓰지 않음).
+
+### 14-2. 조합별 결과 [실측]
+
+| 조합 | 유형 | 결과 | 화면이 보낸 쿼리 |
+|---|---|---|---|
+| `x`와 `groupby`가 같은 열 | `bar`·`line`·`area`·`scatter`·`waterfall`, `mixed`(첫째·둘째 묶음 각각) | **오류** | `columns: [x(BASE_AXIS), groupby…]` |
+| `groupby` 여럿 가운데 하나가 `x`와 같음(`x: valley, groupby: [fruit, valley]`) | `bar` | **오류** | |
+| 시간 `x`와 `groupby`에 같은 시간 열(`time_grain` 있음·없음) | `line`·`scatter` | **오류** | |
+| `groupby`에 같은 열 두 번 | `bar`·`line`·`area`·`scatter`·`waterfall`·`mixed`·`histogram`·`box_plot` | **오류** | 두 번 그대로 보낸다 |
+| `groupby`(·`columns`)에 같은 열 두 번 | `pie`·`funnel`·`treemap`·`sunburst`·`radar`·`gauge`·`pivot_table`(행 둘, 행과 열에 같은 열)·`table`(원본 행 `columns`, 집계 `groupby`) | 통과 | 화면이 하나로 합쳐 보낸다 |
+| 열 필드 둘에 같은 열 | `heatmap`(`x`=`y`), `sankey`(`source`=`target`), `bubble`(`entity`=`series`), `histogram`(`column`이 `groupby`에도), `box_plot`(`columns`와 `groupby`) | **오류** | |
+| 지표 라벨이 같은 쿼리의 열 이름과 같음(`{sql, label: <열>}`) | 열이 있는 축약 유형 전부(`bar`·`line`·`waterfall`·`mixed`의 둘째 묶음·`big_number`의 시간 열·`pie`·`funnel`·`treemap`·`sunburst`·`radar`·`gauge`·`pivot_table`·`table`·`heatmap`·`sankey`·`bubble`·`box_plot`·`word_cloud`) | **오류** | 합치는 유형도 열과 지표 사이는 합치지 않는다 |
+| 데이터셋 지표의 **표시 이름**이 열 이름과 같음(`fruit_cnt` → "fruit", `groupby: [fruit]`) | `bar` | **오류** | 지표는 이름(`fruit_cnt`)으로 가지만 서버가 표시 이름으로 바꿔 비교 |
+| 지표 이름이 열 이름과 같음(지표 `grade`, `x: grade`) | `bar` | **오류** | |
+| 열의 표시 이름이 지표 표시 이름과 같음(`orchard` → "상자 수", 지표 "상자 수") | `bar` | 통과 | 열은 표시 이름으로 비교하지 않는다 |
+| 이름이 다른 두 지표의 표시 이름이 같음(`crate_total`, `crate_again`) | `bar`·`radar` | **오류** | |
+| adhoc 지표 `label`이 다른 지표의 표시 이름과 같음(`{label: 상자 수}`, `crate_total`) | `bar` | **오류** | |
+| 같은 지표 두 번(`[crate_total, crate_total]`, `bubble`의 `x`=`y`=`size`) | `bar`·`mixed`·`radar`·`pivot_table`·`table`·`box_plot`·`bubble` | 통과 | 화면이 하나로 합쳐 보낸다 |
+| adhoc 지표 둘의 `label`이 같음(식은 다름) | `bar` | 통과 | 화면이 **라벨로** 합쳐 첫째만 보낸다(둘째 지표는 말없이 빠진다) |
+| adhoc 지표 `label`이 데이터셋 지표 이름과 같음(`{label: crate_total}`, `crate_total`) | `bar` | 통과 | 위와 같이 하나만 보낸다 |
+| `mixed`의 두 묶음에 같은 지표·같은 `groupby` | `mixed` | 통과 | 묶음마다 쿼리가 따로 간다 |
+| `table`의 `order_by`에 같은 열 두 번 | `table` | 통과 | 정렬은 라벨이 아니다 |
+| 열이 없는 쿼리의 adhoc 지표 라벨(`big_number_total`의 `{label: fruit}`) | `big_number_total` | 통과 | |
+| 원본 `viz_type: echarts_timeseries_bar`의 `x_axis`=`groupby`, `viz_type: pie`의 지표 라벨=열 | 원본 | **오류** | 축약과 같다 |
+| 원본 `viz_type: pie`의 `groupby`에 같은 열 두 번 | 원본 | 통과 | 축약과 같다 |
+| 축약 `bar`에 `params: { groupby: [<x와 같은 열>] }` | 축약 + params | **오류** | params가 덮어쓴 값으로 간다 |
+
+### 14-3. 검사 규칙(`make check`, `dashkit/charts`의 `label_conflicts`)
+
+1. 차트의 열·지표 필드(레지스트리 `kind`가 `column`·`columns`·`metric`·`metrics`)를 유형 파일의 `query.groups`대로 쿼리별로 묶는다. 선언이 없으면 그 필드 전부가 쿼리 하나다. `mixed`만 `[[x, groupby, metrics], [x, groupby_b, metrics_b]]`이다. `order_by`는 넣지 않는다.
+2. 화면의 정리를 따라 지운다: 같은 지표(문자열은 이름, adhoc은 `label`이 같음)는 첫째만 남긴다. `query.merge_columns: true` 유형(`pie`·`funnel`·`treemap`·`sunburst`·`radar`·`gauge`·`pivot_table`·`table`)은 같은 열도 첫째만 남긴다.
+3. 남은 것의 Superset 라벨을 구한다: 열은 이름, 데이터셋 지표는 `datasets.<키>.labels`의 표시 이름(없으면 이름), adhoc 지표는 `label`. 한 쿼리 안에서 겹치면 오류다(겹치는 라벨마다 하나, 경로는 마지막 자리).
+4. 값은 축약 필드에서 읽되, 차트 `params`가 그 필드의 파라미터를 덮어쓰면 params 값을 쓴다(hook 유형 `table`은 필드 값만). 원본 차트는 `viz_type`이 레지스트리 유형 하나와 같고 hook이 없을 때만 그 유형의 파라미터 이름으로 읽는다. 그 밖(`graph_chart` 등, 원본 `table`)은 쿼리 모양을 모르므로 보지 않는다.
+5. [실측] 위 85개 차트에서 검사 결과(잡음/안 잡음)와 Superset 응답(400/200)이 모두 같았다. 예시 프로젝트 세 개는 고치지 않고 통과한다.
+- 잡지 않는 것: 라벨이 같은 adhoc 지표 둘(오류는 없지만 둘째가 빠진다). 원본 `table`과 레지스트리에 없는 원본 유형.

@@ -623,6 +623,10 @@ def _check_dashboard_refs(project: Project) -> list[str]:
             for mpath, name in _metric_names(chart):
                 if name not in ds["metrics"]:
                     errors.append(f"{f}:{fmt_path(cpath + mpath)}: 데이터셋 '{chart['dataset']}'에 지표 '{name}'이 없음")
+            # 한 쿼리 안의 열·지표 라벨 중복(쿼리 모양은 레지스트리의 query 선언, superset-notes.md 14절)
+            metric_labels = {m: label for m, label in (ds.get("labels") or {}).items() if m in ds["metrics"]}
+            for lpath, reason in chart_registry.label_conflicts(chart, metric_labels):
+                errors.append(f"{f}:{fmt_path(cpath + lpath)}: {reason}")
 
         errors += _check_layout(f, dpath, d, keys_here)
         errors += _check_filters(f, dpath, d, datasets, keys_here)

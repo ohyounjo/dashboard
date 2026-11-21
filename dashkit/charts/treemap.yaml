@@ -5,3 +5,5 @@ fields:
   groupby: { kind: columns, required: true, min_items: 1 }
   metric: { kind: metric, required: true }
   format: { kind: d3format, param: number_format }
+# 화면이 같은 열을 하나로 합쳐 보낸다(겹쳐도 오류 아님). 열과 지표 라벨이 겹치면 오류(contracts/superset-notes.md 14절)
+query: { merge_columns: true }
