@@ -30,6 +30,9 @@ def test_every_type_file_is_registered_and_valid():
 def test_chart_params_has_no_per_type_branch():
     """8절 1단계 완료 조건: chart_params에 유형별 분기가 없다."""
     source = inspect.getsource(bundle.chart_params) + inspect.getsource(charts.build_params)
+    # 중복 라벨 검사도 유형 이름이 아니라 kind와 유형 파일의 query 선언으로 판단한다
+    for fn in (charts.label_conflicts, charts._label_values, charts._raw_types, charts._parse_query):
+        source += inspect.getsource(fn)
     for viz in charts.registry():
         assert f'"{viz}"' not in source and f"'{viz}'" not in source
 
@@ -63,6 +66,13 @@ def test_new_type_needs_only_one_file(tmp_path):
     ({"viz": "zz_other", "viz_type": "x", "label": "x"}, "파일 이름"),
     ({"viz": "zz_bad", "label": "x"}, "viz_type"),
     ({"viz": "zz_bad", "viz_type": "x", "label": "x", "hook": "dashkit.charts.hooks:missing"}, "hook"),
+    ({"viz": "zz_bad", "viz_type": "x", "label": "x", "query": {"oops": 1}}, "query: 알 수 없는 키"),
+    ({"viz": "zz_bad", "viz_type": "x", "label": "x", "query": {"merge_columns": "yes"}}, "merge_columns"),
+    ({"viz": "zz_bad", "viz_type": "x", "label": "x", "fields": {"a": {"kind": "columns"}}, "query": {"groups": []}},
+     "query.groups"),
+    ({"viz": "zz_bad", "viz_type": "x", "label": "x", "fields": {"a": {"kind": "string"}}, "query": {"groups": [["a"]]}},
+     "'a'은 kind가"),
+    ({"viz": "zz_bad", "viz_type": "x", "label": "x", "query": {"groups": [["missing"]]}}, "'missing'은 kind가"),
 ])
 def test_bad_type_file_is_rejected(tmp_path, doc, reason):
     with pytest.raises(charts.RegistryError) as exc:
@@ -89,6 +99,36 @@ def test_refs_follow_kinds():
     chart = {"viz": "big_number", "metric": "m", "time_column": "d"}
     assert charts.metric_refs(chart) == [(["metric"], "m")]
     assert charts.column_refs(chart) == [(["time_column"], "d")]
+
+
+def test_query_declaration():
+    """query 선언: 생략하면 라벨 kind(column·columns·metric·metrics) 필드 전부가 쿼리 하나, groups로 나눌 수 있다."""
+    types = charts.registry()
+    assert types["bar"].query_groups == (("x", "metrics", "groupby"),) and not types["bar"].merge_columns
+    assert types["table"].query_groups == (("columns", "groupby", "metrics"),) and types["table"].merge_columns
+    assert types["mixed"].query_groups == (("x", "groupby", "metrics"), ("x", "groupby_b", "metrics_b"))
+    assert types["big_number_total"].query_groups == (("metric",),)
+    for t in types.values():
+        assert t.query_groups, t.viz
+
+
+def test_label_conflicts_follow_declaration(tmp_path, monkeypatch):
+    """새 유형 파일의 query 선언만으로 검사가 따라온다(유형 이름을 보지 않는다)."""
+    doc = {"viz": "zz_two", "viz_type": "zz_native", "label": "견본",
+           "fields": {"a": {"kind": "column"}, "b": {"kind": "columns"}, "m": {"kind": "metric"}, "n": {"kind": "metric"}}}
+    # 모든 라벨이 c: a, b[0], b[1], 지표 m(adhoc 라벨 c), 지표 n(표시 이름 c)
+    chart = {"viz": "zz_two", "a": "c", "b": ["c", "c"], "m": {"sql": "1", "label": "c"}, "n": "k"}
+
+    def conflicts(query, target=chart):
+        types = charts.load_registry(write_type(tmp_path, "zz_two", {**doc, **({"query": query} if query else {})}))
+        monkeypatch.setattr(charts, "registry", lambda: types)
+        return [path for path, _reason in charts.label_conflicts(target, {"k": "c"})]
+
+    assert conflicts(None) == [["n"]]                                    # 쿼리 하나: 마지막 자리 하나로 보고
+    assert conflicts({"groups": [["a", "m"], ["b", "n"]]}) == [["m"], ["n"]]   # 쿼리마다 따로
+    assert conflicts({"merge_columns": True}) == [["n"]]                 # b[1]은 합쳐져도 a·m·n이 겹침
+    assert conflicts({"merge_columns": True}, {"viz": "zz_two", "b": ["c", "c"]}) == []
+    assert conflicts(None, {"viz": "zz_two", "b": ["c", "c"]}) == [["b", 1]]
 
 
 def test_generated_docs_are_current():

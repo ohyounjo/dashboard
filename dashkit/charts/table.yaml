@@ -22,3 +22,5 @@ notes: >-
   `query_mode: "raw"`. 집계 모드(`metrics`): `groupby` → `groupby`(생략 시 `[]`), `metrics` → `metrics`,
   `order_by`는 지표면 `timeseries_limit_metric` + `order_desc`(첫 지표 항목만), 열이면 `order_by_cols`, `query_mode: "aggregate"`.
   공통: `row_limit` → `row_limit`, `search` → `include_search`, `table_timestamp_format: "%Y-%m-%d"`.
+# 화면이 같은 열을 하나로 합쳐 보낸다(겹쳐도 오류 아님). 열과 지표 라벨이 겹치면 오류(contracts/superset-notes.md 14절)
+query: { merge_columns: true }

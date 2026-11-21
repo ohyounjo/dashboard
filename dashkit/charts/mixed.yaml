@@ -13,3 +13,6 @@ fields:
   secondary_axis: { kind: bool, param: yAxisIndexB, values: { true: 1, false: 0 }, description: 둘째 묶음을 오른쪽 축에 그릴지 }
   format: { kind: d3format, param: y_axis_format }
   format_b: { kind: d3format, param: y_axis_format_secondary }
+# 묶음마다 쿼리가 따로 간다. 한 쿼리 안에서만 라벨이 겹치면 안 된다(contracts/superset-notes.md 14절)
+query:
+  groups: [[x, groupby, metrics], [x, groupby_b, metrics_b]]

@@ -4,7 +4,8 @@
 1. dashboard.schema.json의 viz enum과 유형별 정의(extend_schema, 로딩 때 합성)
 2. Superset params(build_params)
 3. 열·지표 참조 수집(column_refs, metric_refs)
-4. contracts/chart-shorthand.md의 유형별 대응표(shorthand_table)
+4. 한 쿼리 안 열·지표 라벨 중복 검사(label_conflicts, contracts/superset-notes.md 14절)
+5. contracts/chart-shorthand.md의 유형별 대응표(shorthand_table)
 
 유형 파일 형식:
 
@@ -17,6 +18,10 @@
     hook: <모듈>:<함수>           # 단순 대응이 안 될 때. 함수(chart) -> params가 필드 대응을 대신한다
     schema: { … }                # 유형 정의에 더할 JSON Schema 조각(예: oneOf)
     notes: <대응표에 덧붙일 설명>
+    query:                       # Superset 화면이 이 유형으로 보내는 쿼리의 모양(중복 라벨 검사가 쓴다)
+      groups: [[<필드>, …], …]   # 한 쿼리에 함께 들어가는 열·지표 필드. 생략하면 kind가 column·columns·metric·metrics인
+                                 # 필드 전부가 쿼리 하나
+      merge_columns: <bool>      # true면 화면이 같은 열을 하나로 합쳐 보낸다(겹쳐도 오류가 아님). 기본 false
 
 params에 쓰는 순서: viz_type → 필드(d3format 제외, 선언 순서) 또는 hook 결과 → defaults → d3format 필드 → where.
 dashboard.yaml의 params는 호출하는 쪽(bundle.chart_params)이 마지막에 덮어쓴다.
@@ -56,7 +61,10 @@ METRIC_KINDS = ("metric", "metrics")
 # 모든 차트에 공통인 필드(유형 파일의 fields에 쓸 수 없다)
 COMMON_FIELDS = ("key", "title", "dataset", "viz", "params", "description", "where")
 _FIELD_KEYS = {"kind", "required", "param", "default", "values", "emit", "min", "max", "min_items", "description"}
-_TYPE_KEYS = {"viz", "viz_type", "label", "fields", "defaults", "hook", "schema", "notes"}
+_TYPE_KEYS = {"viz", "viz_type", "label", "fields", "defaults", "hook", "schema", "notes", "query"}
+_QUERY_KEYS = {"groups", "merge_columns"}
+# Superset 쿼리에 열·지표 라벨로 들어가는 kind(order_by는 정렬이라 라벨이 아니다)
+LABEL_KINDS = ("column", "columns", "metric", "metrics")
 
 
 class RegistryError(Exception):
@@ -109,6 +117,8 @@ class ChartType:
     hook_ref: str | None = None
     extra_schema: Mapping[str, Any] = field(default_factory=dict)
     notes: str | None = None
+    query_groups: tuple[tuple[str, ...], ...] = ()   # 한 쿼리에 함께 들어가는 필드 이름(_parse_type이 채운다)
+    merge_columns: bool = False                      # Superset 화면이 같은 열을 하나로 합쳐 보내는지
 
     def schema(self) -> dict:
         props: dict[str, Any] = {k: True for k in COMMON_FIELDS if k != "where"}
@@ -163,11 +173,38 @@ def _parse_type(doc: Any, source: str) -> ChartType:
             min_items=spec.get("min_items"), description=spec.get("description"),
         ))
     hook_ref = doc.get("hook")
+    groups, merge_columns = _parse_query(doc.get("query"), fields, source)
     return ChartType(
         viz=doc["viz"], viz_type=doc["viz_type"], label=doc["label"], fields=tuple(fields),
         defaults=dict(doc.get("defaults") or {}), hook=_load_hook(hook_ref, source) if hook_ref else None,
         hook_ref=hook_ref, extra_schema=dict(doc.get("schema") or {}), notes=doc.get("notes"),
+        query_groups=groups, merge_columns=merge_columns,
     )
+
+
+def _parse_query(spec: Any, fields: list[Field], source: str) -> tuple[tuple[tuple[str, ...], ...], bool]:
+    """query 선언 → (쿼리별 필드 이름, merge_columns). groups를 생략하면 라벨 kind 필드 전부가 쿼리 하나다."""
+    spec = {} if spec is None else spec
+    if not isinstance(spec, dict):
+        raise RegistryError(f"{source}: query는 매핑이어야 함")
+    bad = set(spec) - _QUERY_KEYS
+    if bad:
+        raise RegistryError(f"{source}: query: 알 수 없는 키 {sorted(bad)}")
+    merge = spec.get("merge_columns", False)
+    if not isinstance(merge, bool):
+        raise RegistryError(f"{source}: query.merge_columns는 true 또는 false여야 함")
+    if "groups" not in spec:
+        default = tuple(f.name for f in fields if f.kind in LABEL_KINDS)
+        return ((default,) if default else ()), merge
+    groups = spec["groups"]
+    if not isinstance(groups, list) or not groups or not all(isinstance(g, list) and g for g in groups):
+        raise RegistryError(f"{source}: query.groups는 필드 이름 목록의 목록이어야 함")
+    kinds = {f.name: f.kind for f in fields}
+    for g in groups:
+        for name in g:
+            if kinds.get(name) not in LABEL_KINDS:
+                raise RegistryError(f"{source}: query.groups: '{name}'은 kind가 {list(LABEL_KINDS)} 중 하나인 필드가 아님")
+    return tuple(tuple(g) for g in groups), merge
 
 
 def load_registry(directory: Path) -> dict[str, ChartType]:
@@ -302,6 +339,132 @@ def column_refs(chart: Mapping[str, Any]) -> list[tuple[list, str]]:
     return out
 
 
+# ---------------------------------------------------------------- 중복 라벨(contracts/superset-notes.md 14절)
+
+DUPLICATE_LABEL_ERROR = "Duplicate column/metric labels"
+
+
+def _fmt_path(parts: list) -> str:
+    out = ""
+    for p in parts:
+        out += f"[{p}]" if isinstance(p, int) else ("." if out else "") + str(p)
+    return out
+
+
+def _raw_types() -> dict[str, ChartType]:
+    """원본(viz_type) 차트를 판단할 수 있는 유형: viz_type이 레지스트리에 하나뿐이고 hook이 없는 유형."""
+    seen: dict[str, list[ChartType]] = {}
+    for t in registry().values():
+        seen.setdefault(t.viz_type, []).append(t)
+    return {vt: ts[0] for vt, ts in seen.items() if len(ts) == 1 and ts[0].hook is None}
+
+
+def _label_values(chart: Mapping[str, Any]) -> tuple[ChartType, dict[str, tuple[Any, list]]] | None:
+    """(유형, {필드: (값, 차트 기준 경로)}). 라벨 kind 필드만.
+
+    축약 차트는 필드 값을 쓰되, params가 그 필드의 파라미터를 덮어쓰면 params 값을 쓴다(params가 이긴다. hook 유형은
+    파라미터와 필드가 1:1이 아니므로 필드 값만 본다). 원본 차트는 viz_type이 같은 유형의 파라미터 이름으로 params를 읽는다.
+    판단할 수 없는 원본 차트(레지스트리에 없는 viz_type, hook 유형)는 None.
+    """
+    params = chart.get("params") or {}
+    if "viz" in chart:
+        t = registry()[chart["viz"]]
+        values: dict[str, tuple[Any, list]] = {}
+        for f in t.fields:
+            if f.kind not in LABEL_KINDS:
+                continue
+            if t.hook is None and f.emit and f.param_name in params:
+                values[f.name] = (params[f.param_name], ["params", f.param_name])
+            elif chart.get(f.name) is not None:
+                values[f.name] = (chart[f.name], [f.name])
+        return t, values
+    raw_type = _raw_types().get(chart.get("viz_type"))
+    if raw_type is None:
+        return None
+    return raw_type, {f.name: (params[f.param_name], ["params", f.param_name])
+                      for f in raw_type.fields if f.kind in LABEL_KINDS and f.emit and params.get(f.param_name) is not None}
+
+
+def _column_label(item: Any) -> str | None:
+    """Superset get_column_name: 문자열은 열 이름 그대로(표시 이름을 쓰지 않는다), adhoc 열은 label 또는 식."""
+    if isinstance(item, str):
+        return item or None
+    if isinstance(item, Mapping):
+        label = item.get("label") or item.get("sqlExpression")
+        return label if isinstance(label, str) and label else None
+    return None
+
+
+def _metric_label(item: Any, verbose: Mapping[str, str]) -> tuple[str, str] | None:
+    """(화면이 같은 지표로 보는 키, Superset 라벨). 데이터셋 지표 이름은 Superset이 표시 이름(verbose_name)으로 바꾼다."""
+    if isinstance(item, str):
+        return (item, verbose.get(item) or item) if item else None
+    if not isinstance(item, Mapping):
+        return None
+    label = item.get("label")
+    if not label and item.get("expressionType") == "SIMPLE":
+        column = item.get("column")
+        name = column.get("column_name") if isinstance(column, Mapping) else None
+        label = f"{item['aggregate']}({name})" if name and item.get("aggregate") else name
+    label = label or item.get("sqlExpression") or item.get("sql")
+    return (label, label) if isinstance(label, str) and label else None
+
+
+def label_conflicts(chart: Mapping[str, Any], metric_labels: Mapping[str, str] | None = None) -> list[tuple[list, str]]:
+    """한 Superset 쿼리 안에서 겹치는 열·지표 라벨 (차트 기준 경로, 이유). 겹치면 Superset이 차트를 그리지 않는다.
+
+    metric_labels: 데이터셋 지표 이름 → 표시 이름(dashboard.yaml의 datasets.<키>.labels).
+    쿼리의 모양은 유형 파일의 query 선언이 정한다. Superset 화면이 하는 정리를 따른다: 같은 지표(이름 또는 adhoc 라벨이
+    같음)는 하나로 합쳐 보내고, merge_columns인 유형은 같은 열도 하나로 합친다. 그러고도 남은 라벨이 겹치면 오류다.
+    오류는 겹치는 라벨마다 하나, 경로는 마지막으로 나온 자리다.
+    """
+    found = _label_values(chart)
+    if found is None:
+        return []
+    t, values = found
+    kinds = {f.name: f.kind for f in t.fields}
+    verbose = metric_labels or {}
+    out: list[tuple[list, str]] = []
+    for group in t.query_groups:
+        entries: list[tuple[str, list, str | None]] = []   # (Superset 라벨, 경로, 표시 이름으로 바뀐 지표 이름)
+        columns_seen: set[str] = set()
+        metrics_seen: set[str] = set()
+        for name in group:
+            if name not in values:
+                continue
+            value, base = values[name]
+            items = list(enumerate(value)) if isinstance(value, list) else [(None, value)]
+            for i, item in items:
+                path = base + ([i] if i is not None else [])
+                if kinds[name] in ("column", "columns"):
+                    label = _column_label(item)
+                    if label is None or (t.merge_columns and label in columns_seen):
+                        continue
+                    columns_seen.add(label)
+                    entries.append((label, path, None))
+                else:
+                    pair = _metric_label(item, verbose)
+                    if pair is None or pair[0] in metrics_seen:
+                        continue
+                    metrics_seen.add(pair[0])
+                    entries.append((pair[1], path, pair[0] if pair[0] != pair[1] else None))
+        by_label: dict[str, list[tuple[list, str | None]]] = {}
+        for label, path, renamed in entries:
+            by_label.setdefault(label, []).append((path, renamed))
+        for label, hits in by_label.items():
+            if len(hits) < 2:
+                continue
+            reason = (f"열·지표 라벨 '{label}'가 한 쿼리에서 겹침({', '.join(_fmt_path(p) for p, _ in hits)}). "
+                      f"Superset이 차트 자리에 \"{DUPLICATE_LABEL_ERROR}\" 오류를 냄")
+            renamed = [f"지표 '{r}'" for _, r in hits if r]
+            if renamed:
+                reason += f". {', '.join(renamed)}의 라벨은 데이터셋 labels의 표시 이름임"
+            conflict = (hits[-1][0], reason)
+            if conflict not in out:
+                out.append(conflict)
+    return out
+
+
 # ---------------------------------------------------------------- 대응표
 
 def _code(value: Any) -> str:
@@ -313,8 +476,8 @@ def shorthand_table(types: Mapping[str, ChartType] | None = None) -> str:
     """contracts/chart-shorthand.md의 '유형별' 표(마크다운)."""
     types = registry() if types is None else types
     lines = [
-        "| 축약 `viz` | 이름 | `viz_type` | 축약 필드 → 파라미터 | 함께 쓰는 파라미터 |",
-        "|---|---|---|---|---|",
+        "| 축약 `viz` | 이름 | `viz_type` | 축약 필드 → 파라미터 | 함께 쓰는 파라미터 | 한 쿼리의 열·지표(중복 라벨 검사) |",
+        "|---|---|---|---|---|---|",
     ]
     for viz, t in types.items():
         cells = []
@@ -331,5 +494,9 @@ def shorthand_table(types: Mapping[str, ChartType] | None = None) -> str:
         extra = [f"`{k}: {_code(v)[1:-1]}`" for k, v in t.defaults.items()]
         if t.notes:
             cells.append(t.notes.strip().replace("\n", " ").replace("|", "\\|"))
-        lines.append(f"| `{viz}` | {t.label} | `{t.viz_type}` | " + "<br>".join(cells) + " | " + (", ".join(extra) or "—") + " |")
+        query = "<br>".join("·".join(f"`{n}`" for n in g) for g in t.query_groups) or "—"
+        if t.merge_columns:
+            query += "<br>같은 열은 합침"
+        lines.append(f"| `{viz}` | {t.label} | `{t.viz_type}` | " + "<br>".join(cells) + " | " + (", ".join(extra) or "—")
+                     + f" | {query} |")
     return "\n".join(lines) + "\n"

@@ -156,6 +156,97 @@ def test_all_errors_collected(tmp_path):
     assert len(errors_of(tmp_path, mutate_dash=m)) >= 3
 
 
+# ---------------------------------------------------------------- 한 쿼리 안 열·지표 라벨 중복(superset-notes.md 14절)
+# 픽스처의 c_line(charts[1]) 자리를 아래 차트로 바꾼다. 데이터셋 things의 지표 total_score와 alt_score는 표시 이름이 같다.
+
+def _replace_line_chart(spec: dict, labels: dict | None = None):
+    def m(d):
+        ds = d["datasets"]["things"]
+        ds["metrics"]["alt_score"] = "MAX(score)"
+        ds["labels"] = labels if labels is not None else {"total_score": "점수", "alt_score": "점수"}
+        d["dashboards"]["main"]["charts"][1] = {"key": "c_line", "title": "추이", "dataset": "things", **spec}
+    return m
+
+
+S = lambda sql, label: {"sql": sql, "label": label}   # noqa: E731
+
+
+@pytest.mark.parametrize("spec, path, label", [
+    # x축 유형: x와 groupby가 같은 열, groupby 여럿 가운데 하나만 같음, groupby에 같은 열 두 번(합쳐지지 않는다)
+    ({"viz": "line", "x": "begins", "time_grain": "P1M", "groupby": ["begins"], "metrics": ["total_score"]}, "groupby[0]", "begins"),
+    ({"viz": "bar", "x": "phase", "groupby": ["id", "phase"], "metrics": ["total_score"]}, "groupby[1]", "phase"),
+    ({"viz": "area", "x": "phase", "groupby": ["id", "id"], "metrics": ["total_score"]}, "groupby[1]", "id"),
+    ({"viz": "waterfall", "x": "phase", "groupby": ["phase"], "metric": "total_score"}, "groupby[0]", "phase"),
+    # 지표 라벨이 같은 쿼리의 열 이름과 같음(adhoc 라벨)
+    ({"viz": "bar", "x": "phase", "metrics": [S("COUNT(*)", "phase")]}, "metrics[0]", "phase"),
+    ({"viz": "pie", "groupby": ["phase"], "metric": S("COUNT(*)", "phase")}, "metric", "phase"),
+    ({"viz": "big_number", "time_column": "begins", "metric": S("COUNT(*)", "begins")}, "time_column", "begins"),
+    # 이름이 다른 두 지표의 표시 이름(datasets.labels)이 같음
+    ({"viz": "radar", "groupby": ["phase"], "metrics": ["total_score", "alt_score"]}, "metrics[1]", "점수"),
+    ({"viz": "bar", "x": "phase", "metrics": [S("SUM(score)", "점수"), "total_score"]}, "metrics[1]", "점수"),
+    # 서로 다른 열 필드에 같은 열
+    ({"viz": "heatmap", "x": "phase", "y": "phase", "metric": "total_score"}, "y", "phase"),
+    ({"viz": "sankey", "source": "phase", "target": "phase", "metric": "total_score"}, "target", "phase"),
+    ({"viz": "bubble", "entity": "id", "series": "id", "x": "total_score", "y": S("MAX(score)", "m"), "size": S("COUNT(*)", "n")},
+     "series", "id"),
+    ({"viz": "histogram", "column": "score", "groupby": ["score"]}, "groupby[0]", "score"),
+    ({"viz": "box_plot", "groupby": ["phase"], "columns": ["phase"], "metrics": ["total_score"]}, "columns[0]", "phase"),
+    # 혼합: 묶음마다 따로 본다(둘째 묶음 안에서 겹침)
+    ({"viz": "mixed", "x": "phase", "metrics": ["total_score"], "metrics_b": [S("COUNT(*)", "phase")]}, "metrics_b[0]", "phase"),
+    # params가 축약 필드의 파라미터를 덮어씀
+    ({"viz": "bar", "x": "phase", "metrics": ["total_score"], "params": {"groupby": ["phase"]}}, "params.groupby[0]", "phase"),
+    # 원본 방식: viz_type이 레지스트리 유형(hook 없음)과 같으면 그 유형의 파라미터 이름으로 읽는다
+    ({"viz_type": "echarts_timeseries_bar", "params": {"x_axis": "phase", "groupby": ["phase"], "metrics": ["total_score"]}},
+     "params.groupby[0]", "phase"),
+    ({"viz_type": "pie", "params": {"groupby": ["phase"], "metric": {"expressionType": "SQL", "sqlExpression": "COUNT(*)",
+                                                                       "label": "phase"}}}, "params.metric", "phase"),
+])
+def test_duplicate_query_labels_are_reported(tmp_path, spec, path, label):
+    errs = errors_of(tmp_path, mutate_dash=_replace_line_chart(spec))
+    hits = [e for e in errs if e.startswith(f"dashboard.yaml:dashboards.main.charts[1].{path}: ")]
+    assert len(hits) == 1, errs
+    assert f"라벨 '{label}'가 한 쿼리에서 겹침" in hits[0] and '"Duplicate column/metric labels"' in hits[0]
+    assert len(errs) == 1, errs
+
+
+def test_duplicate_label_message_names_display_label_source(tmp_path):
+    errs = errors_of(tmp_path, mutate_dash=_replace_line_chart(
+        {"viz": "bar", "x": "phase", "metrics": ["total_score", "alt_score"]}))
+    assert errs == [
+        "dashboard.yaml:dashboards.main.charts[1].metrics[1]: 열·지표 라벨 '점수'가 한 쿼리에서 겹침(metrics[0], metrics[1]). "
+        "Superset이 차트 자리에 \"Duplicate column/metric labels\" 오류를 냄. "
+        "지표 'total_score', 지표 'alt_score'의 라벨은 데이터셋 labels의 표시 이름임"
+    ]
+
+
+@pytest.mark.parametrize("spec", [
+    {"viz": "bar", "x": "phase", "groupby": ["id"], "metrics": ["total_score"]},
+    # 같은 지표 두 번, 라벨이 같은 adhoc 지표 둘: 화면이 하나로 합쳐 보낸다(오류 없음)
+    {"viz": "bar", "x": "phase", "metrics": ["total_score", "total_score"]},
+    {"viz": "line", "x": "begins", "metrics": [S("COUNT(*)", "n"), S("SUM(score)", "n")]},
+    # 합치는 유형(query.merge_columns): 같은 열 두 번, 행·열에 같은 열
+    {"viz": "pie", "groupby": ["phase", "phase"], "metric": "total_score"},
+    {"viz": "pivot_table", "rows": ["phase"], "columns": ["phase"], "metrics": ["total_score"]},
+    {"viz": "table", "columns": ["id", "id"]},
+    {"viz": "table", "groupby": ["phase", "phase"], "metrics": ["total_score", "total_score"]},
+    # 정렬(order_by)은 라벨이 아니다
+    {"viz": "table", "columns": ["id", "phase"], "order_by": [["id", "asc"], ["id", "desc"]]},
+    # 혼합: 두 묶음은 따로 간다
+    {"viz": "mixed", "x": "phase", "groupby": ["id"], "groupby_b": ["id"], "metrics": ["total_score"],
+     "metrics_b": ["total_score"]},
+    # 열 쪽은 표시 이름을 쓰지 않는다: 열 표시 이름이 지표 표시 이름과 같아도 됨
+    {"viz": "bar", "x": "phase", "metrics": ["total_score"], "_labels": {"phase": "점수", "total_score": "점수"}},
+    # 판단할 수 없는 원본 차트(레지스트리에 없는 viz_type, hook 유형)는 보지 않는다
+    {"viz_type": "graph_chart", "params": {"source": "phase", "target": "phase", "metric": "total_score"}},
+    {"viz_type": "table", "params": {"query_mode": "aggregate", "groupby": ["phase"],
+                                     "metrics": [{"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "phase"}]}},
+])
+def test_query_labels_that_superset_accepts(tmp_path, spec):
+    spec = dict(spec)
+    labels = spec.pop("_labels", None)
+    load_project("basic", make_project(tmp_path, mutate_dash=_replace_line_chart(spec, labels)))
+
+
 # ---------------------------------------------------------------- 도구 함수
 
 def test_object_uuid_is_deterministic():
