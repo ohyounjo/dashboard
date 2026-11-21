@@ -95,7 +95,7 @@ Codex는 푸시만으로는 다시 리뷰하지 않아서, 고친 뒤에는 PR�
 **3단계**
 - 위젯 매니페스트 표시 `x-unique`, `x-date-range`를 새로 정의했다(기존 검사와 오류 문구 유지). `dataset` 없는 위젯을 허용했다.
 - prune 식별 규칙과 시간 조건 자동 추가(4절 표).
-- **guest 권한을 넓히지 않았다**(기간 필터에 필요한 권한은 `can_time_range on Api`; 이름은 후속 실측에서 정정).
+- **당시 guest 권한을 넓히지 않았다.** 이후 필요한 권한이 `can_time_range on Api`로 확인되어 이슈 #49에서 확대를 승인했다.
 
 **4단계**
 - plan은 차이가 있어도 종료 코드 0이다(검증·설정·접속 실패만 1).
@@ -127,7 +127,7 @@ Codex는 푸시만으로는 다시 리뷰하지 않아서, 고친 뒤에는 PR�
 
 ## 7. 남은 한계
 
-- **guest 권한을 넓히지 않아서 생긴 것:** 임베드 화면에서 기간(`time_range`) 필터는 기본값만 적용되고 값을 바꿀 수 없다. `chord`, `world_map`, `country_map`은 임베드 화면에서 그려지지 않는다(갤러리에서 뺌). 현재 guest 권한은 세 개다. 후속 실측에서 필요한 권한은 각각 `can_time_range on Api`와 `can_explore_json on Superset`으로 확인했다. 전자는 데이터·메타데이터를 읽지 않아 추가해도 된다고 판단했지만, 후자는 생성 SQL을 노출하므로 지금은 추가하지 않도록 권고했다. 권한 변경은 하지 않았다. 실측 범위와 제약은 [Superset 실측 기록 13절](../contracts/superset-notes.md#13-guest-권한-추가-실측timerange-explore_json)을 따른다.
+- **guest 권한 제한:** 이후 이슈 #49에서 기간 변경을 위한 `can_time_range on Api`를 승인했다. `chord`, `world_map`, `country_map`은 `can_explore_json on Superset`을 부여하지 않아 여전히 임베드에서 그려지지 않는다. 권한별 실측과 SQL 노출 등은 [Superset 계약 13절](../contracts/superset-notes.md)을 따른다.
 - **prune:** 프로젝트를 전환했을 때 이전 프로젝트의 Superset 객체를 지우는 일은 여전히 `.state/managed.json`이 필요하다(같은 프로젝트 안의 이전 객체는 상태 파일 없이 지워진다).
 - **plan:** `sql:` 데이터셋의 새 열은 적용 전에 예측하지 못한다("적용해야 알 수 있음"). 이 변경 전에 적재된 DB는 한 번 `make apply`해야 데이터 차이가 나온다. 열 구성이나 기본 키를 바꾼 테이블은 전부 추가·전부 삭제로 센다. 행 지문은 솔트 없는 SHA-256이라 값의 범위가 좁은 키는 추측해 맞춰 볼 수 있다(원본은 저장하지 않음).
 - **설정 검사:** 5b 통합 확인 당시에는 막대·선 차트의 `x`와 `groupby`에 같은 열을 넣어도 검사를 통과했지만, 이후 [PR #31](https://github.com/ohyounjo/dashboard/pull/31)에서 적용 전에 YAML 경로와 함께 충돌을 보고하도록 고쳤다. [PR #60](https://github.com/ohyounjo/dashboard/pull/60)은 자동 제거되는 서로 다른 지표와 일부 원본 유형 검사도 보완했다. 확인 범위 밖 원본 설정과 일부 지표 객체는 검사를 보장하지 않는다. 현재 지원 범위는 [차트 계약](../contracts/chart-shorthand.md#중복-라벨-검사)을 따른다.
@@ -145,7 +145,7 @@ Codex는 푸시만으로는 다시 리뷰하지 않아서, 고친 뒤에는 PR�
 3. **갤러리 화면:** `PROJECT=chart-gallery make apply` 후 탭 7개(축약 22종, 원본 유형, 배치·필터 견본). 확인 뒤 `PROJECT=devtracker make apply`. (Studio에서 프로젝트를 골라 "적용"해도 된다.)
 4. **Superset 화면 편집 차단:** http://localhost:8088 에서 sync가 만든 차트·대시보드를 직접 고칠 수 없다(D3). 필요하면 `.env`에 `SYNC_LOCK_UI=0`.
 5. **backend의 현재 프로젝트 규칙:** `.env`의 `PROJECT`가 아니라 마지막으로 적용한 프로젝트를 보여 준다. 의도와 맞는지.
-6. **guest 권한 두 가지**(7절 첫 항목)를 넓힐지.
+6. **guest 권한:** 기간 해석 권한은 이슈 #49에서 승인했다. 레거시 차트 권한은 별도 판단이다.
 7. **작업 트리:** 내 worktree(`git worktree list`로 보이는 스크래치 경로)는 작업이 끝나면 지워도 된다(`git worktree remove <경로>`). 원래 체크아웃에서 내가 되돌린 것은 내 미커밋 변경 4개 파일뿐이다.
 
 ## 9. 후속: 여러 작업 폴더에서 동시에 작업하기

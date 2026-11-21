@@ -140,6 +140,20 @@ def test_guest_can_view_embedded_dashboard_and_chart_data(guest, project, supers
     assert r.json()["result"][0]["data"]
 
 
+def test_guest_time_range_and_form_data_permissions(guest, project, superset):
+    s, _, _, _, _, other = guest
+    base = superset.base_url
+    response = s.get(f"{base}/api/v1/time_range/", params={"q": "'Last week'"})
+    assert response.status_code == 200, response.text[:300]
+    parsed = response.json()["result"][0]
+    assert parsed["since"] and parsed["until"] and parsed["timeRange"] == "Last week"
+    invalid = s.get(f"{base}/api/v1/time_range/", params={"q": "'2026-01-01 : invalid'"})
+    assert invalid.status_code == 400
+    other_chart = _first_chart(project, other)
+    chart_id = superset.find_id("chart", config.object_uuid(project.name, "chart", other_chart["key"]))
+    assert s.get(f"{base}/api/v1/form_data/", params={"slice_id": chart_id}).status_code == 403
+
+
 def test_guest_cannot_view_other_dashboard(guest, project, superset):
     s, _, _, other_id, _, other = guest
     r = s.get(f"{superset.base_url}/api/v1/dashboard/{other_id}")
@@ -167,14 +181,19 @@ def test_guest_query_scope(guest, project, superset):
     sub["queries"][0]["metrics"] = [{"expressionType": "SQL", "sqlExpression": "(SELECT count(*) FROM raw.issues)", "label": "x"}]
     assert s.post(url, json=sub).status_code == 400
 
-    other_chart = _first_chart(project, other)
-    other_ds = superset.find_id("dataset", config.object_uuid(project.name, "dataset", other_chart["dataset"]))
     mine_datasets = {c["dataset"] for c in project.dashboard["dashboards"][mine]["charts"]}
-    if other_chart["dataset"] not in mine_datasets:
-        cross = json.loads(json.dumps(body))
-        cross["datasource"]["id"] = other_ds
-        assert s.post(url, json=cross).status_code == 403
+    outside = next((key for key in project.dashboard["datasets"] if key not in mine_datasets), None)
+    assert outside is not None, "다른 데이터셋의 접근 경계 확인에 대시보드 밖 데이터셋이 필요"
+    other_ds = superset.find_id("dataset", config.object_uuid(project.name, "dataset", outside))
+    cross = json.loads(json.dumps(body))
+    cross["datasource"]["id"] = other_ds
+    assert s.post(url, json=cross).status_code == 403
 
+    csv = json.loads(json.dumps(body))
+    csv["result_format"] = "csv"
+    assert s.post(url, json=csv).status_code == 403
+
+    other_chart = _first_chart(project, other)
     other_chart_id = superset.find_id("chart", config.object_uuid(project.name, "chart", other_chart["key"]))
     foreign = json.loads(json.dumps(body))
     foreign["form_data"]["slice_id"] = other_chart_id  # 내 대시보드 id + 남의 차트

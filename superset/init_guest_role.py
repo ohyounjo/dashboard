@@ -11,6 +11,7 @@ REQUIRED = [
     ("can_read", "CurrentUserRestApi"),
     ("can_read", "Dashboard"),
     ("can_read", "Chart"),
+    ("can_time_range", "Api"),
 ]
 
 
