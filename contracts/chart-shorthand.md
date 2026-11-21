@@ -109,7 +109,7 @@
 | 레지스트리에서 유일하며 hook이 없는 `viz_type` | 해당 유형의 쿼리 선언과 파라미터. 예: `echarts_timeseries_bar`, `pie`, `mixed_timeseries` |
 | `table` | `query_mode: raw`는 `all_columns`, `aggregate`는 `groupby`, `metrics`, `percent_metrics`; 생략은 `groupby`, `all_columns`, `metrics`, `percent_metrics`. 문자열 열과 저장 지표 또는 라벨이 있는 SQL 지표만 확인한다. 같은 열은 합치고 정렬은 라벨에 넣지 않는다. 알 수 없는 모드와 그 밖의 객체는 검사하지 않는다 |
 | `graph_chart`, `tree_chart`, `gantt_chart` | 갤러리와 같은 문자열 열과 저장 지표 또는 라벨이 있는 SQL 단일 지표 구성. 같은 열은 합친다. 다른 형태는 검사하지 않는다 |
-| `chord`, `world_map`, `country_map` 및 그 밖의 유형 | 검사하지 않는다. 앞의 세 유형은 기본 guest 역할에서 렌더링되지 않는다([카탈로그](../reference/chart-catalog.md#4-3-웹앱-화면에서-그려지지-않는-원본-유형)) |
+| `chord`, `world_map`, `country_map` 및 그 밖의 유형 | 검사하지 않는다. 앞의 세 유형은 웹앱 guest 임베드 미지원으로 확정됐으므로 `graph_chart`·`sankey`·`heatmap`·`pivot_table` 또는 `bar`·`treemap`·`table`로 대체한다([카탈로그](../reference/chart-catalog.md#4-3-웹앱-화면에서-그려지지-않는-원본-유형)) |
 
 `time_grain`은 x 열이 date/timestamp일 때만 의미가 있다. 범주 열(text)이면 쓰지 않는다(쓰면 `make check`가 경고하지 않고 Superset이 무시한다).
 

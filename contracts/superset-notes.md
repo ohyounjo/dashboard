@@ -82,7 +82,7 @@ metadata:
 - 기본 `GUEST_ROLE_NAME = "Public"`. 우리는 전용 역할 `EmbedGuest`를 만든다. [소스] `config.py:2306`
 - **기준선 3개(실측):** `can_read on CurrentUserRestApi`, `can_read on Dashboard`, `can_read on Chart` **3개만으로** 6개 유형 차트 렌더링, 네이티브 필터 값 조회와 적용, 테마 전환이 동작했다. 데이터셋 `datasource_access`는 필요 없다. guest의 데이터 접근 경계와 payload 변조에 관한 정정은 4절을 따른다. [소스] `security/manager.py:2564-2680`(`raise_for_access`의 guest 분기), `embedded/index.tsx:177-204`(시작 시 `GET /api/v1/me/roles/`, 권한이 없으면 "Something went wrong with embedded authentication")
 - **만드는 방법:** `superset-init`에서 앱 컨텍스트 파이썬으로 `security_manager.add_role("EmbedGuest")` 후 `find_permission_view_menu(perm, view)`로 찾아 `role.permissions`에 넣는다. 반드시 `superset init` **다음에** 실행한다(권한-뷰 행이 그때 생긴다). [실측] `superset init`을 다시 실행해도 EmbedGuest 권한은 유지된다.
-- **현재 역할:** 위 세 권한에 `can_time_range on Api`를 더한 네 권한이다(이슈 #49에서 사용자 승인). `can_explore_json on Superset`은 부여하지 않는다. 권한별 실측과 기존 데이터 접근 한계는 13절을 따른다. 변경된 초기화를 실행해야 기존 역할에 반영된다.
+- **현재 역할:** 위 세 권한에 `can_time_range on Api`를 더한 네 권한이다(이슈 #49에서 사용자 승인). `can_explore_json on Superset`은 이슈 #50 검토로 **미부여를 확정**했다(지도 시각화 불필요, 관계도는 `graph_chart`·`sankey`·`heatmap`·`pivot_table`로 대체 가능하며, 권한 확대 시 생성 SQL 노출·`@deprecated(eol_version="5.0.0")` 업그레이드 위험·`query_context_modified` 변조 검사 부재·내부 뷰 래핑 유지보수 비용이 큼). `tests/test_api.py`가 `POST /superset/explore_json/`(기본 요청 및 `?query=true`)의 `403` 차단을 회귀 검증한다. 권한별 실측·대안 비교와 기존 데이터 접근 한계는 13절과 [설계 기록](../reference/legacy-chart-embed-design.md)을 따른다. 변경된 초기화를 실행해야 기존 역할에 반영된다.
 
 ## 6. iframe 허용 (Talisman, frame-ancestors)
 
@@ -168,8 +168,8 @@ metadata:
 | `country_map` | `select_country`, `entity`(ISO 3166-2), `metric` | `misc_charts/Birth_in_France_by_department_in_2016` | 200 | **실패: 같은 오류** | `select_country: korea`의 지역 코드는 `KR-11` 꼴(이미지의 geojson에서 확인) |
 
 - **`chord`, `world_map`, `country_map`이 guest 화면에서 안 그려지는 이유:** 이 세 유형은 예전 조회 경로 `POST /superset/explore_json/`를 쓴다. guest 역할(`EmbedGuest`, 5절의 권한 네 개)에는 `can_explore_json on Superset`이 없어 403이 난다. [실측] Superset 로그의 `POST /superset/explore_json/?form_data={"slice_id":…}&dashboard_id=… 403`.
-- [실측] 테스트 스택에서만 `EmbedGuest`에 `can_explore_json on Superset`을 임시로 더하니 세 유형 모두 guest 화면에서 그려졌다(확인 뒤 `init_guest_role.py`를 다시 돌려 권한 3개로 되돌렸다). **결정: 이 권한을 주지 않는다.** 이후 실측한 접근 경계와 SQL 노출을 포함한 결정은 13절을 따른다.
-- 이 세 유형은 그래서 축약으로 올리지 않고 갤러리에도 넣지 않았다(임시로 넣어 확인한 뒤 뺐다). 원본 방식 조각은 `reference/chart-catalog.md` 4절에 남겼다. Superset 관리자 화면에서는 그려지고, 데이터 조회(`POST /api/v1/chart/data`)는 200이었다.
+- [실측] 테스트 스택에서만 `EmbedGuest`에 `can_explore_json on Superset`을 임시로 더하니 세 유형 모두 guest 화면에서 그려졌다(확인 뒤 `init_guest_role.py`를 다시 돌려 기준선 권한으로 되돌렸다). **확정 결정(이슈 #50): 이 권한을 주지 않고 세 유형은 웹앱 guest 임베드 미지원으로 확정한다.** 실측한 접근 경계·SQL 노출·대안 비교는 13절과 [설계 기록](../reference/legacy-chart-embed-design.md)을 따른다.
+- 이 세 유형은 축약으로 올리지 않고 갤러리에도 넣지 않았다(임시로 넣어 확인한 뒤 뺐다). 이슈 #50 결정에 따라 실패하는 설정을 그대로 복사하지 않도록 `reference/chart-catalog.md` 4-1·4-2절의 원본 조각에서 내리고, 4-3절에 미지원 확정 사유와 대체 차트(`chord` → `graph_chart` `layout: circular`·`sankey`·`heatmap`·`pivot_table`, 지도 비교 → `bar`·`treemap`·`table`)를 기록했다. Superset 관리자 화면과 데이터 조회(`POST /api/v1/chart/data`)에서 200이더라도 웹앱 임베드에서는 쓰지 않는다.
 
 ## 11. "외부에서 관리됨" 표식과 상태 파일 없는 prune (보강설계서 3-5, 7절 D3)
 
@@ -240,7 +240,7 @@ metadata:
 
 ## 13. guest 권한 추가 실측(TimeRange, explore_json)
 
-당시 기간 필터를 바꿀 수 없던 문제와 10-2절(`chord`·`world_map`·`country_map`이 그려지지 않음)의 원인인 권한 두 개를 guest 역할에 하나씩 더해 보고, 4절 표의 경계가 그대로인지와 그 권한이 새로 여는 엔드포인트를 확인했다. **이 실측 당시** 저장소 권한은 바꾸지 않았다(3개). 이후 이슈 #49에서 기간 해석 권한을 승인해 현재 역할에는 네 권한을 설정한다. 결론은 13-5절이다.
+당시 기간 필터를 바꿀 수 없던 문제와 10-2절(`chord`·`world_map`·`country_map`이 그려지지 않음)의 원인인 권한 두 개를 guest 역할에 하나씩 더해 보고, 4절 표의 경계가 그대로인지와 그 권한이 새로 여는 엔드포인트를 확인했다. **이 실측 당시** 저장소 권한은 바꾸지 않았다(3개). 이후 이슈 #49에서 기간 해석 권한을 승인해 현재 역할에는 네 권한을 설정했고, 이슈 #50에서 `can_explore_json on Superset` 미부여와 `POST /api/v1/chart/data` 기반 기존 지원 차트 대체를 확정했다. 결론은 13-5절이다.
 
 ### 13-1. 검증 환경과 방법
 
@@ -321,10 +321,10 @@ metadata:
 | 권한 | 판단 | 이유 |
 |---|---|---|
 | `can_time_range on Api` | **넓혀도 된다** | 날짜 문자열 해석만 하고 데이터·메타데이터를 읽지 않는다. 4절 경계는 그대로다(13-2 표). 같은 뷰의 다른 메서드는 열리지 않는다. Superset의 Public 권장 목록에도 있다 |
-| `can_explore_json on Superset` | **지금은 넓히지 않는다**(넓혀도 데이터 범위는 늘지 않지만 조건이 있다) | 조회할 수 있는 데이터의 범위는 `chart/data`와 같다(같은 판정 함수, 같은 서브쿼리 검사, CSV 막힘). 대신 `chart/data`가 guest에게 일부러 숨기는 **SQL 문을 그대로 돌려준다.** 또 6.1.0에서 이미 없어질 예정으로 표시된 예전 경로이고, payload 변조 검사가 없는 경로를 하나 더 여는 일이다. 얻는 것은 세 유형(`chord`, `world_map`, `country_map`)뿐이다 |
+| `can_explore_json on Superset` | **미부여 확정(이슈 #50)** | 데이터셋·서브쿼리·CSV 경계는 `chart/data`와 같지만, `chart/data`가 guest 응답에서 지우는 **생성 SQL 문 전체**(`dash.<뷰>`, 지표 SQL 식, 조회 조건)가 기본 JSON `query`, `?query=true`, 오류 응답에 그대로 노출된다. `@deprecated(eol_version="5.0.0")` 경로라 업그레이드 위험이 크고 `query_context_modified` 변조 검사도 없다. 내부 뷰(`views/core.py`, `viz.py`) 래핑도 deprecated 의존·변조 검사 부재·업그레이드 유지보수 비용 때문에 채택하지 않았다. 지도 시각화 요구가 없고 관계·흐름은 `POST /api/v1/chart/data` 기반 기존 차트(`graph_chart`, `sankey`, `heatmap`, `pivot_table`)로 대체한다 |
 
 - **TimeRange 확대에 따른 작업(이슈 #49):** `superset/init_guest_role.py`에 `("can_time_range", "Api")`를 추가하고 관련 설명과 `tests/test_api.py`의 기간 해석·`form_data` 경계를 갱신했다. 권한 이름은 `can_read on TimeRange`가 아니다.
-- **explore_json을 넓힌다면 함께 할 것:** (1) "guest가 생성 SQL(스키마·뷰 이름, 지표식)을 볼 수 있다"를 받아들이는 결정을 이 문서 5절에 남긴다. dash 뷰 이름과 지표식에 숨길 정보가 없어야 한다. (2) `init_guest_role.py`에 권한을 더하고 `tests/test_api.py`에 `explore_json` 경계(다른 데이터셋·다른 대시보드 차트 403, 서브쿼리 400, `?csv=true` 403)를 `chart/data`와 같은 꼴로 더한다. (3) Superset을 올릴 때 이 경로가 사라지거나 판정이 바뀌는지 다시 잰다. 넓히지 않는다면 지금처럼 세 유형을 갤러리에서 빼 두고, 관계도는 `graph_chart`(10-2절)를 쓴다.
+- **explore_json 미부여 확정 및 대체 결정(이슈 #50):** (1) `superset/init_guest_role.py`의 최소 권한 4개(`CurrentUserRestApi`, `Dashboard`, `Chart`, `can_time_range on Api`)를 유지한다. (2) `tests/test_api.py`에 guest의 `POST /superset/explore_json/`(기본 및 `?query=true`)·`GET /superset/explore_json/` `403` 회귀 테스트를 추가해 추후 권한 변경으로 SQL 노출 경로가 열리지 않도록 고정한다. (3) 지도 요구가 없으므로 외부 타일 지도(`deck_*`, `mapbox`)나 별도 웹앱 지도 위젯을 개발하지 않는다(CORS 차단·CSP 제한 유지). (4) `reference/chart-catalog.md` 4-1·4-2절의 실패하는 원본 조각을 제거하고 2절·4-3절에 대체 매핑(`chord` → `graph_chart` `layout: circular`·`sankey`·`heatmap`·`pivot_table`, 국가·지역 비교 → `bar`·`treemap`·`table`)과 미지원 확정 사유를 기록했다. 상세 비교와 검증 기록은 [설계 기록](../reference/legacy-chart-embed-design.md)에 있다.
 - 확인하지 않은 것: `DASHBOARD_RBAC`·`GLOBAL_ASYNC_QUERIES`·`ENABLE_TEMPLATE_PROCESSING`을 켠 구성, `rls_rules`가 있는 토큰, `deck_*`·`mapbox` 등 다른 예전 viz 유형의 화면.
 
 ## 14. 중복 열·지표 라벨("Duplicate column/metric labels")
