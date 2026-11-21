@@ -366,11 +366,23 @@ metadata:
 | 원본 `viz_type: pie`의 `groupby`에 같은 열 두 번 | 원본 | 통과 | 축약과 같다 |
 | 축약 `bar`에 `params: { groupby: [<x와 같은 열>] }` | 축약 + params | **오류** | params가 덮어쓴 값으로 간다 |
 
-### 14-3. 검사 규칙(`make check`, `dashkit/charts`의 `label_conflicts`)
+### 14-3. 추가 실측: 자동 제거와 원본 모드
 
-1. 차트의 열·지표 필드(레지스트리 `kind`가 `column`·`columns`·`metric`·`metrics`)를 유형 파일의 `query.groups`대로 쿼리별로 묶는다. 선언이 없으면 그 필드 전부가 쿼리 하나다. `mixed`만 `[[x, groupby, metrics], [x, groupby_b, metrics_b]]`이다. `order_by`는 넣지 않는다.
-2. 화면의 정리를 따라 지운다: 같은 지표(문자열은 이름, adhoc은 `label`이 같음)는 첫째만 남긴다. `query.merge_columns: true` 유형(`pie`·`funnel`·`treemap`·`sunburst`·`radar`·`gauge`·`pivot_table`·`table`)은 같은 열도 첫째만 남긴다.
-3. 남은 것의 Superset 라벨을 구한다: 열은 이름, 데이터셋 지표는 `datasets.<키>.labels`의 표시 이름(없으면 이름), adhoc 지표는 `label`. 한 쿼리 안에서 겹치면 오류다(겹치는 라벨마다 하나, 경로는 마지막 자리).
-4. 값은 축약 필드에서 읽되, 차트 `params`가 그 필드의 파라미터를 덮어쓰면 params 값을 쓴다(hook 유형 `table`은 필드 값만). 원본 차트는 `viz_type`이 레지스트리 유형 하나와 같고 hook이 없을 때만 그 유형의 파라미터 이름으로 읽는다. 그 밖(`graph_chart` 등, 원본 `table`)은 쿼리 모양을 모르므로 보지 않는다.
-5. [실측] 위 85개 차트에서 검사 결과(잡음/안 잡음)와 Superset 응답(400/200)이 모두 같았다. 예시 프로젝트 세 개는 고치지 않고 통과한다.
-- 잡지 않는 것: 라벨이 같은 adhoc 지표 둘(오류는 없지만 둘째가 빠진다). 원본 `table`과 레지스트리에 없는 원본 유형.
+2026-11-21, Superset 6.1.0의 독립 테스트 스택에 `chart-gallery`의 스키마와 데이터를 복사해 적용했다. 관리자 대시보드를 헤드리스 Chromium으로 열고 화면이 보낸 `POST /api/v1/chart/data`의 쿼리와 응답을 캡처했다. 충돌 사례는 테스트 스택의 차트 메타데이터만 바꾸어 확인했다. 아래 `a`는 `SUM(crates) AS dup`, `b`는 `COUNT(*) AS dup`다.
+
+| 사례 | 화면이 보낸 쿼리와 응답 |
+|---|---|
+| `bar`에 `[a, a]` 또는 `[a, b]` | 둘 다 `columns: [valley(BASE_AXIS)]`, `metrics: [a]`, 200. 다른 SQL인 b도 전송 전 제거 |
+| 저장 지표 `crate_total`과 같은 라벨의 adhoc 지표, 두 순서 | 각 순서에서 첫 항목만 `metrics`에 남고 200 |
+| `mixed`의 A `[a,b]`, B `[b,a]` | 두 쿼리 각각 `[a]`, `[b]`; 200. 묶음 사이에 제거 없음 |
+| `table` raw: 중복 `all_columns`, 반대 모드의 `groupby`·`metrics` 포함 | `columns: [valley]`, `metrics: null`, 200 |
+| `table` aggregate: 중복 `groupby`, `all_columns`, `[a,b]` | `columns: [valley]`, `metrics: [a]`, 200; `all_columns` 무시 |
+| `table` 모드 생략: `groupby: [valley]`, `all_columns: [fruit]`, `[a,b]` | `columns: [valley, fruit]`, `metrics: [a]`, 200. 명시적 aggregate와 다름 |
+| `table` aggregate의 `metrics: [a]`, `percent_metrics: [b]`, 열 정렬 | `columns: [valley]`, `metrics: [a]`, 200. 뒤의 b 제거; 정렬 열은 라벨 열에 추가되지 않음 |
+| 갤러리 `graph_chart`의 `source=target`, `tree_chart`의 `id=parent`, `gantt_chart`의 `y_axis=series` | 각 쿼리에서 같은 열을 하나만 보내고 200 |
+| `graph_chart`의 지표 라벨=`source`, `tree_chart`의 지표 라벨=`id` | 열과 지표를 함께 보내고 400 `Duplicate column/metric labels` |
+| `chord`, `world_map`, `country_map` | 별도 스택의 갤러리 차트 메타데이터를 세 유형으로 바꾸어 관리자 화면을 열었다. 셋 모두 `POST /superset/explore_json/?form_data={slice_id}&dashboard_id=…`, multipart의 `form_data` JSON으로 요청하고 200. 각각 `groupby`·`columns`·`metric`, `entity`·`country_fieldtype`·`metric`, `entity`·`select_country`·`metric`이 들어가며 `queries` 배열은 없다. 지도에 유효한 지리 데이터는 쓰지 않았으므로 렌더링 검증이 아니다. 기본 guest는 403(10절·13절); 라벨 검사는 미지원 |
+
+### 14-4. 검사 규칙
+
+[차트 계약](chart-shorthand.md#중복-라벨-검사)의 지원 범위와 오류 정책을 따른다. 화면이 같은 키의 서로 다른 SQL 지표 또는 저장 지표와 SQL 지표를 제거하는 경우 설정 오류로 보고, 제거 후 서버 라벨 충돌은 기존 오류로 따로 보고한다. 같은 정의의 반복과 `mixed` 쿼리 간 같은 라벨은 허용한다. `params`의 최종 값과 YAML 출처를 반영한다. SIMPLE 등 확인하지 않은 객체의 정의 차이, 다른 원본 차트와 확인 범위 밖 설정에 대한 제거 검사는 보장하지 않는다.
