@@ -6,35 +6,64 @@
 - 화면 틀(Rail, 다크모드)과 간트·칸반 위젯은 웹앱이 직접 그립니다.
 - Superset 객체(데이터셋, 차트, 대시보드, 필터)는 설정 파일에서 생성합니다. 화면에서 클릭해 만들지 않습니다.
 
-> ⚠️ **인증이 없습니다.** 모든 포트는 `127.0.0.1`에만 열려 있고, 이 컴퓨터에서만 볼 수 있다는 전제로 만들었습니다.
-> 외부에 공개하려면 웹앱(8080) 앞에 **인증 프록시**(예: oauth2-proxy, 사내 SSO 게이트웨이)를 두세요. Superset(8088)은 직접 공개하지 마세요.
-> 브라우저로 나가는 것은 수명 5분짜리 guest token뿐입니다. 하지만 그 토큰으로 임베드한 대시보드가 쓰는 데이터셋의 다른 열과 집계도 조회할 수 있습니다(`done.md`의 "남은 한계"). 그러니 `dash` 뷰에는 보여도 되는 열만 두세요.
+> 웹앱은 로그인과 사용자 권한을 검사합니다. 기본 포트는 `127.0.0.1`에만 열려 있습니다. 외부에서 사용할 때는 HTTPS와 접속 범위를 설정하고 `AUTH_COOKIE_SECURE=1`을 사용하세요. Superset을 공개하면 별도 관리자 로그인 화면에도 접근할 수 있습니다. Studio는 인증이 없으므로 외부에 공개하지 마세요.
+> 임베드 guest token으로 대시보드가 쓰는 데이터셋의 다른 열과 집계도 조회할 수 있으므로 `dash` 뷰에는 보여도 되는 열만 두세요.
 
 ## 실행 순서
 
-호스트에는 Docker(Compose v2 포함)와 make만 있으면 됩니다. 파이썬 작업은 모두 `tools` 컨테이너에서 실행합니다.
+호스트에는 Docker(Compose v2 포함)와 make가 필요합니다. 아래 순서는 **새 설치** 기준입니다. 기존 볼륨을 쓰는 경우는 아래 "기존 설치"를 먼저 확인하세요.
 
-```bash
-make env
-```
-`.env.example`을 복사해 `.env`를 만들고 비밀값(관리자 비밀번호, SECRET_KEY, guest token 서명 키, DB 비밀번호)을 임의 값으로 채웁니다. `.env`가 이미 있으면 건드리지 않습니다.
+### 필수: 설정과 첫 실행
 
-```bash
-make up
-```
-컨테이너를 빌드·기동하고 superset, backend, web이 healthy가 될 때까지 기다립니다(처음에는 이미지 내려받기 때문에 몇 분 걸립니다).
+1. `.env`를 만듭니다.
 
-```bash
-make apply
-```
-check(설정 검사) → load(CSV 검증·적재) → sync(Superset 반영) 순서로 실행합니다. backend는 `projects/`의 설정 파일이 바뀌면 스스로 다시 읽으므로 재시작하지 않습니다.
+   ```bash
+   make env
+   ```
 
-```bash
-make admin EMAIL=<내 사내 메일 주소>
-```
-웹앱은 로그인해야 볼 수 있습니다. 첫 admin 계정을 만들고 비밀번호는 프롬프트로 정합니다(코드·`.env`에 넣지 않습니다). 주소의 도메인은 `.env`의 `AUTH_EMAIL_DOMAINS`(기본 `example.com`, 회사 도메인으로 바꿉니다)에 있어야 합니다. 로그인 이전에 만든 스택이라면 먼저 `make auth-init`으로 인증 DB(`dashkit_auth` 스키마와 `dash_auth` 계정)를 더합니다(볼륨은 그대로 둡니다). 규칙은 [contracts/auth.md](contracts/auth.md)에 있습니다.
+   `.env.example`을 복사하고 Superset 관리자 비밀번호, DB 비밀번호, 서명 키 등을 임의로 생성합니다. `.env`가 이미 있으면 변경하지 않습니다. 비밀값은 코드나 저장소에 커밋하지 마세요.
 
-브라우저에서 http://localhost:8080 을 열고 로그인합니다. Superset 관리 화면은 http://localhost:8088 이고, 계정은 `.env`의 `SUPERSET_ADMIN_USER`/`SUPERSET_ADMIN_PASSWORD`입니다.
+2. `.env`에서 `PROJECT`와 `AUTH_EMAIL_DOMAINS`를 확인합니다. `PROJECT`의 기본값은 `devtracker`, 허용 메일 도메인의 기본값은 `example.com`입니다. 첫 admin 이메일의 도메인을 허용 목록에 넣으세요. 예를 들어 `user@company.com`을 쓸 때는 `AUTH_EMAIL_DOMAINS=company.com`으로 설정합니다.
+
+3. 스택을 시작하고 데이터를 적용합니다.
+
+   ```bash
+   make up
+   make apply
+   ```
+
+   `make up`은 컨테이너를 빌드·기동하고 정상 상태를 기다립니다. `make apply`는 설정 검사 → CSV 적재 → Superset 반영을 수행합니다. 처음 이미지를 내려받을 때는 몇 분이 걸릴 수 있습니다.
+
+4. **웹앱의 첫 admin 계정**을 만듭니다. 이메일은 앞서 허용한 도메인의 실제 사용할 주소로 바꿉니다.
+
+   ```bash
+   make admin EMAIL=<내_이메일_주소>
+   ```
+
+   비밀번호는 프롬프트에서 두 번 입력합니다. 웹앱 admin 비밀번호는 코드나 `.env`에 넣지 않습니다. 이미 사용할 admin 계정이 있다면 이 단계는 건너뜁니다. 자세한 규칙은 [인증 계약](contracts/auth.md)을 참고하세요.
+
+5. 브라우저에서 `http://localhost:8080`을 열고 웹앱 admin 계정으로 로그인합니다. 다른 PC에서 접속할 때는 아래 외부 접속 안내를 확인하세요.
+
+Superset 관리자 계정은 **웹앱 admin과 별개**입니다. 로컬 관리 화면은 `http://localhost:8088`이며, 아이디와 비밀번호는 `.env`의 `SUPERSET_ADMIN_USER`와 `SUPERSET_ADMIN_PASSWORD`입니다. 첫 `.env` 생성 시 Superset 비밀번호가 자동 생성됩니다.
+
+### 기존 설치: 필요한 경우에만 초기화
+
+- **로그인 기능이 추가되기 전에 만든 DB 볼륨:** `.env`를 준비한 뒤 `make auth-init`을 실행해 인증 DB를 준비하고, 필수 실행 순서의 `make up`부터 계속합니다. 볼륨은 유지됩니다.
+- **데이터 운용 기능이 추가되기 전에 만든 DB 볼륨:** 데이터 메뉴를 사용하기 전에 `make data-init`으로 조회 계정 `dash_inspect`를 만들고 `make apply`로 읽기 권한을 반영합니다. 새 볼륨에서는 DB 최초 초기화 시 계정이 만들어집니다.
+
+두 명령은 여러 번 실행해도 됩니다. 운영 데이터가 있는 볼륨을 지우는 `make reset`으로 대체하지 마세요.
+
+### 선택: 데이터 운용과 외부 접속
+
+- **운용 화면의 데이터 메뉴:** `make manage`로 관리 서비스를 켭니다. `http://localhost:8080/admin/`에 admin 또는 operator로 로그인하면 데이터 메뉴를 쓸 수 있습니다. 구조 변경은 admin이 수행합니다. 끌 때는 `make manage-down`을 실행합니다.
+- **다른 PC에서 접속:** 기본 설정은 이 컴퓨터에서만 접속할 수 있습니다. HTTPS 주소에 맞게 `WEB_ORIGINS`, `WEB_PUBLIC_URL`, `SUPERSET_PUBLIC_URL`, `AUTH_COOKIE_SECURE=1`을 설정하세요. Tailscale Funnel을 쓰는 예시는 [WSL Funnel 설정 안내](reference/tailscale-funnel-guide.md)를 참고하세요. Funnel은 인터넷에 공개되며 Superset 접속 경로도 공개하므로 접근 범위와 계정을 확인하세요.
+- **메일:** 기본 `AUTH_MAIL_MODE=test`는 메일을 실제 발송하지 않고 운용 화면의 테스트 메일함에 보관합니다. SMTP 발송은 아직 구현되지 않았습니다.
+
+### 운영: 백업
+
+`projects/<이름>/`에는 설정(`schema.yaml`, `dashboard.yaml`)과 데이터(`data/`)가 있습니다. 특히 추가 적재한 배치 파일은 원본이므로 주기적으로 프로젝트 폴더를 별도 저장소나 장치에 백업하세요. 백업 중에는 적재·구조 변경이 일어나지 않도록 하고, 복구할 때 설정과 데이터를 같은 시점의 사본으로 사용하세요. 운용 화면에서 바꾼 설정은 **설정 이력 → 설정 파일 내려받기**로 받아 저장소에 반영할 수 있습니다. 내려받은 설정 ZIP에는 데이터가 들어 있지 않습니다.
+
+### 명령 요약
 
 | 명령 | 하는 일 |
 |---|---|
