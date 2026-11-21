@@ -10,6 +10,7 @@ import { mount as mountTabs } from "./view-tabs.js";
 import { mount as mountLayout } from "./view-layout.js";
 import { mount as mountFilters } from "./view-filters.js";
 import { mount as mountApp } from "./view-app.js";
+import { previewHome } from "./preview.js";
 
 const THEME_KEY = "studio-theme";          // localStorage 키(수동 테마 선택)
 const PREVIEW_KEY = "studio-preview";      // localStorage 키(미리보기 접기)
@@ -30,6 +31,7 @@ const narrowQuery = window.matchMedia ? window.matchMedia("(max-width: 900px)") 
 
 const state = {
   projects: [], current: null, webUrl: "",
+  studioUrl: "",               // 미리보기를 띄울 수 있는 Studio 주소(STUDIO_ORIGIN). 화면이 다른 주소로 열렸으면 안내한다
   registry: { charts: [], widgets: [], icons: [], tones: [] },
   route: { kind: "none" },     // {kind: "new"} | {kind: "project", name, screen} | {kind: "none"}
   config: null, configError: null, configLoading: false,
@@ -123,6 +125,7 @@ async function loadProjects() {
   state.projects = Array.isArray(res.projects) ? res.projects : [];
   state.current = res.current || null;
   state.webUrl = typeof res.web_url === "string" ? res.web_url : "";
+  state.studioUrl = typeof res.studio_url === "string" ? res.studio_url : "";
 }
 
 async function loadConfig(name, { quiet = false } = {}) {
@@ -483,16 +486,22 @@ function renderPreview() {
   }
   const r = state.route;
   const other = r.kind === "project" && state.current !== r.name;
+  // 웹앱은 Studio 주소(STUDIO_ORIGIN) 하나만 틀로 허용한다. 다른 주소(127.0.0.1 등)로 열렸으면 빈 틀 대신 바른 주소를 알려 준다
+  const home = state.webUrl ? previewHome(location.origin, state.studioUrl) : null;
   fill(previewParts.head,
     h("h2", { text: S.previewTitle }),
     state.current ? badge(state.current, "neutral") : null,
     h("span", { class: "spacer" }),
-    iconButton("refresh", S.previewReload, { cls: "ghost", "data-action": "preview-reload", disabled: !state.webUrl, onclick: reloadPreview }),
+    iconButton("refresh", S.previewReload, { cls: "ghost", "data-action": "preview-reload", disabled: !state.webUrl || !!home, onclick: reloadPreview }),
     state.webUrl ? h("a", { class: "btn icon-only ghost", href: state.webUrl, target: "_blank", rel: "noopener noreferrer", "aria-label": S.previewOpen, title: S.previewOpen }, icon("external")) : null,
     iconButton("x", S.previewHide, { cls: "ghost", onclick: togglePreview }));
   fill(previewParts.note,
     other ? h("p", { class: "preview-note", role: "status" }, icon("info"), h("span", { text: state.current ? S.previewOther(state.current) : S.previewNone })) : null);
-  if (state.webUrl && !frame) {
+  if (home) {
+    // 주소의 # 뒤(지금 보던 프로젝트·화면)를 그대로 붙여 같은 화면으로 연다
+    fill(previewParts.body, stateBox({ tone: "warn", iconName: "warning", title: S.previewWrongOriginTitle, body: S.previewWrongOriginBody(home),
+      actions: h("a", { class: "btn primary", href: `${home}/${location.hash}`, "data-action": "preview-home" }, S.previewWrongOriginAction) }));
+  } else if (state.webUrl && !frame) {
     // allow: 웹앱 안의 Superset 임베드가 요청하는 권한(전체 화면, 복사)을 미리보기에서도 넘겨준다
     frame = h("iframe", { class: "preview-frame", title: S.previewTitle, src: state.webUrl, allow: "fullscreen; clipboard-write" });
     fill(previewParts.body, frame);

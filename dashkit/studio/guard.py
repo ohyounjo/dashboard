@@ -45,6 +45,18 @@ def _netloc(host: str, port: int | None) -> str:
     return host if port is None else f"{host}:{port}"
 
 
+def studio_origin(env: Mapping[str, str] | None = None) -> str:
+    """STUDIO_ORIGIN의 출처(`scheme://host[:port]`, 스킴의 기본 포트는 뺀다). 브라우저의 `location.origin`과 같은 꼴이다.
+
+    웹앱은 이 출처 하나만 frame-ancestors로 허용하므로(make studio) 미리보기는 이 주소로 연 Studio에서만 뜬다.
+    """
+    env = os.environ if env is None else env
+    scheme, host, port = _origin_of(env.get("STUDIO_ORIGIN") or DEFAULT_ORIGIN, DEFAULT_ORIGIN)
+    if port == (443 if scheme == "https" else 80):
+        port = None
+    return f"{scheme}://{_netloc(host, port)}"
+
+
 @dataclass(frozen=True)
 class Policy:
     """허용하는 Host·Origin과 응답 헤더."""

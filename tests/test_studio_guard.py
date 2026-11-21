@@ -260,3 +260,22 @@ def test_error_bodies_use_the_api_format(client):
 def test_no_api_docs_routes(client):
     for path in ("/docs", "/redoc", "/openapi.json"):
         assert client.get(path).status == 404
+
+
+def test_projects_tell_the_studio_origin_for_the_preview(tmp_path, monkeypatch):
+    """미리보기(웹앱 iframe)는 STUDIO_ORIGIN에서 연 Studio에서만 뜬다(웹앱의 frame-ancestors가 그 출처 하나이고,
+    로그인 쿠키는 SameSite=Lax라 다른 사이트의 틀 안에서는 실리지 않는다). 화면이 다른 주소(127.0.0.1 등)로 열렸는지
+    알 수 있게 목록 응답에 그 출처를 싣는다."""
+    c = fresh_client(tmp_path, monkeypatch, origin="http://localhost:18090/", projects=())
+    body = c.get("/studio/api/projects", headers={"host": "127.0.0.1:18090"}).json
+    assert body["studio_url"] == "http://localhost:18090"
+    assert body["web_url"] == "http://localhost:8080"
+
+
+def test_studio_origin_is_normalized():
+    from dashkit.studio.guard import studio_origin
+    assert studio_origin({}) == "http://localhost:8090"
+    assert studio_origin({"STUDIO_ORIGIN": "http://LOCALHOST:18090/x"}) == "http://localhost:18090"
+    assert studio_origin({"STUDIO_ORIGIN": "https://studio.internal:443"}) == "https://studio.internal"
+    assert studio_origin({"STUDIO_ORIGIN": "http://127.0.0.1:80"}) == "http://127.0.0.1"
+    assert studio_origin({"STUDIO_ORIGIN": "not a url"}) == "http://localhost:8090"

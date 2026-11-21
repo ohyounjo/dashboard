@@ -24,7 +24,7 @@ from .. import charts, config, plan, scaffold, widgets
 from ..api.state import file_signature
 from ..loader import current
 from . import jobs, ops, store, upload
-from .guard import DEFAULT_WEB_URL, Guard
+from .guard import DEFAULT_WEB_URL, Guard, studio_origin
 from .store import StoreError
 
 log = logging.getLogger("dashkit.studio")
@@ -168,6 +168,8 @@ def get_projects():
         "projects": [_listing_row(name) for name in store.project_names()],
         "current": store.current_project(),
         "web_url": os.environ.get("WEB_PUBLIC_URL") or DEFAULT_WEB_URL,
+        # 미리보기(웹앱 iframe)는 이 주소로 연 Studio에서만 뜬다. 화면이 다른 주소로 열렸으면 이 주소를 안내한다
+        "studio_url": studio_origin(),
     }
 
 
