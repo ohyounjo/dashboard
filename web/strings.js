@@ -732,6 +732,8 @@ export default {
   // 섹션 공통
   sectionLoading: "불러오는 중…",
   dashboardLoading: "대시보드를 불러오는 중…",
+  embedScrollHint: "대시보드를 좌우로 밀어서 전체 내용을 볼 수 있습니다. 키보드는 영역을 선택한 뒤 방향키를 사용하세요.",
+  embedScrollLabel: (name) => `${name} 대시보드, 좌우로 스크롤 가능`,
   unsupportedSection: (type) => `지원하지 않는 섹션 유형입니다: ${type}`,
 
   // Superset 섹션 오류

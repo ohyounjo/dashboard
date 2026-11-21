@@ -28,6 +28,8 @@ title
 type
 status
 role
+# ARIA landmark 역할 이름
+region
 version
 created
 updated

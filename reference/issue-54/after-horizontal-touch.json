@@ -1,0 +1,26 @@
+{
+  "bounds": {
+    "x": 17,
+    "y": 121.625,
+    "width": 356,
+    "height": 1264
+  },
+  "before": {
+    "scrollLeft": 0,
+    "clientWidth": 356,
+    "scrollWidth": 900,
+    "height": 1264,
+    "top": 121.625,
+    "bottom": 1385.625
+  },
+  "after": {
+    "scrollLeft": 376,
+    "scrollWidth": 900
+  },
+  "keyboard": {
+    "scrollLeft": 40,
+    "role": "region",
+    "label": "기존 6종 대시보드, 좌우로 스크롤 가능",
+    "tabIndex": 0
+  }
+}

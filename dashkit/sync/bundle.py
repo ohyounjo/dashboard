@@ -30,6 +30,17 @@ VIEW_SCHEMA = "dash"
 MASKED_PASSWORD = "XXXXXXXXXX"
 DATABASE_KEY = "main"
 
+# Superset 6.1.0: body가 iframe 높이에 묶이면 SDK의 body.scrollHeight가 줄지 않고,
+# 열린 필터 막대가 iframe보다 크면 반대로 폴링마다 증가한다. 임베드에만 적용한다.
+EMBED_ROOT_SELECTOR = "#app[data-bootstrap*='\"embedded\":']"
+EMBED_FILTER_CSS = (
+    f"html:has({EMBED_ROOT_SELECTOR}), html:has({EMBED_ROOT_SELECTOR}) body "
+    "{ height: auto !important; min-height: 0 !important; } "
+    f'{EMBED_ROOT_SELECTOR} [data-test="dashboard-filters-panel"] > div {{ height: 100%; }} '
+    f'{EMBED_ROOT_SELECTOR} [data-test="filter-bar"] > .open:not([data-test]) '
+    "{ height: 100%; max-height: 100vh; min-height: 0; overflow: auto; }"
+)
+
 # 종류 순서: import 의존 순서(DB → 데이터셋 → 차트 → 대시보드). prune은 이 역순.
 KINDS = ("database", "dataset", "chart", "dashboard")
 
@@ -434,7 +445,7 @@ def dashboard_yaml(project: Project, dkey: str) -> dict:
     return {
         "dashboard_title": d["title"],
         "description": None,
-        "css": None,
+        "css": EMBED_FILTER_CSS,
         "slug": _slug(f"{project.name}-{dkey}"),
         "certified_by": None,
         "certification_details": None,

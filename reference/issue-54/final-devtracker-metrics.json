@@ -1,0 +1,242 @@
+[
+  {
+    "width": 390,
+    "theme": "light",
+    "tabs": [],
+    "frames": [
+      {
+        "url": "/embedded/23b2fa33-70eb-4f6c-a9f1-e9874ce412af",
+        "innerWidth": 900,
+        "scrollWidth": 900,
+        "charts": [
+          {
+            "text": "전체 진척률(%)\n55",
+            "width": 205,
+            "height": 400
+          },
+          {
+            "text": "다음 마일스톤까지(일)\n29",
+            "width": 205,
+            "height": 400
+          },
+          {
+            "text": "열린 이슈\n16\n+14.3% 지난주 대비",
+            "width": 205,
+            "height": 400
+          },
+          {
+            "text": "Critical 미해결\n3\n+50.0% 지난주 대비",
+            "width": 205,
+            "height": 400
+          },
+          {
+            "text": "열린 이슈 추이",
+            "width": 279,
+            "height": 400
+          },
+          {
+            "text": "마일스톤별 진척률",
+            "width": 279,
+            "height": 400
+          },
+          {
+            "text": "심각도별 열린 이슈",
+            "width": 279,
+            "height": 400
+          },
+          {
+            "text": "남은 마일스톤\n상태\n\t\n마일스톤\n\t\n종료일\n\t\n남은 일수\n\t\n진척률(%)\n⚠️ 지연\tM2 기기 연동(Wi-Fi/Matter)\t2026-11-13\t\n-6\t\n85\n🔄 진행\tM3 자동화 루틴\t2026-12-18\t\n29\t\n55\n⏳ 예정\tM4 베타 테스트\t2027-01-29\t\n71\t\n0\n⏳ 예정\tM5 정식 출시\t2027-02-2",
+            "width": 426,
+            "height": 400
+          },
+          {
+            "text": "최근 갱신 이슈 5건\n해결\n\t\nID\n\t\n제목\n\t\n심각도\n\t\n상태\n\t\n담당자\n\t\n수정일\n❌\tISS-123\t도어락 원격 해제 2단계 인증 우회 가능\tcritical\topen\t박지민\t2026-11-19\n❌\tISS-120\t지오펜스 루틴 반경 설정 오류\tmajor\topen\t이준호\t2026-11-19\n❌\tISS-109\t푸시 알림 중",
+            "width": 426,
+            "height": 400
+          }
+        ]
+      }
+    ],
+    "errors": []
+  },
+  {
+    "width": 390,
+    "theme": "dark",
+    "tabs": [],
+    "frames": [
+      {
+        "url": "/embedded/23b2fa33-70eb-4f6c-a9f1-e9874ce412af",
+        "innerWidth": 900,
+        "scrollWidth": 900,
+        "charts": [
+          {
+            "text": "전체 진척률(%)\n55",
+            "width": 205,
+            "height": 400
+          },
+          {
+            "text": "다음 마일스톤까지(일)\n29",
+            "width": 205,
+            "height": 400
+          },
+          {
+            "text": "열린 이슈\n16\n+14.3% 지난주 대비",
+            "width": 205,
+            "height": 400
+          },
+          {
+            "text": "Critical 미해결\n3\n+50.0% 지난주 대비",
+            "width": 205,
+            "height": 400
+          },
+          {
+            "text": "열린 이슈 추이",
+            "width": 279,
+            "height": 400
+          },
+          {
+            "text": "마일스톤별 진척률",
+            "width": 279,
+            "height": 400
+          },
+          {
+            "text": "심각도별 열린 이슈",
+            "width": 279,
+            "height": 400
+          },
+          {
+            "text": "남은 마일스톤\n상태\n\t\n마일스톤\n\t\n종료일\n\t\n남은 일수\n\t\n진척률(%)\n⚠️ 지연\tM2 기기 연동(Wi-Fi/Matter)\t2026-11-13\t\n-6\t\n85\n🔄 진행\tM3 자동화 루틴\t2026-12-18\t\n29\t\n55\n⏳ 예정\tM4 베타 테스트\t2027-01-29\t\n71\t\n0\n⏳ 예정\tM5 정식 출시\t2027-02-2",
+            "width": 426,
+            "height": 400
+          },
+          {
+            "text": "최근 갱신 이슈 5건\n해결\n\t\nID\n\t\n제목\n\t\n심각도\n\t\n상태\n\t\n담당자\n\t\n수정일\n❌\tISS-123\t도어락 원격 해제 2단계 인증 우회 가능\tcritical\topen\t박지민\t2026-11-19\n❌\tISS-120\t지오펜스 루틴 반경 설정 오류\tmajor\topen\t이준호\t2026-11-19\n❌\tISS-109\t푸시 알림 중",
+            "width": 426,
+            "height": 400
+          }
+        ]
+      }
+    ],
+    "errors": []
+  },
+  {
+    "width": 1280,
+    "theme": "light",
+    "tabs": [],
+    "frames": [
+      {
+        "url": "/embedded/23b2fa33-70eb-4f6c-a9f1-e9874ce412af",
+        "innerWidth": 1158,
+        "scrollWidth": 1158,
+        "charts": [
+          {
+            "text": "전체 진척률(%)\n55",
+            "width": 270,
+            "height": 400
+          },
+          {
+            "text": "다음 마일스톤까지(일)\n29",
+            "width": 270,
+            "height": 400
+          },
+          {
+            "text": "열린 이슈\n16\n+14.3% 지난주 대비",
+            "width": 270,
+            "height": 400
+          },
+          {
+            "text": "Critical 미해결\n3\n+50.0% 지난주 대비",
+            "width": 270,
+            "height": 400
+          },
+          {
+            "text": "열린 이슈 추이",
+            "width": 365,
+            "height": 400
+          },
+          {
+            "text": "마일스톤별 진척률",
+            "width": 365,
+            "height": 400
+          },
+          {
+            "text": "심각도별 열린 이슈",
+            "width": 365,
+            "height": 400
+          },
+          {
+            "text": "남은 마일스톤\n상태\n\t\n마일스톤\n\t\n종료일\n\t\n남은 일수\n\t\n진척률(%)\n⚠️ 지연\tM2 기기 연동(Wi-Fi/Matter)\t2026-11-13\t\n-6\t\n85\n🔄 진행\tM3 자동화 루틴\t2026-12-18\t\n29\t\n55\n⏳ 예정\tM4 베타 테스트\t2027-01-29\t\n71\t\n0\n⏳ 예정\tM5 정식 출시\t2027-02-2",
+            "width": 555,
+            "height": 400
+          },
+          {
+            "text": "최근 갱신 이슈 5건\n해결\n\t\nID\n\t\n제목\n\t\n심각도\n\t\n상태\n\t\n담당자\n\t\n수정일\n❌\tISS-123\t도어락 원격 해제 2단계 인증 우회 가능\tcritical\topen\t박지민\t2026-11-19\n❌\tISS-120\t지오펜스 루틴 반경 설정 오류\tmajor\topen\t이준호\t2026-11-19\n❌\tISS-109\t푸시 알림 중",
+            "width": 555,
+            "height": 400
+          }
+        ]
+      }
+    ],
+    "errors": []
+  },
+  {
+    "width": 1280,
+    "theme": "dark",
+    "tabs": [],
+    "frames": [
+      {
+        "url": "/embedded/23b2fa33-70eb-4f6c-a9f1-e9874ce412af",
+        "innerWidth": 1158,
+        "scrollWidth": 1158,
+        "charts": [
+          {
+            "text": "전체 진척률(%)\n55",
+            "width": 270,
+            "height": 400
+          },
+          {
+            "text": "다음 마일스톤까지(일)\n29",
+            "width": 270,
+            "height": 400
+          },
+          {
+            "text": "열린 이슈\n16\n+14.3% 지난주 대비",
+            "width": 270,
+            "height": 400
+          },
+          {
+            "text": "Critical 미해결\n3\n+50.0% 지난주 대비",
+            "width": 270,
+            "height": 400
+          },
+          {
+            "text": "열린 이슈 추이",
+            "width": 365,
+            "height": 400
+          },
+          {
+            "text": "마일스톤별 진척률",
+            "width": 365,
+            "height": 400
+          },
+          {
+            "text": "심각도별 열린 이슈",
+            "width": 365,
+            "height": 400
+          },
+          {
+            "text": "남은 마일스톤\n상태\n\t\n마일스톤\n\t\n종료일\n\t\n남은 일수\n\t\n진척률(%)\n⚠️ 지연\tM2 기기 연동(Wi-Fi/Matter)\t2026-11-13\t\n-6\t\n85\n🔄 진행\tM3 자동화 루틴\t2026-12-18\t\n29\t\n55\n⏳ 예정\tM4 베타 테스트\t2027-01-29\t\n71\t\n0\n⏳ 예정\tM5 정식 출시\t2027-02-2",
+            "width": 555,
+            "height": 400
+          },
+          {
+            "text": "최근 갱신 이슈 5건\n해결\n\t\nID\n\t\n제목\n\t\n심각도\n\t\n상태\n\t\n담당자\n\t\n수정일\n❌\tISS-123\t도어락 원격 해제 2단계 인증 우회 가능\tcritical\topen\t박지민\t2026-11-19\n❌\tISS-120\t지오펜스 루틴 반경 설정 오류\tmajor\topen\t이준호\t2026-11-19\n❌\tISS-109\t푸시 알림 중",
+            "width": 555,
+            "height": 400
+          }
+        ]
+      }
+    ],
+    "errors": []
+  }
+]

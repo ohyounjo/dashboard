@@ -7,6 +7,7 @@ const WIDGET_TYPE = /^[a-z][a-z0-9_]*$/;         // 위젯 유형 이름 형식(
 const THEME_KEY = "dashboard-theme";             // localStorage 키(수동 테마 선택)
 const CONNECT_TIMEOUT_MS = 30000;                // Superset iframe 응답 대기 상한
 const SIZE_POLL_MS = 2000;                       // 높이 자동 맞춤 주기(보이는 탭만)
+const EMBED_MIN_WIDTH = 900;                     // 좁은 섹션의 차트를 위한 iframe 최소 너비
 const HEX = /^#[0-9A-Fa-f]{6}$/;
 
 const root = document.documentElement;
@@ -154,16 +155,37 @@ function withTimeout(promise, ms) {
 function supersetSection(container, sec, ctx) {
   const wrap = h("div", { class: "embed" });
   const mount = h("div", { class: "embed-mount" });
+  const hint = h("p", { class: "embed-scroll-hint", text: S.embedScrollHint });
   const overlay = h("div");
-  wrap.append(mount, overlay);
+  wrap.append(hint, mount, overlay);
   container.append(wrap);
 
   let dash = null, gen = 0, poll = null;
+
+  // 뷰포트가 아닌 섹션의 실제 폭을 본다. iframe은 그대로 두어 필터 상태를 보존한다.
+  function updateWidth() {
+    const width = wrap.clientWidth;
+    if (!width) return; // 숨겨진 탭은 다시 표시될 때 측정한다.
+    const narrow = width < EMBED_MIN_WIDTH;
+    wrap.classList.toggle("is-narrow", narrow);
+    if (narrow && dash && !wrap.classList.contains("is-loading") && !wrap.classList.contains("is-error")) {
+      mount.setAttribute("role", "region");
+      mount.setAttribute("aria-label", S.embedScrollLabel(sec.title || ctx.tabLabel));
+      mount.setAttribute("tabindex", "0");
+    } else {
+      mount.removeAttribute("role");
+      mount.removeAttribute("aria-label");
+      mount.removeAttribute("tabindex");
+    }
+  }
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(updateWidth).observe(wrap);
+  updateWidth();
 
   function teardown() {
     clearInterval(poll); poll = null;
     if (dash) { embeds.delete(dash); try { dash.unmount(); } catch (e) { /* 무시 */ } dash = null; }
     mount.replaceChildren();
+    updateWidth();
   }
 
   function showError(err) {
@@ -233,6 +255,7 @@ function supersetSection(container, sec, ctx) {
     teardown();
     if (!firstLoad) {
       wrap.className = "embed is-loading";
+      updateWidth();
       overlay.replaceChildren(dashboardSkeleton());
       const id = await latestEmbedId();
       if (my !== gen) return;
@@ -241,6 +264,7 @@ function supersetSection(container, sec, ctx) {
     firstLoad = false;
     if (!sec.embed_id) { showError(new SectionError("notApplied")); return; }
     wrap.className = "embed is-loading";
+    updateWidth();
     overlay.replaceChildren(dashboardSkeleton());
     const started = Date.now();
     try {
@@ -271,6 +295,7 @@ function supersetSection(container, sec, ctx) {
       if (f && sec.height) f.style.height = sec.height + "px";
       else if (f && size && size.height > 0) f.style.height = Math.ceil(size.height) + "px";
       wrap.className = "embed";
+      updateWidth();
       overlay.replaceChildren();
       if (!sec.height) poll = setInterval(() => { if (ctx.isActive()) measure(); }, SIZE_POLL_MS);
     } catch (err) {
@@ -280,8 +305,8 @@ function supersetSection(container, sec, ctx) {
     }
   }
 
-  ctx.onResize(() => measure());
-  ctx.onShow(() => measure());
+  ctx.onResize(() => { updateWidth(); measure(); });
+  ctx.onShow(() => { updateWidth(); measure(); });
   load();
 }
 
