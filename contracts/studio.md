@@ -167,5 +167,6 @@ Studio 오른쪽의 미리보기는 실제 웹앱을 iframe으로 띄운다(별�
 - Superset의 `frame-ancestors`는 `WEB_ORIGINS`에 `STUDIO_ORIGIN`을 더한 값이 된다(frame-ancestors는 모든 조상을 본다). 임베드 허용 도메인(Referer 검사)은 웹앱 출처 그대로다.
 - `make studio-down`이 둘을 원래대로 되돌린다.
 - 로그인: 미리보기 안의 웹앱도 로그인을 요구한다(`contracts/auth.md`). 틀 안의 로그인 화면에서 그대로 로그인하면 된다. 세션 쿠키는 `SameSite=Lax`이므로 Studio와 웹앱이 **같은 사이트**(기본 `localhost`, 포트만 다름)일 때만 틀 안에서 실린다.
+- 좁은 화면에서는 미리보기를 기본으로 접는다. 사용자가 미리보기 버튼으로 펼치거나 다시 접을 수 있으며, 선택은 다음 방문에도 유지된다. 펼친 미리보기는 편집기 아래에 표시된다.
 - 그래서 미리보기는 `STUDIO_ORIGIN` 주소로 연 Studio에서만 뜬다. 요청 보호는 `127.0.0.1:<포트>`로 연 화면도 받지만(위 "Host 검사"), 그 주소에서는 웹앱이 틀을 거절한다. 화면은 `location.origin`이 `GET /studio/api/projects`의 `studio_url`과 다르면 iframe을 만들지 않고 "이 주소에서는 미리보기를 띄울 수 없습니다"와 `studio_url`(지금 화면의 `#` 뒤를 붙인 것)로 가는 링크를 보여 준다(`web/studio/preview.js`).
 - 웹앱의 `/studio/…` 경로는 nginx가 404로 막는다(구성 화면 파일은 studio 컨테이너만 서빙한다).

@@ -4,7 +4,8 @@
   "type": "module",
   "description": "웹앱 화면 캡처(Playwright). CI의 ui-screenshots 워크플로가 쓴다.",
   "scripts": {
-    "capture": "node capture.mjs"
+    "capture": "node capture.mjs",
+    "test:studio-preview-mobile": "node --test studio-preview-mobile.mjs"
   },
   "devDependencies": {
     "pixelmatch": "8.0.0",
