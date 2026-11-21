@@ -17,10 +17,11 @@ import groups from "./menus/groups.js";
 import stats from "./menus/stats.js";
 import tables from "./menus/tables.js";
 import datasets from "./menus/datasets.js";
+import history from "./menus/history.js";
 import audit from "./menus/audit.js";
 import outbox from "./menus/outbox.js";
 
-const MENUS = [users, groups, tables, datasets, stats, audit, outbox];
+const MENUS = [users, groups, tables, datasets, history, stats, audit, outbox];
 const menus = () => MENUS.filter((m) => !m.when || m.when());
 
 function route() {

@@ -1,0 +1,399 @@
+"""구조 변경·새 테이블·설정 이력·합치기·계보(contracts/ingest.md "구조 변경", "합치기", "계보"). 임시 DB를 쓴다.
+
+원칙: 설정 파일을 고치고 apply다. 여러 파일(두 YAML, replace 테이블의 CSV, 새 테이블의 첫 파일)을 함께 바꾸고, 실패하거나
+도중에 죽으면 모든 파일이 변경 전으로 돌아간다. 합친 뒤 다시 만든 결과는 합치기 전과 같다(5-7).
+"""
+from __future__ import annotations
+
+import gzip
+
+import pytest
+
+from dashkit.config import load_project
+from dashkit.ingest import IngestError, ledger, lineage, newtable, pending, structure
+from dashkit.ingest.compact import compact
+from dashkit.ingest.faults import SimulatedCrash
+from dashkit.loader import load
+from dashkit.project import store
+
+from test_ingest_db import (add, all_rows, fault, leftovers, make_project, rebuilt_equals_current, rows,  # noqa: F401
+                            scratch_db)
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.fixture()
+def root(tmp_path, monkeypatch):
+    root = make_project(tmp_path)
+    monkeypatch.setenv("PROJECTS_DIR", str(root))
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+    return root
+
+
+def folder(root, table):
+    """배치 파일(`_`로 시작하는 폴더는 뺀다)."""
+    path = root / "ledger" / "data" / table
+    return sorted(p.name for p in path.iterdir() if not p.name.startswith("_")) if path.is_dir() else []
+
+
+def files(root):
+    p = root / "ledger"
+    return {rel: (p / rel).read_bytes() for rel in ("schema.yaml", "dashboard.yaml", "data/groups.csv")}
+
+
+def change(root, dbname, op_list, **kw):
+    kw.setdefault("action", "test")
+    return structure.change_config("ledger", op_list, store.revision(root / "ledger"), run_sync=False, dbname=dbname,
+                                   **kw)
+
+
+def columns_of(dbname, table):
+    from dashkit import db
+
+    with db.owner_conn(dbname) as conn, conn.cursor() as cur:
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = %s "
+                    "ORDER BY ordinal_position", (table,))
+        return [r[0] for r in cur.fetchall()]
+
+
+def snapshot(dbname):
+    from dashkit import db
+
+    with db.inspect_conn(dbname) as conn, conn.cursor() as cur:
+        return ledger.loaded(cur).snapshot
+
+
+# ---------------------------------------------------------------- 열 추가·변경
+
+def test_column_add_on_replace_table_changes_csv_too_and_history_restores_both(root, scratch_db):
+    load(load_project("ledger", root), dbname=scratch_db)
+    before = files(root)
+    result = change(root, scratch_db, [{"op": "column.add", "table": "groups", "column": "note",
+                                        "value": {"type": "text", "default": "-"}}])
+    assert result["changed"] == ["data/groups.csv", "schema.yaml"]
+    assert (root / "ledger/data/groups.csv").read_text(encoding="utf-8") == "id,label,note\ng1,하나,-\ng2,둘,-\n"
+    assert columns_of(scratch_db, "groups")[-1] == "note"
+    assert [r[-1] for r in rows(scratch_db, "groups")] == ["-", "-"]
+    assert leftovers(root) == []
+    rebuilt_equals_current(root, scratch_db)
+    history = structure.list_history("ledger")
+    assert history[0]["id"] == result["history"] and {f["path"] for f in history[0]["files"]} == {
+        "schema.yaml", "data/groups.csv"}
+
+    change(root, scratch_db, None, restore=result["history"], action="restore")
+    assert files(root) == before
+    assert "note" not in columns_of(scratch_db, "groups")
+
+
+def test_a_file_changed_while_the_change_was_being_checked_is_not_overwritten(root, scratch_db, monkeypatch):
+    """잠금 안에서 검증하는 사이 다른 곳(Studio의 CSV 교체 등)이 파일을 바꾸면 409 stale_config. 이력 되돌리기도 같다."""
+    load(load_project("ledger", root), dbname=scratch_db)
+    result = change(root, scratch_db, [{"op": "column.add", "table": "groups", "column": "note", "value": {"type": "text"}}])
+    csv_path = root / "ledger/data/groups.csv"
+    real = structure._staged
+
+    def staged_then_someone_writes(project, changes):
+        out = real(project, changes)
+        csv_path.write_text(csv_path.read_text(encoding="utf-8") + "g7,일곱,\n", encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(structure, "_staged", staged_then_someone_writes)
+    err = pytest.raises(IngestError, change, root, scratch_db, None, restore=result["history"], action="restore").value
+    assert (err.status, err.detail) == (409, "stale_config")
+    assert "g7,일곱," in csv_path.read_text(encoding="utf-8") and leftovers(root) == []
+
+
+def test_history_restore_refuses_a_file_changed_afterwards(root, scratch_db):
+    load(load_project("ledger", root), dbname=scratch_db)
+    result = change(root, scratch_db, [{"op": "column.add", "table": "groups", "column": "note",
+                                        "value": {"type": "text"}}])
+    csv_path = root / "ledger/data/groups.csv"
+    csv_path.write_text(csv_path.read_text(encoding="utf-8") + "g3,셋,\n", encoding="utf-8")
+    err = pytest.raises(IngestError, structure.history_files, "ledger", result["history"]).value
+    assert (err.status, err.detail) == (409, "stale_config")
+
+
+def test_required_column_without_default_and_type_narrowing_are_rejected(root, scratch_db):
+    load(load_project("ledger", root), dbname=scratch_db)
+    before = files(root)
+    err = pytest.raises(IngestError, change, root, scratch_db, [
+        {"op": "column.add", "table": "entries", "column": "x", "value": {"type": "text", "required": True}}]).value
+    assert (err.status, err.detail) == (400, "invalid_op")
+    err = pytest.raises(IngestError, change, root, scratch_db, [
+        {"op": "column.update", "table": "entries", "column": "amount", "set": {"type": "integer"}}]).value
+    assert (err.status, err.detail) == (400, "invalid_op")
+    assert files(root) == before and structure.list_history("ledger") == []
+
+
+def test_column_add_on_append_table_fills_old_batches_with_default(root, scratch_db):
+    load(load_project("ledger", root), dbname=scratch_db)
+    change(root, scratch_db, [{"op": "column.add", "table": "entries", "column": "tier",
+                               "value": {"type": "integer", "default": 5}},
+                              {"op": "column.update", "table": "entries", "column": "qty", "set": {"type": "number"}}])
+    got = {r[0]: r for r in rows(scratch_db, "entries")}
+    assert {r[-1] for r in got.values()} == {5}
+    add(root, scratch_db, "entries", [{"id": "E300", "tier": 9, "qty": 1.5}])       # 새 열이 든 배치
+    add(root, scratch_db, "entries", [{"id": "E301"}])                             # 옛 모양의 배치
+    got = {r[0]: r for r in rows(scratch_db, "entries")}
+    assert got["E300"][-1] == 9 and got["E301"][-1] == 5
+    rebuilt_equals_current(root, scratch_db)
+
+
+def test_narrowed_rule_fails_load_and_puts_every_file_back(root, scratch_db):
+    load(load_project("ledger", root), dbname=scratch_db)
+    before, data = files(root), all_rows(scratch_db)
+    err = pytest.raises(IngestError, change, root, scratch_db, [
+        {"op": "column.update", "table": "entries", "column": "amount", "set": {"max": 6}}]).value
+    assert (err.status, err.detail) == (422, "load_failed")
+    assert any("000001-20261120T0910Z.csv" in e for e in err.errors)          # 옛 배치의 파일·줄로 알린다
+    assert files(root) == before and all_rows(scratch_db) == data and leftovers(root) == []
+    assert structure.list_history("ledger") == []           # 되돌려진 변경은 이력에 남지 않는다
+
+
+def test_failed_load_puts_back_even_a_change_outside_the_data_fingerprint(root, scratch_db):
+    """설명처럼 데이터 설정 지문에 들지 않는 변경도, load가 실패하면 파일을 되돌린다(커밋 표식은 적재 시각)."""
+    load(load_project("ledger", root), dbname=scratch_db)
+    before = files(root)
+    (root / "ledger/data/entries/000020-20261121T0300Z.csv").write_text("id,qty\nE800,abc\n", encoding="utf-8")
+    err = pytest.raises(IngestError, change, root, scratch_db, [
+        {"op": "column.update", "table": "entries", "column": "memo", "set": {"description": "메모"}}]).value
+    assert (err.status, err.detail) == (422, "load_failed")
+    assert files(root) == before and leftovers(root) == [] and structure.list_history("ledger") == []
+
+
+def test_append_table_with_batches_cannot_switch_to_replace(root, scratch_db):
+    load(load_project("ledger", root), dbname=scratch_db)
+    before = files(root)
+    for mode in ("replace", None):
+        err = pytest.raises(IngestError, change, root, scratch_db, [
+            {"op": "table.update", "table": "entries", "set": {"mode": mode, "on_conflict": None}}]).value  # 잠금 안에서도 본다
+        assert (err.status, err.detail) == (422, "invalid_op")
+    assert files(root) == before
+
+
+def test_history_restore_cannot_switch_an_append_table_with_batches_back_to_replace(root, scratch_db):
+    """replace → append로 바꾼 뒤 배치를 더했으면, 그 전환을 이력으로 되돌리는 것도 거절한다(배치의 행이 사라진다)."""
+    load(load_project("ledger", root), dbname=scratch_db)
+    result = change(root, scratch_db, [{"op": "table.update", "table": "groups", "set": {"mode": "append"}}])
+    add(root, scratch_db, "groups", [{"id": "g9", "label": "아홉"}])
+    data = all_rows(scratch_db)
+    err = pytest.raises(IngestError, change, root, scratch_db, None, restore=result["history"], action="restore").value
+    assert (err.status, err.detail) == (422, "invalid_op")
+    assert all_rows(scratch_db) == data and "g9" in {r[0] for r in rows(scratch_db, "groups")}
+
+
+def test_recovery_reads_the_records_again_after_taking_the_lock(root, scratch_db, monkeypatch):
+    """잠금을 기다리는 사이 다른 쪽이 기록을 처리했으면(지웠으면) 옛 사본으로 되돌리지 않는다."""
+    from dashkit.project import locks
+
+    load(load_project("ledger", root), dbname=scratch_db)
+    record_dir = root / "ledger" / "data"
+    pending.write_record(record_dir, {"id": "stale", "kind": "config", "project": "ledger", "data_revision": "x",
+                                      "loaded_at": None, "files": [{"path": "schema.yaml", "before": "", "after": "y"}]})
+    before = files(root)
+    real = locks.acquire
+
+    def acquire_after_someone_else_finished(conn, wait_ms):
+        for path, _r in pending.list_records(record_dir):
+            pending.remove_record(path)          # 기다리는 사이 원래 작업이 끝나 기록을 지웠다
+        return real(conn, wait_ms)
+
+    monkeypatch.setattr(locks, "acquire", acquire_after_someone_else_finished)
+    assert structure.recover_before_read("ledger", root, dbname=scratch_db) == []
+    assert files(root) == before                 # 지워진 기록의 사본(빈 schema.yaml)으로 덮어쓰지 않았다
+
+
+@pytest.mark.parametrize("point,kept", [("after_move", False), ("before_commit", False), ("after_commit", True)])
+def test_crash_during_structure_change_is_recovered_before_reading(root, scratch_db, fault, point, kept):
+    load(load_project("ledger", root), dbname=scratch_db)
+    before = files(root)
+    fault(point, SimulatedCrash())
+    with pytest.raises(SimulatedCrash):
+        change(root, scratch_db, [{"op": "column.add", "table": "groups", "column": "note", "value": {"type": "text"}}])
+    assert pending.list_records(root / "ledger" / "data")           # 묶음 기록이 남았다
+    from dashkit.ingest import operation
+
+    operation.FAULTS.clear()
+    outcomes = structure.recover_before_read("ledger", root, dbname=scratch_db)
+    assert [o.result for o in outcomes] == ["committed" if kept else "discarded"]
+    assert (files(root) != before) is kept and leftovers(root) == []
+    # 커밋 뒤 이력을 쓰기 전에 끊겼으면 복구가 기록에서 이력을 쓴다. 되돌린 변경은 이력이 없다
+    assert [h["action"] for h in structure.list_history("ledger")] == (["test"] if kept else [])
+    rebuilt_equals_current(root, scratch_db)                         # 파일과 DB가 같은 판이다
+
+
+def test_next_folder_operation_recovers_an_unfinished_structure_change_first(root, scratch_db, fault):
+    """파일을 바꾼 뒤 load 전에 끊긴 구조 변경이 남아 있어도, 다음 더하기가 설정을 읽기 전에 먼저 정리한다
+    (새 YAML이 남아 데이터 설정 지문이 어긋난 채 rebuild_required로 막히지 않는다)."""
+    load(load_project("ledger", root), dbname=scratch_db)
+    before = files(root)
+    fault("after_move", SimulatedCrash())
+    with pytest.raises(SimulatedCrash):
+        change(root, scratch_db, [{"op": "column.add", "table": "entries", "column": "tier", "value": {"type": "integer"}}])
+    from dashkit.ingest import operation
+
+    operation.FAULTS.clear()
+    assert files(root) != before
+    add(root, scratch_db, "entries", [{"id": "E700"}])
+    assert files(root) == before and leftovers(root) == []
+    rebuilt_equals_current(root, scratch_db)
+
+
+# ---------------------------------------------------------------- 새 테이블
+
+CSV = "Item Code,Group,Count,Seen On\nA1,g1,3,2026-11-01\nA2,g2,4,2026-11-02\n".encode()
+
+
+@pytest.mark.parametrize("mode", ["append", "replace"])
+def test_new_table_from_csv_is_saved_validated_and_applied(root, scratch_db, mode):
+    load(load_project("ledger", root), dbname=scratch_db)
+    project = load_project("ledger", root)
+    inferred = newtable.infer_one(project, "items.csv", CSV)
+    assert inferred["name"] == "items" and [c["name"] for c in inferred["columns"]][:1] == ["item_code"]
+    op_list, first = newtable.build(project, inferred, CSV, "items.csv", mode=mode, dataset=True, suggest=True)
+    assert [o["op"] for o in op_list] == ["table.add", "dataset.add", "dashboard.add", "tab.add", "section.add"]
+    structure.validate("ledger", op_list, first)
+    result = change(root, scratch_db, op_list, extra=first, action="table-create")
+    assert sorted(rows(scratch_db, "items")) == [("A1", "g1", 3, __import__("datetime").date(2026, 11, 1)),
+                                                 ("A2", "g2", 4, __import__("datetime").date(2026, 11, 2))]
+    spec = load_project("ledger", root).schema["tables"]["items"]
+    assert spec["columns"]["item_code"]["aliases"] == ["Item Code"]       # 원래 머리글
+    assert (spec.get("mode") or "replace") == mode
+    if mode == "append":
+        (name,) = folder(root, "items")
+        assert name.startswith("000001-") and gzip.decompress((root / "ledger/data/items" / name).read_bytes()) \
+            .decode().startswith("item_code,group_col,count_col,seen_on\n")
+        # 같은 모양(원래 머리글)의 행을 다음에 올리면 aliases로 저절로 맞는다
+        add(root, scratch_db, "items", [{"Item Code": "A3", "Group": "g1", "Count": 1, "Seen On": "2026-11-03"}])
+    else:
+        assert (root / "ledger/data/items.csv").read_text(encoding="utf-8").startswith("item_code,group_col,count_col,seen_on\n")
+    rebuilt_equals_current(root, scratch_db)
+    # 되돌리면 그 작업이 만든 첫 파일도 함께 지운다. 그 뒤에 더한 배치는 이력에 없어 그대로 남는다(데이터를 지우지 않는다)
+    later = folder(root, "items")[1:]
+    change(root, scratch_db, None, restore=result["history"], action="restore")
+    assert "items" not in load_project("ledger", root).schema["tables"]
+    assert not (root / "ledger/data/items.csv").exists() and folder(root, "items") == later
+
+
+def test_unique_names_keep_the_suffix_within_63_chars():
+    long = "t" * 63
+    assert newtable.unique(long, {long}) == "t" * 61 + "_2"
+    assert newtable.unique(long, {long, "t" * 61 + "_2"}) == "t" * 61 + "_3"
+    assert newtable.unique("items", set()) == "items"
+
+
+def test_new_table_rows_that_fail_the_rules_are_reported(root, scratch_db):
+    project = load_project("ledger", root)
+    inferred = newtable.infer_one(project, "items.csv", CSV)
+    inferred["columns"][2]["type"] = "boolean"
+    err = pytest.raises(IngestError, newtable.build, project, inferred, CSV, "items.csv").value
+    assert (err.status, err.detail) == (422, "invalid_rows")
+    inferred["name"] = "groups"
+    err = pytest.raises(IngestError, newtable.build, project, inferred, CSV, "items.csv").value
+    assert (err.status, err.detail) == (409, "table_exists")
+    # 지운 테이블의 데이터 파일이 남은 이름: 추론은 피하고, 만들기는 거절한다(남은 파일을 새 테이블에 섞지 않는다)
+    (root / "ledger/data/items").mkdir()
+    (root / "ledger/data/items/000001-20261120T0000Z.csv").write_text("item_code\nOLD\n", encoding="utf-8")
+    assert newtable.infer_one(project, "items.csv", CSV)["name"] == "items_2"
+    inferred["name"] = "items"
+    err = pytest.raises(IngestError, newtable.build, project, inferred, CSV, "items.csv").value
+    assert (err.status, err.detail) == (409, "table_exists")
+    load(project, dbname=scratch_db)
+    err = pytest.raises(IngestError, change, root, scratch_db, [{"op": "table.add", "table": "items", "value": {
+        "mode": "append", "primary_key": "item_code", "columns": {"item_code": {"type": "text"}}}}]).value
+    assert (err.status, err.detail) == (409, "table_exists")        # 잠금 안에서도 본다
+
+
+# ---------------------------------------------------------------- 계보
+
+def test_lineage_follows_views_to_tables_and_charts(root, scratch_db):
+    load(load_project("ledger", root), dbname=scratch_db)
+    project = load_project("ledger", root)
+    graph = lineage.build(project, snapshot(scratch_db))
+    assert graph["datasets"]["summary"]["sources"] == {"entries": ["amount", "group_id"]}
+    assert graph["datasets"]["states"]["sources"] == {"entries": ["group_id", "state"]}
+    used = lineage.used_by(graph, "entries")
+    assert used["datasets"] == ["entries", "summary", "states"] and [c["key"] for c in used["charts"]] == ["c_total"]
+    assert used["tabs"] == ["main"]
+    assert lineage.used_by(graph, "groups")["datasets"] == []
+    assert lineage.without_column(graph, "entries", "memo") == ["summary", "states"]
+
+
+# ---------------------------------------------------------------- 합치기
+
+def test_compact_equals_rebuild_and_merged_folder_goes_after_next_load(root, scratch_db):
+    load(load_project("ledger", root), dbname=scratch_db)
+    for i in range(3):
+        add(root, scratch_db, "entries", [{"id": f"E40{i}", "qty": i}])
+    data = all_rows(scratch_db)
+    result = compact("ledger", "entries", projects_dir=root, dbname=scratch_db)
+    assert result["merged"] == 6 and result["rows"] == len(rows(scratch_db, "entries"))
+    assert folder(root, "entries") == [result["file"]] and not (root / "ledger/data/entries.csv").exists()
+    assert all_rows(scratch_db) == data and leftovers(root) == []
+    with __import__("dashkit").db.owner_conn(scratch_db) as conn, conn.cursor() as cur:
+        assert list(ledger.read(cur)["entries"]) == [result["file"]]
+    rebuilt_equals_current(root, scratch_db)
+    assert not (root / "ledger/data/entries/_merged").exists()     # load가 성공했으니 지웠다
+    # 합친 배치는 이름이 표식이라 load 뒤에도 되돌리지 않는다(테이블의 행 전부가 들어 있다)
+    assert result["file"].endswith("-merged.csv.gz")
+    from dashkit.ingest.remove import remove_batch
+
+    for fast in (True, False):
+        err = pytest.raises(IngestError, remove_batch, "ledger", "entries", result["file"], fast_only=fast,
+                            projects_dir=root, dbname=scratch_db).value
+        assert (err.status, err.detail) == (409, "merged_batch")
+    assert all_rows(scratch_db) == data
+    # 합친 뒤에 더한 배치는 그대로 되돌릴 수 있다
+    name = add(root, scratch_db, "entries", [{"id": "E499"}])["batches"][0]["file"]
+    assert not name.endswith("-merged.csv.gz")
+    remove_batch("ledger", "entries", name, fast_only=True, projects_dir=root, dbname=scratch_db)
+    assert all_rows(scratch_db) == data
+
+
+def test_compact_refuses_unapplied_files(root, scratch_db):
+    load(load_project("ledger", root), dbname=scratch_db)
+    (root / "ledger/data/entries/000020-20261121T0300Z.csv").write_text("id\nE500\n", encoding="utf-8")
+    err = pytest.raises(IngestError, compact, "ledger", "entries", projects_dir=root, dbname=scratch_db).value
+    assert (err.status, err.detail) == (409, "rebuild_required")
+
+
+@pytest.mark.parametrize("lose_new_file", [False, True])
+def test_compact_crash_is_finished_or_rolled_back(root, scratch_db, fault, lose_new_file):
+    load(load_project("ledger", root), dbname=scratch_db)
+    add(root, scratch_db, "entries", [{"id": "E600"}])
+    data = all_rows(scratch_db)
+    before = folder(root, "entries")
+    fault("after_move", SimulatedCrash())         # 옛 파일 하나를 옮긴 뒤 죽는다
+    with pytest.raises(SimulatedCrash):
+        compact("ledger", "entries", projects_dir=root, dbname=scratch_db)
+    from dashkit.ingest import operation
+
+    operation.FAULTS.clear()
+    if lose_new_file:
+        for p in (root / "ledger/data/_pending/incoming").iterdir():
+            p.unlink()
+    load(load_project("ledger", root), dbname=scratch_db)          # 로더가 배치를 읽기 전에 복구한다
+    assert all_rows(scratch_db) == data and leftovers(root) == []
+    if lose_new_file:
+        assert folder(root, "entries") == before and (root / "ledger/data/entries.csv").exists()
+    else:
+        assert len(folder(root, "entries")) == 1
+
+
+def test_plan_does_not_recover_an_unfinished_structure_change(root, monkeypatch, capsys):
+    """plan은 읽기만 한다: 끝나지 않은 구조 변경을 복구하지 않고(owner 계정을 열지 않는다) 알리기만 한다."""
+    from dashkit import __main__ as cli
+    from dashkit import plan as plan_mod
+    from dashkit.ingest import structure as st
+
+    record_dir = root / "ledger" / "data"
+    pending.write_record(record_dir, {"id": "half", "kind": "config", "project": "ledger", "data_revision": "x",
+                                      "loaded_at": None, "files": [{"path": "schema.yaml", "before": "", "after": "y"}]})
+    before = files(root)
+    monkeypatch.setenv("PROJECT", "ledger")
+    monkeypatch.setattr(st, "recover_before_read", lambda *a, **k: pytest.fail("plan이 복구를 불렀다"))
+    monkeypatch.setattr(plan_mod, "make_plan", lambda project: {"project": project.name})
+    monkeypatch.setattr(plan_mod, "format_plan", lambda result: "ok")
+    assert cli.main(["plan"]) == 0
+    assert "끝나지 않은 구조 변경이 1개" in capsys.readouterr().err
+    assert files(root) == before and len(pending.list_records(record_dir)) == 1

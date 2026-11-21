@@ -16,7 +16,7 @@
 | 10 | 설정 형식 버전(`version`)과 `dashkit migrate` | 아래 "설정 버전", 형식 변경 기록 [../CHANGELOG.md](../CHANGELOG.md) |
 | 11 | Studio(구성 화면) API, 변경 연산, 요청 보호, 저장 방식 | [studio.md](studio.md). 화면(`web/studio/`)과 API(`dashkit/studio/`)의 약속이다. 프로젝트 마법사는 8번, 데이터 화면의 차이는 9번의 형식을 그대로 쓴다 |
 | 12 | 로그인·세션·요청 보호, 등급과 계정 상태, 인증 DB(`dashkit_auth` 스키마, `dash_auth` 계정), `/api/auth/*`, `make auth-init`·`make admin` | [auth.md](auth.md). 기존 웹앱 API의 로그인 요구는 4번(api.md)에도 적는다 |
-| 13 | 데이터 추가 적재: 테이블 방식(`mode`·`on_conflict`), 배치 폴더와 정규형, 접수(파서·머리글 맞추기·값 다듬기), 충돌 정책, 배치 기록(`dashkit_meta.batch`)과 데이터 설정 지문, 쓰기 잠금, 폴더를 바꾸는 작업의 공통 순서, 묶음 기록과 끊김 복구, 운용자 조회 계정(`dash_inspect`, `make data-init`) | [ingest.md](ingest.md). 로더·관리 서비스·CLI·Studio가 `dashkit/ingest/` 한 벌을 쓴다 |
+| 13 | 데이터 추가 적재: 테이블 방식(`mode`·`on_conflict`), 배치 폴더와 정규형, 접수(파서·머리글 맞추기·값 다듬기), 충돌 정책, 배치 기록(`dashkit_meta.batch`)과 데이터 설정 지문, 쓰기 잠금, 폴더를 바꾸는 작업의 공통 순서, 묶음 기록과 끊김 복구, 구조 변경과 설정 변경 이력, 합치기, 계보, 운용자 조회 계정(`dash_inspect`, `make data-init`) | [ingest.md](ingest.md). 로더·관리 서비스·CLI·Studio가 `dashkit/ingest/` 한 벌을 쓴다 |
 | 14 | 관리 서비스(`/api/manage`, `make manage`)의 경로·권한·요청 보호·한도 | [manage.md](manage.md). 형식과 동작은 13번, 설정 변경 연산은 11번을 그대로 쓴다 |
 | — | Superset 6.1.0 확인 기록(Explore) | [superset-notes.md](superset-notes.md), 원본 export [superset-6.1.0-export/](superset-6.1.0-export/)(`managed/`는 sync가 만든 객체의 export) |
 | — | Superset 버전 관리와 업그레이드 절차 | [superset-upgrade.md](superset-upgrade.md). 버전은 `.env.example`의 `SUPERSET_VERSION` 한 곳, 키 대조는 `tests/test_superset_keys.py` |

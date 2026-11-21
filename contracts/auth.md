@@ -250,6 +250,10 @@
 | `group.members` | 구성원 변경(바뀐 것이 있을 때. 일괄 그룹 지정은 그룹마다 한 줄, `bulk: true`) | `{added: [이메일], removed: [이메일]}` |
 | `data.batch.create` · `data.batch.failed` | 관리 서비스·CLI의 데이터 더하기(미리보기는 남기지 않는다) · 그 실패. 대상은 테이블 | `{project, table, file, sha256, rows, method, source_name}` · `{project, table, method, detail_code}`. 데이터 값은 싣지 않는다([manage.md](manage.md)) |
 | `data.batch.remove` · `data.batch.restore` | 배치 되돌리기(방금 추가 취소 포함) · 되살리기 | `{project, table, file, fast}` · `{project, table, file}` |
+| `data.batch.compact` | 배치 합치기. 대상은 테이블 | `{project, table, file, merged, rows}` |
+| `data.table.create` · `data.table.alter` · `data.table.drop` | 관리 서비스의 테이블 추가(첫 파일 포함) · 테이블·열 변경(`aliases` 저장 포함) · 테이블 삭제. 대상은 테이블 | `{project, mode, source_name, dataset, dashboard, history}` · `{project, op, column, history}`(`aliases` 저장은 `{project, table, aliases}`) · `{project, op, history}` |
+| `data.dataset.create` · `data.dataset.alter` · `data.dataset.drop` | 관리 서비스의 데이터셋 만들기 · 변경 · 삭제. 대상은 데이터셋 | `{project, op, history}` |
+| `data.config.restore` | 설정 변경 이력으로 되돌리기. 대상은 프로젝트 | `{project, restored, history, files}` |
 
 ## 계정 흐름
 

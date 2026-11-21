@@ -44,7 +44,8 @@ def _create_db() -> str:
 
 def _drop_db(name: str) -> None:
     with db.owner_conn(autocommit=True) as conn:
-        conn.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()", (name,))
+        conn.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid() "
+                     "AND backend_type = 'client backend'", (name,))
         conn.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(name)))
 
 
@@ -468,7 +469,18 @@ def test_load_record_matches_csv_for_every_example(name, scratch_db, tmp_path, m
     with current.reader(scratch_db) as conn:
         rec = current.read_load_record(conn)
         views_now = current.read_view_columns(conn)
-    assert rec.snapshot == json.loads(json.dumps(record.snapshot(name, project.schema, project.dashboard, counts)))
+    got = json.loads(json.dumps(rec.snapshot))
+    sources = {k: d.pop("sources") for k, d in got["datasets"].items()}
+    assert got == json.loads(json.dumps(record.snapshot(name, project.schema, project.dashboard, counts)))
+    # 계보(contracts/ingest.md "계보"): 데이터셋마다 읽는 raw 테이블과 열. table: 데이터셋은 그 테이블의 모든 열
+    assert set(sources) == set(project.dashboard["datasets"])
+    for key, ds in project.dashboard["datasets"].items():
+        for t, cols in sources[key].items():
+            assert cols == sorted(cols) and set(cols) <= set(project.schema["tables"][t]["columns"])
+        if "table" in ds:
+            assert sources[key] == {ds["table"]: sorted(project.schema["tables"][ds["table"]]["columns"])}
+        else:
+            assert sources[key], f"{key}: sql: 데이터셋이 읽는 테이블을 찾지 못함"
     assert {t: len(p) for t, p in rec.fingerprints.items() if p} == {t: n for t, n in counts.items() if n}
     # 기록 어디에도 CSV의 기본 키 원본 값이 없다: 지문 테이블의 두 열은 전부 SHA-256 16진수이고,
     # 스냅샷은 (바로 위에서 본 대로) 이름·타입·행 수·정의 해시뿐이다

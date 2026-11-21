@@ -49,6 +49,9 @@ const ADMIN_PAGES = [
   { key: "_admin-data-bulk", label: "운용: 여러 파일 올리기", path: "/admin/#tables", menu: "tables", open: "[data-action=bulk]" },
   // 데이터셋 목록: 그 메뉴가 없는 버전(3단계 이전)이면 건너뛴다
   { key: "_admin-datasets", label: "운용: 데이터셋", path: "/admin/#datasets", menu: "datasets" },
+  // 4단계: 새 테이블 마법사(빈 화면)와 설정 이력. 버튼·메뉴가 없는 버전이면 건너뛴다(캡처 계정은 admin이다)
+  { key: "_admin-data-new-table", label: "운용: 새 테이블", path: "/admin/#tables", menu: "tables", open: "[data-action=new-table]" },
+  { key: "_admin-history", label: "운용: 설정 이력", path: "/admin/#history", menu: "history" },
   { key: "_account", label: "내 정보", path: "/account.html" },
 ];
 
