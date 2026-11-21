@@ -146,6 +146,9 @@ export default {
   previewNone: "아직 적용된 프로젝트가 없습니다. '적용'을 누르면 여기에 나타납니다.",
   previewMissingTitle: "미리보기 주소가 없습니다",
   previewMissingBody: "웹앱 주소(WEB_PUBLIC_URL)가 설정돼 있는지 확인하세요.",
+  previewWrongOriginTitle: "이 주소에서는 미리보기를 띄울 수 없습니다",
+  previewWrongOriginBody: (url) => `웹앱은 ${url}에서 연 Studio 안에서만 열립니다(프레임 허용과 로그인 쿠키가 그 주소 기준입니다). 그 주소로 Studio를 다시 여세요.`,
+  previewWrongOriginAction: "그 주소로 열기",
 
   // 프로젝트 마법사
   wizardTitle: "새 프로젝트",

@@ -395,7 +395,7 @@ function renderUserMenu(user) {
   const menu = $("userMenu"), btn = $("userBtn"), pop = $("userPop");
   if (!user || typeof user.email !== "string") { menu.hidden = true; return; }
   $("userIco").replaceChildren(icon("user"));
-  $("userLabel").textContent = S.account;
+  $("userLabel").textContent = S.accountButton;
   btn.setAttribute("aria-label", S.accountMenuLabel(user.email));
   btn.title = user.email;
   $("userEmail").textContent = user.email;

@@ -78,7 +78,7 @@ Studio에서 적용(apply)하면 그 프로젝트가 웹앱에 보인다. backen
 | 메서드 경로 | 내용 |
 |---|---|
 | `GET /studio/api/health` | `{"status": "ok"}` |
-| `GET /studio/api/projects` | `{"projects": [{"name", "title", "valid", "errors": n}], "current": "<이름>" 또는 null, "web_url": "<미리보기 주소>"}`. `current`는 지금 웹앱에 적용된 프로젝트(`.state/embed.json`의 `project`). `title`은 읽을 수 없으면 null |
+| `GET /studio/api/projects` | `{"projects": [{"name", "title", "valid", "errors": n}], "current": "<이름>" 또는 null, "web_url": "<미리보기 주소>", "studio_url": "<Studio 주소>"}`. `studio_url`은 `STUDIO_ORIGIN`의 출처(`scheme://host[:port]`, 기본 포트 생략)다(아래 "프레임 허용"). `current`는 지금 웹앱에 적용된 프로젝트(`.state/embed.json`의 `project`). `title`은 읽을 수 없으면 null |
 | `POST /studio/api/projects/infer` | multipart `files`(CSV 여러 개) → `{"inference": {…}, "upload_id": "…"}`. 파일을 `projects/`에 쓰지 않는다(메모리에 1시간, 최근 3개). `inference` 형식은 `contracts/scaffold.md`. 읽을 수 없는 CSV는 422 `invalid_csv` + `errors` |
 | `POST /studio/api/projects` | `{"name", "upload_id", "inference"}` → 프로젝트 생성(`scaffold.render` + `write_project`). 201 `{"name"}`. 이름이 이미 있으면 409 `project_exists`. `inference.tables`를 고쳤으면 서버가 `suggest_dashboard`로 초안 차트를 다시 고른다(요청에 `"resuggest": true`. `inference.dashboard.app`은 유지한다). 만들 수 없으면 422 `invalid_inference` + `errors`(`problems`가 남아 있음, 검증 실패 등) |
 | `GET /studio/api/projects/{p}/config` | `{"name", "schema": {…}, "dashboard": {…}, "valid", "errors": […], "columns": {"<데이터셋>": [{"name","type"}]}, "columns_source": "db"\|"schema", "metrics": {"<데이터셋>": ["<지표 이름>"]}, "tables": {"<테이블>": {"rows": n 또는 null, "columns": [{"name","type"}]}}, "revision": "…"}`. `schema`·`dashboard`는 파일을 읽은 그대로(기본값을 채우지 않은 것. 읽을 수 없으면 null). `columns`는 지금 DB의 뷰 열이다(이 프로젝트가 적재돼 있을 때. `type`은 `/api/data`와 같은 6가지). 아니면 `table:` 데이터셋만 스키마에서 채운다(`sql:` 데이터셋은 키가 없다). `tables.<테이블>.rows`는 `data/<테이블>.csv`의 행 수, `columns[].type`은 스키마의 유형(`enum` 포함) |
@@ -153,4 +153,6 @@ Studio 오른쪽의 미리보기는 실제 웹앱을 iframe으로 띄운다(별�
 - 웹앱(nginx)의 CSP `frame-ancestors`는 평소 `'none'`이다. `make studio`가 `STUDIO_ORIGIN`을 주고 web 컨테이너를 다시 만들면 그 출처 하나가 된다(`WEB_FRAME_ANCESTORS`).
 - Superset의 `frame-ancestors`는 `WEB_ORIGINS`에 `STUDIO_ORIGIN`을 더한 값이 된다(frame-ancestors는 모든 조상을 본다). 임베드 허용 도메인(Referer 검사)은 웹앱 출처 그대로다.
 - `make studio-down`이 둘을 원래대로 되돌린다.
+- 로그인: 미리보기 안의 웹앱도 로그인을 요구한다(`contracts/auth.md`). 틀 안의 로그인 화면에서 그대로 로그인하면 된다. 세션 쿠키는 `SameSite=Lax`이므로 Studio와 웹앱이 **같은 사이트**(기본 `localhost`, 포트만 다름)일 때만 틀 안에서 실린다.
+- 그래서 미리보기는 `STUDIO_ORIGIN` 주소로 연 Studio에서만 뜬다. 요청 보호는 `127.0.0.1:<포트>`로 연 화면도 받지만(위 "Host 검사"), 그 주소에서는 웹앱이 틀을 거절한다. 화면은 `location.origin`이 `GET /studio/api/projects`의 `studio_url`과 다르면 iframe을 만들지 않고 "이 주소에서는 미리보기를 띄울 수 없습니다"와 `studio_url`(지금 화면의 `#` 뒤를 붙인 것)로 가는 링크를 보여 준다(`web/studio/preview.js`).
 - 웹앱의 `/studio/…` 경로는 nginx가 404로 막는다(구성 화면 파일은 studio 컨테이너만 서빙한다).

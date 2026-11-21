@@ -30,7 +30,7 @@ export default {
   noTabs: "표시할 탭이 없습니다. 설정 파일의 tabs를 확인하세요.",
 
   // 사용자 메뉴(레일 아래)
-  account: "내 계정",
+  accountButton: "내 계정",
   accountMenuLabel: (email) => `내 계정: ${email}`,
   logout: "로그아웃",
   adminLink: "운용",
