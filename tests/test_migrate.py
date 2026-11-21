@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import shutil
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -158,7 +161,7 @@ def test_migrate_check_changes_nothing(tmp_path):
     root = copy_basic(tmp_path)
     before = {f: (root / "basic" / f).read_bytes() for f in FILES}
     results = migrate.migrate_project(root / "basic", check=True)
-    assert [r.changed for r in results] == [True, True]
+    assert [r.changed for r in results] == [False, False]
     assert {f: (root / "basic" / f).read_bytes() for f in FILES} == before
 
 
@@ -177,9 +180,9 @@ def test_cli_migrate_and_check_exit_codes(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("PROJECTS_DIR", str(root))
     before = (root / "basic" / "schema.yaml").read_bytes()
 
-    assert main(["migrate", "--check"]) == 1
+    assert main(["migrate", "--check"]) == 0
     assert (root / "basic" / "schema.yaml").read_bytes() == before
-    assert "schema.yaml" in capsys.readouterr().out
+    assert "이미 최신" in capsys.readouterr().out
 
     assert main(["migrate"]) == 0
     assert (root / "basic" / "schema.yaml").read_bytes().startswith(b"version: 1\n")
@@ -190,3 +193,99 @@ def test_cli_migrate_and_check_exit_codes(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setenv("PROJECT", "Bad Name")
     assert main(["migrate"]) == 1
+
+
+@pytest.mark.parametrize("versions", [(False, False), (True, True), (False, True)])
+def test_cli_check_current_versions(tmp_path, monkeypatch, capsys, versions):
+    root = copy_basic(tmp_path) / "basic"
+    for file, explicit in zip(FILES, versions):
+        if explicit:
+            prepend(root / file, "version: 1\n")
+    monkeypatch.setenv("PROJECT", "basic")
+    monkeypatch.setenv("PROJECTS_DIR", str(tmp_path))
+    before = {f: (root / f).read_bytes() for f in FILES}
+    assert main(["migrate", "--check"]) == 0
+    output = capsys.readouterr()
+    assert "이미 최신" in output.out and output.err == ""
+    assert {f: (root / f).read_bytes() for f in FILES} == before
+
+
+@pytest.mark.parametrize("value", ['"1"', "0", "1.5", "true", "null", "2", "[broken"])
+def test_cli_check_invalid_file_is_read_only(tmp_path, monkeypatch, capsys, value):
+    root = copy_basic(tmp_path) / "basic"
+    prepend(root / "dashboard.yaml", f"version: {value}\n")
+    monkeypatch.setenv("PROJECT", "basic")
+    monkeypatch.setenv("PROJECTS_DIR", str(tmp_path))
+    before = {f: (root / f).read_bytes() for f in FILES}
+    assert main(["migrate", "--check"]) == 1
+    output = capsys.readouterr()
+    assert output.out == "" and "dashboard.yaml:" in output.err
+    assert {f: (root / f).read_bytes() for f in FILES} == before
+    assert main(["migrate"]) == 1
+    assert {f: (root / f).read_bytes() for f in FILES} == before
+
+
+def test_cli_future_migration_and_idempotence(tmp_path, monkeypatch, capsys):
+    root = copy_basic(tmp_path) / "basic"
+    prepend(root / "dashboard.yaml", "version: 1\n")
+    monkeypatch.setenv("PROJECT", "basic")
+    monkeypatch.setenv("PROJECTS_DIR", str(tmp_path))
+    monkeypatch.setattr(migrate, "CONFIG_VERSION", 2)
+    monkeypatch.setitem(migrate.MIGRATIONS, 1, lambda file, text: text)
+    before = {f: (root / f).read_bytes() for f in FILES}
+    assert main(["migrate", "--check"]) == 1
+    output = capsys.readouterr()
+    assert all(f in output.out for f in FILES)
+    assert "버전 1 → 2" in output.out and "맨 위에 넣음" not in output.out
+    assert "파일은 바꾸지 않음" in output.err
+    assert {f: (root / f).read_bytes() for f in FILES} == before
+    assert main(["migrate"]) == 0
+    after = {f: (root / f).read_bytes() for f in FILES}
+    assert all(b"version: 2" in b for b in after.values())
+    assert main(["migrate"]) == 0
+    assert {f: (root / f).read_bytes() for f in FILES} == after
+
+
+def test_cli_missing_migration_and_file(tmp_path, monkeypatch, capsys):
+    root = copy_basic(tmp_path) / "basic"
+    monkeypatch.setenv("PROJECT", "basic")
+    monkeypatch.setenv("PROJECTS_DIR", str(tmp_path))
+    monkeypatch.setattr(migrate, "CONFIG_VERSION", 2)
+    before = {f: (root / f).read_bytes() for f in FILES}
+    assert main(["migrate", "--check"]) == 1
+    output = capsys.readouterr()
+    assert output.out == "" and all(f in output.err for f in FILES)
+    assert "변환이 등록되어 있지 않음" in output.err
+    assert {f: (root / f).read_bytes() for f in FILES} == before
+    (root / "dashboard.yaml").unlink()
+    assert main(["migrate", "--check"]) == 1
+    assert "파일이 없음" in capsys.readouterr().err
+    assert (root / "schema.yaml").read_bytes() == before["schema.yaml"]
+
+
+@pytest.mark.parametrize("name", ["devtracker", "sales-sample", "chart-gallery"])
+def test_cli_check_original_examples(name, monkeypatch, capsys):
+    monkeypatch.setenv("PROJECT", name)
+    monkeypatch.setenv("PROJECTS_DIR", str(PROJECTS))
+    before = {f: (PROJECTS / name / f).read_bytes() for f in FILES}
+    assert main(["migrate", "--check"]) == 0
+    output = capsys.readouterr()
+    assert "이미 최신" in output.out and output.err == ""
+    assert {f: (PROJECTS / name / f).read_bytes() for f in FILES} == before
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_process_check_exit_and_streams(tmp_path, invalid):
+    root = copy_basic(tmp_path) / "basic"
+    if invalid:
+        prepend(root / "dashboard.yaml", "version: null\n")
+    before = {f: (root / f).read_bytes() for f in FILES}
+    env = {**os.environ, "PROJECT": "basic", "PROJECTS_DIR": str(tmp_path)}
+    result = subprocess.run([sys.executable, "-m", "dashkit", "migrate", "--check"],
+                            env=env, capture_output=True, text=True, check=False)
+    assert result.returncode == int(invalid)
+    if invalid:
+        assert result.stdout == "" and "dashboard.yaml:version:" in result.stderr
+    else:
+        assert "이미 최신" in result.stdout and result.stderr == ""
+    assert {f: (root / f).read_bytes() for f in FILES} == before
