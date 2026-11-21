@@ -391,9 +391,9 @@ _test_run:
 	echo "== 5단계: 누적 테이블 프로젝트(tests/fixtures/ledger 사본, zz-ingest)로 관리 서비스의 데이터 운용 확인"; \
 	rm -rf ./projects/zz-ingest; cp -R tests/fixtures/ledger ./projects/zz-ingest; \
 	if PROJECT=zz-ingest $(MAKE) --no-print-directory apply; then \
-	  PROJECT=zz-ingest $(TOOLS) python -m pytest -q -p no:cacheprovider tests/test_manage_data.py || rc=1; \
+	  PROJECT=zz-ingest $(TOOLS) python -m pytest -q -p no:cacheprovider tests/test_manage_data.py tests/test_manage_structure.py || rc=1; \
 	else rc=1; fi; \
-	rm -rf ./projects/zz-ingest; \
+	rm -rf ./projects/zz-ingest ./.test/state/history/zz-ingest; \
 	exit $$rc
 
 # ---------------------------------------------------------------- 초기화

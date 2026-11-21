@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from ... import config, db
 from ...auth import store as auth_store
 from ...auth.routes import Principal, client_ip, require_admin, require_operator
-from ...ingest import Item, IngestError, batches, ingest, ledger
+from ...ingest import Item, IngestError, batches, ingest, ledger, lineage
 from ...ingest.batches import REMOVED_DIR
 from ...ingest.remove import NeedsRebuild, remove_batch, restore_batch
 from ...project import store, upload
@@ -61,6 +61,18 @@ def _recorded() -> dict[str, dict[str, ledger.Recorded]]:
         return {}
 
 
+def _lineage(project: config.Project) -> dict[str, Any]:
+    """계보(적재 스냅샷은 dash_inspect로 읽는다. 읽지 못하면 설정만으로)."""
+    snap = None
+    try:
+        with db.inspect_conn() as conn:
+            with conn.cursor() as cur:
+                snap = ledger.loaded(cur).snapshot
+    except (psycopg.Error, RuntimeError):
+        pass
+    return lineage.build(project, snap)
+
+
 def _audit(action: str, principal: Principal | None, request: Request | None, **detail: Any) -> None:
     try:
         auth_store.record_audit(action, actor_id=principal.id if principal else None,
@@ -91,6 +103,7 @@ def get_tables(principal: Principal = Depends(require_operator)) -> dict[str, An
     project = _project()
     recorded = _recorded()
     hint = context.limits().compact_hint
+    graph = _lineage(project)
     items = []
     for name, spec in project.schema["tables"].items():
         mode = spec.get("mode") or "replace"
@@ -103,6 +116,7 @@ def get_tables(principal: Principal = Depends(require_operator)) -> dict[str, An
             "description": spec.get("description"),
             "rows": sum(r.inserted for r in rec.values()) if rec else None,
             "batches": len(files), "compact_hint": len(files) > hint,
+            "used_by": len(lineage.used_by(graph, name)["datasets"]),
             "last_batch": {"file": last.file, "added_at": last.added_at,
                            "actor_email": (_batch_log(project.name, name).get(last.file) or {}).get("actor_email")}
             if last else None,
@@ -325,7 +339,7 @@ def get_batches(table: str, removed: str | None = None, principal: Principal = D
     def row(file: str, *, is_removed: bool) -> dict[str, Any]:
         r = rec.get(file)
         who = log.get(file) or {}
-        return {"file": file, "removed": is_removed, "first": file == f"{name}.csv",
+        return {"file": file, "removed": is_removed, "first": file == f"{name}.csv", "merged": batches.is_merged(file),
                 "added_at": batches.stamp_of(file), "recorded": r is not None,
                 "rows": r.rows if r else None, "inserted": r.inserted if r else None,
                 "updated": r.updated if r else None, "skipped": r.skipped if r else None,

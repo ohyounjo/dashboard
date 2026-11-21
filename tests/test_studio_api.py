@@ -325,10 +325,11 @@ def test_hand_edit_between_requests_is_respected(client):
 def test_ops_registry_takes_new_ops(monkeypatch):
     """연산은 등록 표에 함수를 더하면 는다."""
     assert sorted(ops.OPS) == [
-        "app.update", "chart.add", "chart.remove", "chart.update", "column.update", "dashboard.update",
+        "app.update", "chart.add", "chart.remove", "chart.update", "column.add", "column.update",
+        "dashboard.add", "dashboard.update", "dataset.add", "dataset.remove", "dataset.update",
         "filter.add", "filter.move", "filter.remove", "filter.update", "layout.set",
         "section.add", "section.move", "section.remove", "section.update",
-        "tab.add", "tab.move", "tab.remove", "tab.update"]
+        "tab.add", "tab.move", "tab.remove", "tab.update", "table.add", "table.remove", "table.update"]
     monkeypatch.setattr(ops, "OPS", dict(ops.OPS))
     monkeypatch.setattr(ops, "OP_FILES", dict(ops.OP_FILES))
 
@@ -1095,4 +1096,36 @@ def test_column_update_saves_aliases_the_same_way_as_the_manager(client, tmp_pat
     assert out["changed"] == ["schema.yaml"]
     assert (other.projects / "devtracker" / "schema.yaml").read_bytes() == via_studio
     r = patch(client, {"op": "column.update", "table": "members", "column": "name", "set": {"type": "integer"}})
+    assert r.status == 400 and "넓히기만" in json.loads(r.body)["message"]
+    r = patch(client, {"op": "column.update", "table": "members", "column": "name", "set": {"ref": "docs.id"}})
     assert r.status == 400 and "바꿀 수 없는 키" in json.loads(r.body)["message"]
+
+
+def test_structure_ops_write_the_same_bytes_in_studio_and_the_manager(client, tmp_path, monkeypatch):
+    """구조 변경 연산(설계서 6-3): Studio의 PATCH와 관리 서비스의 구조 변경(structure.plan_files)이 같은 바이트를 쓴다.
+    replace 테이블의 열 추가는 CSV도 함께 바꿔야 해서 Studio의 저장은 거절하고, 관리 서비스는 두 파일을 함께 바꾼다."""
+    from dashkit.ingest import structure
+
+    op_list = [
+        {"op": "column.update", "table": "kpi_snapshots", "column": "open_issues",
+         "set": {"type": "number", "description": "열린 이슈"}},
+        {"op": "table.add", "table": "notes", "value": {"mode": "append", "primary_key": "id",
+                                                        "columns": {"id": {"type": "text"}, "body": {"type": "text"}}}},
+        {"op": "dataset.add", "key": "notes", "value": {"table": "notes"}},
+        {"op": "dataset.update", "key": "notes", "set": {"description": "메모"}},
+    ]
+    r = patch(client, *op_list)
+    assert r.status == 200, r.body
+    via_studio = {f: (client.projects / "devtracker" / f).read_bytes() for f in ("schema.yaml", "dashboard.yaml")}
+    (tmp_path / "other").mkdir()
+    other = fresh_client(tmp_path / "other", monkeypatch)
+    changes = structure.plan_files(config.load_project("devtracker"), op_list)
+    assert sorted(changes) == ["dashboard.yaml", "schema.yaml"]
+    assert {f: v[1] for f, v in changes.items()} == via_studio
+    add = {"op": "column.add", "table": "members", "column": "team", "value": {"type": "text", "default": "-"}}
+    r = patch(other, add)
+    assert r.status == 400 and "CSV" in json.loads(r.body)["message"]
+    changes = structure.plan_files(config.load_project("devtracker"), [add])
+    assert sorted(changes) == ["data/members.csv", "schema.yaml"]
+    header, first = changes["data/members.csv"][1].decode().split("\n")[:2]
+    assert header.endswith(",team") and first.endswith(",-")

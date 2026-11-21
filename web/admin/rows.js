@@ -6,21 +6,13 @@ import { h } from "../common.js";
 import { iconButton, uid } from "../shared/dom.js";
 import * as F from "../shared/fields.js";
 import * as Q from "../shared/query.js";
-import { T, ApiFail, api, errorText } from "./kit.js";
+import { T, ApiFail, api } from "./kit.js";
+import { dataFailText } from "./datakit.js";
 
 const D = T.data;
 const SIZE = 50;
 const FIELD_TEXT = { yes: D.yes, no: D.no, choose: D.choose, empty: D.emptyValue };
 
-/** 관리 서비스 오류 → 글(데이터 쪽 코드 먼저, 없으면 서버 글) */
-export function dataFailText(err) {
-  if (err instanceof ApiFail) {
-    if (err.detail && typeof D.errors[err.detail] === "string") return D.errors[err.detail];
-    if (err.detail && typeof T.errors[err.detail] === "string") return T.errors[err.detail];
-    if (err.body && typeof err.body.message === "string" && err.body.message) return err.body.message;
-  }
-  return errorText(err);
-}
 
 const msg = (tone, text, ...extra) => h("div", { class: "a-msg d-box", "data-tone": tone, role: tone === "bad" ? "alert" : "status" }, h("span", { text }), ...extra);
 

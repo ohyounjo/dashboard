@@ -16,9 +16,9 @@ from starlette.concurrency import run_in_threadpool
 from ... import config, db, paging
 from ...api.data import _TYPE_BY_OID, _value
 from ...auth.routes import Principal, require_operator
-from ...ingest import IngestError, ledger
+from ...ingest import IngestError, ledger, lineage
 from .. import context
-from .tables import _json, _project, _table
+from .tables import _json, _lineage, _project, _table
 
 router = APIRouter()
 
@@ -152,10 +152,12 @@ async def post_dataset_rows(dataset: str, request: Request, principal: Principal
             if not key_columns:
                 raise paging.QueryError("invalid_query", "이 데이터셋에는 행을 가리키는 키가 없습니다")
             return _one(cur, relation, columns, key_columns, q.key)
-        loaded_at, recorded = _versions(cur)
-        # 데이터 판: table: 데이터셋은 그 테이블, sql: 데이터셋은 모든 테이블(어느 테이블을 읽는지는 계보가 생기기 전까지
-        # 넓게 본다. 놓치는 것보다 한 번 더 알린다)
-        tables = [table] if table else list(project.schema["tables"])
+        now = ledger.loaded(cur)
+        loaded_at, recorded = now.loaded_at, ledger.read(cur)
+        # 데이터 판: table: 데이터셋은 그 테이블, sql: 데이터셋은 계보(적재 스냅샷의 sources)가 말하는 읽는 테이블.
+        # 계보가 없으면(옛 스냅샷) 모든 테이블로 넓게 본다(놓치는 것보다 한 번 더 알린다)
+        sources = lineage.build(project, now.snapshot)["datasets"][key]["sources"]
+        tables = [table] if table else sorted(sources) if sources is not None else list(project.schema["tables"])
         version = paging.data_version(loaded_at, {f"{t}/{f}": r.sha256 for t in tables
                                                   for f, r in recorded.get(t, {}).items()})
         total = sum(r.inserted for r in recorded.get(table, {}).values()) if table and recorded.get(table) else None
@@ -168,8 +170,9 @@ async def post_dataset_rows(dataset: str, request: Request, principal: Principal
 
 @router.get("/datasets")
 def get_datasets(principal: Principal = Depends(require_operator)) -> dict[str, Any]:
-    """데이터셋 목록: 종류(table|sql), 읽는 테이블(table:만. sql:은 계보가 생기면), 쓰는 그래프 수(설정에서 센다)."""
+    """데이터셋 목록: 종류(table|sql), 읽는 테이블(계보), 쓰는 그래프 수(설정에서 센다)."""
     project = _project()
+    graph = _lineage(project)
     used: dict[str, int] = {}
     for _d, chart in config.charts(project):
         used[chart["dataset"]] = used.get(chart["dataset"], 0) + 1
@@ -178,6 +181,7 @@ def get_datasets(principal: Principal = Depends(require_operator)) -> dict[str, 
     items = []
     for key, ds in project.dashboard["datasets"].items():
         items.append({"key": key, "kind": "table" if "table" in ds else "sql", "table": ds.get("table"),
+                      "sources": graph["datasets"][key]["sources"],
                       "description": ds.get("description"), "used_by": used.get(key, 0),
                       "labels": ds.get("labels") or {}})
     return {"items": items, "total": len(items)}

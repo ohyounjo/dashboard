@@ -148,6 +148,15 @@ select.input[aria-invalid="true"] { border-color: var(--bad) }
 .d-drop p { margin: 0; word-break: keep-all }
 .d-drop.is-over { border-color: var(--primary); background: var(--primary-soft); color: var(--fg) }
 .d-out:empty { display: none }
+/* 구조 변경(structure.js) */
+.a-table.d-infer td { vertical-align: top; padding: 6px 8px }
+.a-table.d-infer input.input, .a-table.d-infer select.input { min-height: 34px; padding: 5px 8px; font-size: 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--fg) }
+.a-table.d-infer input.input { width: 160px }
+.a-table.d-infer input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary); margin-top: 9px }
+.a-table.d-infer td.wrap { min-width: 200px }
+.d-usage h3 { font-size: 14px }
+.d-action-box:empty { display: none }
+.d-action-box { margin-bottom: 16px }
 /* 행 조회(rows.js) */
 .d-filter-form { display: flex; flex-direction: column; gap: 8px }
 .d-filter-rows { display: flex; flex-direction: column; gap: 8px }

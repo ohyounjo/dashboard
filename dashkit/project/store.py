@@ -312,6 +312,7 @@ def save_ops(name: str, op_list: list[Mapping[str, Any]], base_revision: str | N
     root = project_root(name)
     if base_revision is not None and base_revision != revision(root):
         raise StoreError(409, "stale_config", "설정 파일이 그 사이에 바뀌었습니다. 다시 불러온 뒤 시도하세요")
+    _no_replace_column_add(root, op_list)
     files: dict[str, bytes] = {}
     how: dict[str, str] = {}
     for file in ops.files_of(op_list):
@@ -326,6 +327,19 @@ def save_ops(name: str, op_list: list[Mapping[str, Any]], base_revision: str | N
     changed = commit(name, files)
     return {"changed": changed, "dashboard": read_raw(root, config.DASHBOARD_FILE),
             "schema": read_raw(root, config.SCHEMA_FILE), "revision": revision(root), "written": how}
+
+
+def _no_replace_column_add(root: Path, op_list: list[Mapping[str, Any]]) -> None:
+    """replace 테이블의 열 추가는 그 CSV에도 열을 더해야 한다(설계서 6-2). 이 저장은 YAML만 쓰므로 거절한다.
+    관리 서비스의 구조 변경(dashkit/ingest/structure.py)이 두 파일을 한 번에 바꾼다."""
+    if not any(o.get("op") == "column.add" for o in op_list):
+        return
+    tables = (read_raw(root, config.SCHEMA_FILE) or {}).get("tables") or {}
+    for i, o in enumerate(op_list):
+        spec = tables.get(o.get("table")) if o.get("op") == "column.add" else None
+        if isinstance(spec, dict) and (spec.get("mode") or "replace") == "replace":
+            message = f"ops[{i}] column.add: replace 테이블은 CSV에도 열을 더해야 함(운용 화면의 열 추가를 쓰거나 두 파일을 함께 고친다)"
+            raise StoreError(400, "invalid_op", message, [message])
 
 
 # ---------------------------------------------------------------- YAML 고쳐 쓰기
