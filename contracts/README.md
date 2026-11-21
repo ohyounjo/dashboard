@@ -71,7 +71,7 @@
 | 차트 `key` | 프로젝트 전체에서 유일 |
 | 차트 `dataset` | `datasets`에 있음 (**없는 데이터셋 참조**) |
 | 차트 지표 문자열 | 그 데이터셋의 `metrics`에 있음(레지스트리의 `kind`가 `metric`·`metrics`인 필드) |
-| 차트의 열·지표 라벨 (**중복 라벨**) | Superset이 보내는 한 쿼리 안에서 열·지표의 Superset 라벨이 겹치지 않음(열은 이름, 데이터셋 지표는 `labels`의 표시 이름 또는 이름, `{sql, label}`은 `label`). 쿼리의 모양은 레지스트리의 `kind`(`column`·`columns`·`metric`·`metrics`)와 유형 파일의 `query` 선언(`groups`, `merge_columns`)이 정한다. 같은 지표 두 번과 `merge_columns` 유형의 같은 열 두 번은 Superset 화면이 합치므로 오류가 아니다. `params`가 덮어쓴 값도 보고, 원본 차트는 `viz_type`이 `hook` 없는 레지스트리 유형과 같을 때만 본다. 메시지 `dashboard.yaml:<차트>.<필드>: 열·지표 라벨 '<라벨>'가 한 쿼리에서 겹침(<자리들>). Superset이 차트 자리에 "Duplicate column/metric labels" 오류를 냄`. 규칙은 [chart-shorthand.md](chart-shorthand.md) "중복 라벨 검사", 실측은 [superset-notes.md](superset-notes.md) 14절 |
+| 차트의 열·지표 라벨 (**중복 라벨**) | 같은 쿼리에서 서로 다른 지표가 화면에 의해 제거되거나, 남은 열·지표의 서버 라벨이 겹치면 오류. 최종 `params`와 `viz_type`, 쿼리 경계 및 실제 YAML 경로를 반영한다. 지원 유형·모드와 미지원 원본 구성은 [chart-shorthand.md](chart-shorthand.md) "중복 라벨 검사", 실측은 [superset-notes.md](superset-notes.md) 14절 |
 | `layout` 항목 | 차트 항목은 같은 대시보드 `charts`에 있음 (**배치에 없는 차트 키**). 모든 차트가 대시보드 안 탭(`tabs[].rows`)을 포함해 정확히 한 번 배치됨. 행(탭 안 행 포함)의 지정 너비 합 ≤ 12, 너비 없는 항목(차트·글) 수 ≤ 남은 칸. 제목(`header`)은 한 행에 혼자. 제목·글 항목의 형식(빈 글 금지, 허용 필드)은 스키마가 본다 |
 | `filters[].key` | 대시보드 안에서 유일 |
 | `filters[].type` | 생략하면 `select`. 유형별 필수 필드(스키마): `select`·`number_range`는 `dataset`·`column`, `time_grain`은 `dataset`. 유형에 없는 필드 금지: `time_range`에는 `dataset`·`column`·`multi`·`parent`, `number_range`에는 `multi`·`parent`, `time_grain`에는 `column`·`multi`·`parent` |

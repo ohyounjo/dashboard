@@ -332,6 +332,8 @@ metric: { expressionType: SQL, sqlExpression: "SUM(amount)", label: 매출 }   #
 
 축약에 없는 유형이다. 아래 조각은 `charts:` 목록에 그대로 넣고 `dataset`, 열, 지표 이름을 자기 것으로 바꾼다. 갤러리(`projects/chart-gallery/dashboard.yaml`의 `shelf_native`)에 같은 차트가 있다.
 
+라벨 정적 검사는 갤러리와 같은 `graph_chart`, `tree_chart`, `gantt_chart`의 문자열 열과 저장 지표 또는 라벨이 있는 SQL 단일 지표 구성에 적용한다. `chord`, `world_map`, `country_map`과 다른 형태의 원본 설정은 검사하지 않는다. 지원 범위와 오류 규칙은 [차트 계약](../contracts/chart-shorthand.md#중복-라벨-검사)을 따른다.
+
 ### 4-1. 관계, 계층, 일정
 
 ```yaml
