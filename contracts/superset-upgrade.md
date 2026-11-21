@@ -8,6 +8,8 @@ Superset 버전은 `.env.example`의 `SUPERSET_VERSION` **한 곳**에 있다. `
 
 1. **버전 변경.** `.env.example`의 `SUPERSET_VERSION`을 바꾼다. 자기 `.env`에 같은 변수가 있으면 그것도 바꾼다. `superset/Dockerfile`의 `psycopg2-binary` 버전이 새 Superset의 `postgres` extra와 같은지 확인한다(`superset-notes.md` 1절).
 
+   6.1.0 공식 이미지에 빠진 서비스워커는 `superset/vendor/service-worker-6.1.0.js`로 보충한다. Dockerfile은 해당 버전에서 파일이 없을 때만 이 파일을 쓴다. 업그레이드할 때 새 이미지의 `/static/service-worker.js` 제공 여부와 원본 워커의 동작을 확인하고 보충 코드를 재평가한다.
+
 2. **테스트 스택에서 띄운다.** 개발 스택은 그대로 둔다.
 
    ```bash
