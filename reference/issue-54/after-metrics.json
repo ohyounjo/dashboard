@@ -1,0 +1,182 @@
+[
+  {
+    "width": 390,
+    "theme": "light",
+    "tabs": [],
+    "frames": [
+      {
+        "url": "/embedded/ee799c48-324c-4089-8e72-1e581e0af844",
+        "innerWidth": 900,
+        "scrollWidth": 900,
+        "charts": [
+          {
+            "text": "숫자(big_number_total)\n5,486\n상자",
+            "width": 279,
+            "height": 400
+          },
+          {
+            "text": "숫자와 추이(big_number)\n264\n-18.5% 전주 대비",
+            "width": 573,
+            "height": 400
+          },
+          {
+            "text": "선(line)",
+            "width": 426,
+            "height": 400
+          },
+          {
+            "text": "막대(bar)",
+            "width": 426,
+            "height": 400
+          },
+          {
+            "text": "원(pie)",
+            "width": 279,
+            "height": 400
+          },
+          {
+            "text": "표(table)\n출하 번호\n\t\n수확일\n\t\n농원\n\t\n과일\n\t\n등급\n\t\n상자 수\n\t\n무게(kg)\nH0187\t2026-05-21\t바람언덕\t사과\t특\t\n38\t\n732.2\nH0173\t2026-05-11\t이슬밭\t사과\t특\t\n38\t\n709.6\nH0148\t2026-04-22\t이슬밭\t사과\t상\t\n34\t\n644.8\nH0185\t2026-05-19",
+            "width": 573,
+            "height": 400
+          }
+        ]
+      }
+    ],
+    "errors": []
+  },
+  {
+    "width": 390,
+    "theme": "dark",
+    "tabs": [],
+    "frames": [
+      {
+        "url": "/embedded/ee799c48-324c-4089-8e72-1e581e0af844",
+        "innerWidth": 900,
+        "scrollWidth": 900,
+        "charts": [
+          {
+            "text": "숫자(big_number_total)\n5,486\n상자",
+            "width": 279,
+            "height": 400
+          },
+          {
+            "text": "숫자와 추이(big_number)\n264\n-18.5% 전주 대비",
+            "width": 573,
+            "height": 400
+          },
+          {
+            "text": "선(line)",
+            "width": 426,
+            "height": 400
+          },
+          {
+            "text": "막대(bar)",
+            "width": 426,
+            "height": 400
+          },
+          {
+            "text": "원(pie)",
+            "width": 279,
+            "height": 400
+          },
+          {
+            "text": "표(table)\n출하 번호\n\t\n수확일\n\t\n농원\n\t\n과일\n\t\n등급\n\t\n상자 수\n\t\n무게(kg)\nH0187\t2026-05-21\t바람언덕\t사과\t특\t\n38\t\n732.2\nH0173\t2026-05-11\t이슬밭\t사과\t특\t\n38\t\n709.6\nH0148\t2026-04-22\t이슬밭\t사과\t상\t\n34\t\n644.8\nH0185\t2026-05-19",
+            "width": 573,
+            "height": 400
+          }
+        ]
+      }
+    ],
+    "errors": []
+  },
+  {
+    "width": 1280,
+    "theme": "light",
+    "tabs": [],
+    "frames": [
+      {
+        "url": "/embedded/ee799c48-324c-4089-8e72-1e581e0af844",
+        "innerWidth": 1158,
+        "scrollWidth": 1158,
+        "charts": [
+          {
+            "text": "숫자(big_number_total)\n5,486\n상자",
+            "width": 365,
+            "height": 400
+          },
+          {
+            "text": "숫자와 추이(big_number)\n264\n-18.5% 전주 대비",
+            "width": 745,
+            "height": 400
+          },
+          {
+            "text": "선(line)",
+            "width": 555,
+            "height": 400
+          },
+          {
+            "text": "막대(bar)",
+            "width": 555,
+            "height": 400
+          },
+          {
+            "text": "원(pie)",
+            "width": 365,
+            "height": 400
+          },
+          {
+            "text": "표(table)\n출하 번호\n\t\n수확일\n\t\n농원\n\t\n과일\n\t\n등급\n\t\n상자 수\n\t\n무게(kg)\nH0187\t2026-05-21\t바람언덕\t사과\t특\t\n38\t\n732.2\nH0173\t2026-05-11\t이슬밭\t사과\t특\t\n38\t\n709.6\nH0148\t2026-04-22\t이슬밭\t사과\t상\t\n34\t\n644.8\nH0185\t2026-05-19",
+            "width": 745,
+            "height": 400
+          }
+        ]
+      }
+    ],
+    "errors": []
+  },
+  {
+    "width": 1280,
+    "theme": "dark",
+    "tabs": [],
+    "frames": [
+      {
+        "url": "/embedded/ee799c48-324c-4089-8e72-1e581e0af844",
+        "innerWidth": 1158,
+        "scrollWidth": 1158,
+        "charts": [
+          {
+            "text": "숫자(big_number_total)\n5,486\n상자",
+            "width": 365,
+            "height": 400
+          },
+          {
+            "text": "숫자와 추이(big_number)\n264\n-18.5% 전주 대비",
+            "width": 745,
+            "height": 400
+          },
+          {
+            "text": "선(line)",
+            "width": 555,
+            "height": 400
+          },
+          {
+            "text": "막대(bar)",
+            "width": 555,
+            "height": 400
+          },
+          {
+            "text": "원(pie)",
+            "width": 365,
+            "height": 400
+          },
+          {
+            "text": "표(table)\n출하 번호\n\t\n수확일\n\t\n농원\n\t\n과일\n\t\n등급\n\t\n상자 수\n\t\n무게(kg)\nH0187\t2026-05-21\t바람언덕\t사과\t특\t\n38\t\n732.2\nH0173\t2026-05-11\t이슬밭\t사과\t특\t\n38\t\n709.6\nH0148\t2026-04-22\t이슬밭\t사과\t상\t\n34\t\n644.8\nH0185\t2026-05-19",
+            "width": 745,
+            "height": 400
+          }
+        ]
+      }
+    ],
+    "errors": []
+  }
+]
