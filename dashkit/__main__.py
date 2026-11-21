@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     plan.add_argument("--json", action="store_true", help="구조화된 결과를 JSON으로 출력")
     plan.set_defaults(fn=cmd_plan)
     migrate = sub.add_parser("migrate", help="설정 파일을 최신 형식 버전으로 고친다")
-    migrate.add_argument("--check", action="store_true", help="파일을 바꾸지 않고, 고칠 것이 있으면 종료 코드 1")
+    migrate.add_argument("--check", action="store_true", help="파일을 바꾸지 않고 버전 변환이 필요하면 종료 코드 1 (생략된 현재 버전 키는 통과)")
     migrate.set_defaults(fn=cmd_migrate)
     api = sub.add_parser("api", help="백엔드 API 서버")
     api.add_argument("--host", default="0.0.0.0")
