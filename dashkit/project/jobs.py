@@ -77,6 +77,10 @@ def run_apply(name: str, log: Callable[[str], None]) -> None:
     step = "check"
     try:
         log(f"▶ check: {name} 설정 검사")
+        from ..ingest.structure import recover_before_read
+
+        for outcome in recover_before_read(name):       # 끝나지 않은 구조 변경을 설정을 읽기 전에 정리한다
+            log(f"• 끊긴 구조 변경 {outcome.id}: {outcome.result}")
         project = config.load_project(name)
         log(f"✔ check: {project.name} 설정이 유효함")
 

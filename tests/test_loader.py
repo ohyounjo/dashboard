@@ -24,7 +24,8 @@ def test_db():
         conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     yield name
     with db.owner_conn(autocommit=True) as conn:
-        conn.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()", (name,))
+        conn.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid() "
+                     "AND backend_type = 'client backend'", (name,))
         conn.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(name)))
 
 

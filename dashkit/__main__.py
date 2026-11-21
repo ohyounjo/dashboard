@@ -13,8 +13,14 @@ import sys
 from .config import ConfigError, load_project
 
 
-def _project():
+def _project(*, recover: bool = True):
+    """현재 프로젝트의 설정. 읽기 전에 끝나지 않은 구조 변경(묶음 기록 config)을 먼저 정리한다(contracts/ingest.md).
+    recover=False(plan)는 아무것도 고치지 않는다: owner 계정을 열지 않고 기록이 있으면 알리기만 한다."""
+    from .ingest.structure import recover_before_read
+
     name = os.environ.get("PROJECT", "")
+    if recover:
+        recover_before_read(name)
     return load_project(name)
 
 
@@ -105,7 +111,13 @@ def cmd_plan(args) -> int:
 
     from . import plan
 
-    project = _project()
+    from .ingest import pending
+
+    project = _project(recover=False)
+    unfinished = [r for _p, r in pending.list_records(project.data_dir) if r and r.get("kind") == "config"]
+    if unfinished:
+        print(f"! 끝나지 않은 구조 변경이 {len(unfinished)}개 있음: 설정 파일이 바뀌는 도중일 수 있다. "
+              "plan은 고치지 않는다(다음 check·load·apply가 정리함)", file=sys.stderr)
     try:
         result = plan.make_plan(project)
     except plan.PlanError as exc:

@@ -82,6 +82,7 @@ metadata:
 - 기본 `GUEST_ROLE_NAME = "Public"`. 우리는 전용 역할 `EmbedGuest`를 만든다. [소스] `config.py:2306`
 - **최소 권한(실측):** `can_read on CurrentUserRestApi`, `can_read on Dashboard`, `can_read on Chart` **3개만으로** 6개 유형 차트 렌더링, 네이티브 필터 값 조회와 적용, 테마 전환이 동작했다. 데이터셋 `datasource_access`는 필요 없다. guest는 "대시보드에 속한 차트 + 저장된 payload"일 때만 데이터 접근이 허용된다. [소스] `security/manager.py:2564-2680`(`raise_for_access`의 guest 분기), `embedded/index.tsx:177-204`(시작 시 `GET /api/v1/me/roles/`, 권한이 없으면 "Something went wrong with embedded authentication")
 - **만드는 방법:** `superset-init`에서 앱 컨텍스트 파이썬으로 `security_manager.add_role("EmbedGuest")` 후 `find_permission_view_menu(perm, view)`로 찾아 `role.permissions`에 넣는다. 반드시 `superset init` **다음에** 실행한다(권한-뷰 행이 그때 생긴다). [실측] `superset init`을 다시 실행해도 EmbedGuest 권한은 유지된다.
+- **권한을 더 넓힐 때:** 기간 필터 변경(`can_time_range on Api`)과 `chord`·`world_map`·`country_map`(`can_explore_json on Superset`)에 필요한 권한을 더한 상태의 실측과 권고는 13절이다(지금은 넓히지 않았다).
 
 ## 6. iframe 허용 (Talisman, frame-ancestors)
 
@@ -233,5 +234,94 @@ metadata:
 
 ### 12-3. guest 임베드 화면의 한계
 
-- **기간(`time_range`) 필터는 값을 바꿀 수 없다.** 선택 창이 `GET /api/v1/time_range/`를 부르는데 guest 역할(5절의 권한 3개)에는 `can_read on TimeRange`가 없어 403이고, 창에 "Access is Denied"가 뜨며 APPLY가 비활성이다. [실측] `default`는 적용된다. 이 권한을 guest에게 줄지는 정하지 않았다(주지 않은 상태가 기본이다. 권한을 준 상태는 실측하지 않았다).
+- **기간(`time_range`) 필터는 값을 바꿀 수 없다.** 선택 창이 `GET /api/v1/time_range/`를 부르는데 guest 역할(5절의 권한 3개)에는 그 권한이 없어 403이고, 창에 "Access is Denied"가 뜨며 APPLY가 비활성이다. [실측] `default`는 적용된다. 필요한 권한은 `can_time_range on Api`다(`can_read on TimeRange`라는 권한은 없다). 이 권한을 준 상태의 실측과 권고는 13절이다(주지 않은 상태가 기본이다).
 - 필터 막대의 문구("Filters and controls", "Apply filters")는 영어다(언어 설정은 보강설계서 4-4, 6단계).
+
+## 13. guest 권한 추가 실측(TimeRange, explore_json)
+
+12-3절(기간 필터를 바꿀 수 없음)과 10-2절(`chord`·`world_map`·`country_map`이 그려지지 않음)의 원인인 권한 두 개를 guest 역할에 하나씩 더해 보고, 4절 표의 경계가 그대로인지와 그 권한이 새로 여는 엔드포인트를 확인했다. **권한은 바꾸지 않았다**(`superset/init_guest_role.py`는 그대로 3개). 결론은 13-5절이다.
+
+### 13-1. 검증 환경과 방법
+
+- 확인일: 2026-11-21. 테스트 스택(`dashkit-test-<식별자>`, main `ab2fc92`, Superset 6.1.0). 이미지 안 `/app/superset`의 소스는 `apache/superset:6.1.0`과 같다(`views/core.py`, `security/manager.py` 등 md5 일치). 아래 [소스]는 이 경로 기준이다.
+- 임시 프로젝트: `chart-gallery` 사본에 데이터셋 `region_sales`(나라 코드, 지역 코드)와 대시보드 `shelf_legacy`(`chord`(depot_hauls), `world_map`·`country_map`(region_sales), 10-2절의 최소 params)를 더해 적용했다. 이하 "내 대시보드"는 `shelf_legacy`, "다른 대시보드"는 `shelf_blocks`(데이터셋 harvests)다. 끝난 뒤 지웠다.
+- guest token: tools 컨테이너에서 4절 claim 형식으로 직접 서명했다(`resources`는 `shelf_legacy`의 임베드 UUID). 요청에는 `X-GuestToken`과 웹앱 출처의 `Referer`를 붙였다.
+- 권한: superset 컨테이너에서 앱 컨텍스트 파이썬으로 `find_permission_view_menu(perm, view)`를 찾아 `EmbedGuest`의 `role.permissions`에 넣고 뺐다(5절과 같은 방식). 세 상태를 차례로 쟀다. **기준선**(3개), **(a)** 기준선 + `can_time_range on Api`, **(b)** 기준선 + `can_explore_json on Superset`. 끝에 3개로 되돌린 것을 확인했다.
+- **권한 이름 정정:** 12-3절의 `can_read on TimeRange`라는 권한-뷰는 **없다**(`find_permission_view_menu("can_read", "TimeRange")` → None). `/api/v1/time_range/`는 `Api` 뷰의 `time_range` 메서드이고 FAB 권한은 메서드 단위라 **`can_time_range on Api`**다. [소스] `views/api.py:55`(`class Api`), `:98-103`(`@has_access_api`, `@expose("/v1/time_range/")`). [실측] 권한-뷰 목록에 `can_time_range on Api`, `can_explore_json on Superset`이 있다.
+- **반영 시점:** 권한을 넣거나 빼면 Superset을 다시 시작하지 않아도 다음 요청부터 바로 반영됐다(캐시 없음). guest 사용자의 역할은 요청마다 `find_role(GUEST_ROLE_NAME)`으로 만든다. [소스] `security/manager.py:3033-3070`(`get_guest_user_from_request`). [실측] 뺀 직후 같은 토큰으로 403.
+- 화면: 헤드리스 Chromium(`mcr.microsoft.com/playwright/python:v1.55.0-noble`)에서 웹앱 출처(`http://localhost:<웹앱 포트>`)의 빈 페이지에 SDK 0.4.0으로 대시보드를 임베드했다(웹앱 로그인 없이 같은 토큰). 이 이미지에는 Python 패키지 `playwright`가 없어 `playwright==1.55.0`을 임시 폴더에 따로 설치해 썼다.
+
+### 13-2. 실측 표
+
+상태 열은 기준선 / (a) TimeRange / (b) explore_json 순서다. 요청은 모두 "내 대시보드" 토큰으로 보냈다.
+
+| 요청 | 기준선 | (a) | (b) | 비고 |
+|---|---|---|---|---|
+| `GET /embedded/<내 UUID>`, `GET /api/v1/me/roles/` | 200 | 200 | 200 | |
+| `GET /api/v1/dashboard/<내 id>`, `/charts`, `/datasets` | 200 | 200 | 200 | |
+| `GET /api/v1/dashboard/<다른 id>`, `/charts` | 404 | 404 | 404 | |
+| `GET /api/v1/database/`, `GET /api/v1/dataset/` | 403 | 403 | 403 | |
+| `GET /api/v1/chart/` | 200, 0건 | 같음 | 같음 | |
+| `GET /api/v1/security/csrf_token/` | 403 | 403 | 403 | |
+| `POST /api/v1/chart/data` 내 차트 데이터셋(저장된 지표, 임의 SQL 지표·다른 열) | 200 | 200 | 200 | 4절 정정과 같은 한계 |
+| 〃 서브쿼리 지표 | 400 | 400 | 400 | "Custom SQL fields cannot contain sub-queries." |
+| 〃 다른 데이터셋(harvests) + 내 차트 `slice_id` | 403 | 403 | 403 | |
+| 〃 다른 대시보드의 차트 `slice_id`(내 대시보드 id / 다른 대시보드 id) | 403 / 403 | 같음 | 같음 | |
+| 〃 `result_type: samples` | 200(데이터셋 모든 열 10행) | 같음 | 같음 | 기존 한계 |
+| 〃 `result_type: query` | 200, **SQL 문 없음**(`{"language": "sql"}`만) | 같음 | 같음 | guest에게는 SQL을 지운다 |
+| 〃 `result_format: csv` | 403 | 403 | 403 | |
+| `PUT`/`DELETE chart`, `PUT dashboard`, `POST dashboard`, `POST sqllab/execute/` | 400 또는 302, 변경 없음 | 같음 | 같음 | |
+| `GET /api/v1/form_data/?slice_id=<다른 대시보드 차트>` | 403 | 403 | 403 | 같은 `Api` 뷰의 다른 메서드 |
+| `POST /api/v1/query/` | 302(CSRF) | 302 | 302 | 같은 `Api` 뷰의 다른 메서드 |
+| `GET /superset/slice/<내 차트>/`, `GET /superset/warm_up_cache/` | 302 / 403 | 같음 | 같음 | 같은 `Superset` 뷰의 다른 메서드 |
+| aud 불일치·만료·비밀값 불일치 토큰 | 401 | 401 | 401 | |
+| **`GET /api/v1/time_range/?q='Last week'`**(목록·`shift`, `DATEADD(...) : now` 식 포함) | 403 | **200** | 403 | 아래 13-3 |
+| 〃 `q='2026-01-01 : 2026-02-01'' OR 1=1'` | 403 | 400 "Unexpected time range" | 403 | 파서 오류 |
+| **`POST /superset/explore_json/`** 저장된 `chord`·`world_map`·`country_map`(`slice_id`, `dashboardId`) | 403 | 403 | **200** | GET도 200 |
+| 〃 같은 데이터셋에서 임의 SQL 지표·다른 열(`haul_no`)·다른 `viz_type` | 403 | 403 | **200** | `chart/data`와 같은 한계 |
+| 〃 서브쿼리 지표, `WHERE` 서브쿼리 | 403 | 403 | 400 | 같은 서브쿼리 검사 |
+| 〃 `WHERE` 괄호 탈출(`1=1) UNION SELECT … FROM pg_user --`) | 403 | 403 | 400 | "Invalid SQL clause" |
+| 〃 Jinja 식(`{{ 1 + 1 }}`) | 403 | 403 | 400 | 템플릿 처리 꺼짐(`ENABLE_TEMPLATE_PROCESSING: False`), 문자로 남아 DB 오류 |
+| 〃 `datasource`를 harvests로(내 차트 `slice_id`) | 403 | 403 | 403 | |
+| 〃 다른 대시보드의 차트 `slice_id`(내 대시보드 id / 다른 대시보드 id) | 403 | 403 | 403 / 403 | |
+| 〃 `slice_id` 없음 + 내 대시보드 데이터셋 / 다른 데이터셋 | 403 | 403 | 200 / 403 | drill 경로. `chart/data`도 200 / 403(같은 판정 함수) |
+| 〃 `dashboardId` 없음 | 403 | 403 | 403 | |
+| 〃 `?csv=true`, `?xlsx=true` | 403 | 403 | 403 | `can_csv` 없음 |
+| 〃 `?results=true`, `?samples=true` | 403 | 403 | 200 | `chart/data`의 full·samples와 같은 데이터 |
+| 〃 `?query=true` | 403 | 403 | **200, SQL 문 전체** | `SELECT … FROM dash.depot_hauls GROUP BY …` |
+| 〃 기본 응답(JSON) | 403 | 403 | **200, `query` 필드에 SQL 문 전체** | 오류일 때도 `query`와 DB 오류 문구가 온다 |
+| `POST /superset/explore_json/table/<harvests id>/` + form_data의 `datasource`가 내 데이터셋 / 없음 | 403 | 403 | 200 / 403 | 경로보다 form_data가 우선, 판정은 실제로 조회할 데이터셋으로 한다 |
+| `GET /superset/explore_json/data/<임의 키>` | 403 | 403 | 404 "Cached data not found" | 비동기 쿼리 꺼짐 |
+
+화면([실측], 같은 토큰으로 임베드):
+
+| 화면 | 기준선 | (a) | (b) |
+|---|---|---|---|
+| `shelf_blocks`의 기간 필터 | 기본값 적용. 선택 창에서 범위를 바꾸면 "Actual time range"가 "Access is Denied", APPLY 비활성(`time_range` 403) | **바꿀 수 있다.** "Last quarter"로 바꾸고 APPLY → Apply filters → 차트가 다시 조회되어 숫자가 2,876 → "No data"(데이터 없는 기간) | 기준선과 같음 |
+| `shelf_legacy`의 `chord`·`world_map`·`country_map` | 세 자리 모두 "Data error / Access is Denied"(`explore_json` 403) | 기준선과 같음 | **세 개 모두 그려진다**(`explore_json` 200 3건) |
+
+### 13-3. TimeRange가 여는 것
+
+- `time_range`는 문자열을 날짜 두 개로 바꿔 돌려줄 뿐이다. `get_since_until`(`utils/date_parser.py`)로 해석하고 DB나 메타데이터를 읽지 않는다. 응답은 `{since, until, timeRange, shift}`이고 `timeRange`는 보낸 문자열을 그대로 돌려준다. 해석할 수 없는 문자열은 400 "Unexpected time range"다. [소스] `views/api.py:98-127`. [실측] `'select 1 from raw.harvests'`도 날짜로만 해석됐다(`since: ""`, `until: <오늘>`).
+- FAB 권한은 메서드 단위라 같은 `Api` 뷰의 `query_form_data`(`/api/v1/form_data/`, 아무 차트의 저장된 form_data를 접근 검사 없이 돌려준다)와 `query`(`/api/v1/query/`)는 열리지 않는다. [소스] `views/api.py:58-95`. [실측] (a)에서도 403·302.
+- Superset의 Public 역할 권장 목록에도 들어 있다(`("can_time_range", "Api")`). [소스] `security/manager.py:410-440`(`PUBLIC_ROLE_PERMISSIONS`)
+
+### 13-4. explore_json이 여는 것
+
+- **접근 판정은 `chart/data`와 같은 함수다.** `explore_json`은 `@check_resource_permissions(check_datasource_perms)`로 감싸져 있고, 이 함수가 form_data로 viz 객체를 만든 뒤 `viz_obj.raise_for_access()` → `security_manager.raise_for_access(viz=…)`를 부른다. 그 안의 데이터셋 분기는 `chart/data`(`query_context`)와 같다: guest는 form_data의 `dashboardId` 대시보드에 접근할 수 있고, `slice_id` 차트가 그 대시보드에 있으며 그 차트의 데이터셋이 조회할 데이터셋과 같을 때(또는 `slice_id` 없이 그 대시보드의 데이터셋일 때, drill 경로)만 통과한다. [소스] `views/core.py:272-293`(데코레이터), `views/utils.py:483-540`(`check_datasource_perms`), `viz.py:701-708`, `security/manager.py:2578-2680`(데이터셋 분기), `:721-761`(`has_drill_access`). [실측] 13-2 표의 403 행들.
+- **"payload를 바꾸지 말라" 검사는 viz 경로에 없다.** `query_context_modified` 검사는 `query_context`가 있을 때만 돈다. [소스] `security/manager.py:2563-2576`. 지금은 `chart/data`에서도 이 검사가 건너뛰어지므로(4절 정정) 데이터 범위는 늘지 않는다. 다만 나중에 이 검사가 `chart/data`에서 동작하게 되더라도(예: guest에게 차트 목록 권한을 줌) `explore_json`은 계속 우회로로 남는다.
+- **서브쿼리·SQL 절 검사도 같다.** 임의 SQL 지표와 `WHERE` 식은 같은 `_process_sql_expression` → `validate_adhoc_subquery`(서브쿼리 거부, `ALLOW_ADHOC_SUBQUERY: False`)와 `sanitize_clause`를 지난다. [소스] `models/helpers.py:187-214`, `:917-936`
+- **CSV·XLSX는 막힌다.** `?csv=true`, `?xlsx=true`는 `can_csv on Superset`(또는 `GRANULAR_EXPORT_CONTROLS`이면 `can_export_data`)이 없으면 403이다. [소스] `views/core.py:311-327`
+- **새로 새는 것: 생성된 SQL 문.** `chart/data`는 guest 응답에서 `query`를 지우지만(`charts/data/api.py:447-450`), `explore_json`은 기본 응답의 `query` 필드(`viz.py:626-640`)와 `?query=true`(`views/core.py:152-167`, `get_query_string_response`)로 SQL 문 전체를 돌려준다. 오류 응답에도 `query`가 붙는다. 드러나는 것은 스키마·뷰 이름(`dash.<뷰>`), 데이터셋 지표의 SQL 식, 조회 조건이다. 열 이름은 `samples`로 이미 보인다. `stacktrace`는 `SHOW_STACKTRACE = False`(기본)라 비어 있다.
+- 그 밖: CSRF 예외 목록에 있다(`config.py:307-313`, 읽기 전용이라 CSRF는 상관없다). 6.1.0에서 `@deprecated(eol_version="5.0.0")`가 붙은 예전 경로다(`views/core.py:239`, `:292`). 비동기 쿼리(`GLOBAL_ASYNC_QUERIES`)는 꺼져 있어 `explore_json/data/<키>`는 404다. 같은 `Superset` 뷰의 다른 메서드(`slice`, `warm_up_cache`)는 열리지 않는다.
+
+### 13-5. 결론
+
+| 권한 | 판단 | 이유 |
+|---|---|---|
+| `can_time_range on Api` | **넓혀도 된다** | 날짜 문자열 해석만 하고 데이터·메타데이터를 읽지 않는다. 4절 경계는 그대로다(13-2 표). 같은 뷰의 다른 메서드는 열리지 않는다. Superset의 Public 권장 목록에도 있다 |
+| `can_explore_json on Superset` | **지금은 넓히지 않는다**(넓혀도 데이터 범위는 늘지 않지만 조건이 있다) | 조회할 수 있는 데이터의 범위는 `chart/data`와 같다(같은 판정 함수, 같은 서브쿼리 검사, CSV 막힘). 대신 `chart/data`가 guest에게 일부러 숨기는 **SQL 문을 그대로 돌려준다.** 또 6.1.0에서 이미 없어질 예정으로 표시된 예전 경로이고, payload 변조 검사가 없는 경로를 하나 더 여는 일이다. 얻는 것은 세 유형(`chord`, `world_map`, `country_map`)뿐이다 |
+
+- **TimeRange를 넓힌다면 함께 할 것:** `superset/init_guest_role.py`의 `REQUIRED`에 `("can_time_range", "Api")`를 더하고 5절의 "권한 3개"를 4개로, 12-3절과 `reference/enhancement-report.md` 7절 첫 항목을 고친다(권한 이름은 `can_read on TimeRange`가 아니다). `tests/test_api.py`에 guest의 `GET /api/v1/time_range/` 200, `GET /api/v1/form_data/` 403(같은 뷰의 다른 메서드가 닫혀 있음)을 더한다.
+- **explore_json을 넓힌다면 함께 할 것:** (1) "guest가 생성 SQL(스키마·뷰 이름, 지표식)을 볼 수 있다"를 받아들이는 결정을 이 문서 5절에 남긴다. dash 뷰 이름과 지표식에 숨길 정보가 없어야 한다. (2) `init_guest_role.py`에 권한을 더하고 `tests/test_api.py`에 `explore_json` 경계(다른 데이터셋·다른 대시보드 차트 403, 서브쿼리 400, `?csv=true` 403)를 `chart/data`와 같은 꼴로 더한다. (3) Superset을 올릴 때 이 경로가 사라지거나 판정이 바뀌는지 다시 잰다. 넓히지 않는다면 지금처럼 세 유형을 갤러리에서 빼 두고, 관계도는 `graph_chart`(10-2절)를 쓴다.
+- 확인하지 않은 것: `DASHBOARD_RBAC`·`GLOBAL_ASYNC_QUERIES`·`ENABLE_TEMPLATE_PROCESSING`을 켠 구성, `rls_rules`가 있는 토큰, `deck_*`·`mapbox` 등 다른 예전 viz 유형의 화면.

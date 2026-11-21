@@ -160,7 +160,8 @@ def data_revision(schema: Mapping[str, Any], dashboard: Mapping[str, Any]) -> st
 
 
 def snapshot(project_name: str, schema: Mapping[str, Any], dashboard: Mapping[str, Any],
-             row_counts: Mapping[str, int], revision: str | None = None) -> dict[str, Any]:
+             row_counts: Mapping[str, int], revision: str | None = None,
+             sources: Mapping[str, Mapping[str, list[str]]] | None = None) -> dict[str, Any]:
     """적재 스냅샷(JSON으로 저장). plan이 "구조가 바뀌었는지", 추가 적재가 "설정이 DB에 적용됐는지" 판단하는 데 쓴다."""
     return {
         "version": SNAPSHOT_VERSION,
@@ -179,7 +180,8 @@ def snapshot(project_name: str, schema: Mapping[str, Any], dashboard: Mapping[st
             for name, table in schema["tables"].items()
         },
         "datasets": {
-            key: {"kind": "table" if "table" in ds else "sql", "definition": definition_hash(ds)}
+            key: {"kind": "table" if "table" in ds else "sql", "definition": definition_hash(ds),
+                  **({"sources": {t: list(c) for t, c in sources.get(key, {}).items()}} if sources is not None else {})}
             for key, ds in dashboard["datasets"].items()
         },
     }
