@@ -154,6 +154,31 @@ def test_guest_time_range_and_form_data_permissions(guest, project, superset):
     assert s.get(f"{base}/api/v1/form_data/", params={"slice_id": chart_id}).status_code == 403
 
 
+def test_guest_cannot_call_explore_json(guest, project, superset):
+    """이슈 #50 확정 결정: guest에게 can_explore_json on Superset을 주지 않으므로
+    생성 SQL이 노출되는 deprecated explore_json 경로가 기본/query=true/GET 모두 403으로 차단돼야 한다.
+    """
+    s, _, mine_id, _, mine, _ = guest
+    chart_id, body = _chart_query(superset, project, mine, mine_id)
+    ds = body["datasource"]
+    form_data = {**body["form_data"], "datasource": f"{ds['id']}__{ds['type']}"}
+    url = f"{superset.base_url}/superset/explore_json/"
+    base_params = {"form_data": json.dumps({"slice_id": chart_id}), "dashboard_id": str(mine_id)}
+    payload = {"form_data": json.dumps(form_data)}
+
+    r = s.post(url, params=base_params, data=payload, allow_redirects=False)
+    assert r.status_code == 403, r.text[:300]
+    assert "SELECT " not in r.text.upper()
+
+    r_query = s.post(url, params={**base_params, "query": "true"}, data=payload, allow_redirects=False)
+    assert r_query.status_code == 403, r_query.text[:300]
+    assert "SELECT " not in r_query.text.upper()
+
+    r_get = s.get(url, params={"form_data": json.dumps(form_data), "dashboard_id": str(mine_id)}, allow_redirects=False)
+    assert r_get.status_code == 403, r_get.text[:300]
+    assert "SELECT " not in r_get.text.upper()
+
+
 def test_guest_cannot_view_other_dashboard(guest, project, superset):
     s, _, _, other_id, _, other = guest
     r = s.get(f"{superset.base_url}/api/v1/dashboard/{other_id}")
