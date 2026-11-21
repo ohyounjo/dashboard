@@ -6,7 +6,7 @@
 
 기준 조사 커밋은 `13d9642119bf78d1ef6ce9fdcd2889eb663af170`이다. `contracts/README.md`는 버전 생략을 버전 1로 인정하지만, 동시에 일반 `migrate`는 생략된 키를 추가하고 `--check`는 고칠 것이 있으면 1을 반환한다고 명시한다. 이슈의 생략된 현재 버전은 검사 통과라는 요구와 후자의 기존 계약은 충돌한다. 현재 계약상 기존 결과는 의도된 동작이다. 구현 PR에서 아래 제안으로 계약을 명시적으로 변경하기 전에는 현행 계약을 우선한다.
 
-코드상 `migrate_text`는 키 삽입을 `steps`에 넣고 `cmd_migrate`는 그 단계가 있으면 검사 실패로 처리한다. `tests/test_migrate.py`에도 이 동작을 기대하는 테스트가 있다. 이는 코드 분석이며 실제 명령 재현의 대체가 아니다. 조사 환경의 호스트 Python에는 `argon2`가 없어 CLI 재현을 완료하지 못했다. 구현 작업에서 최신 main과 실행 환경을 확인해 재현 결과를 기록한다.
+코드상 `migrate_text`는 키 삽입을 `steps`에 넣고 `cmd_migrate`는 그 단계가 있으면 검사 실패로 처리한다. `tests/test_migrate.py`에도 이 동작을 기대하는 테스트가 있다. 읽기 전용으로 작업 트리를 마운트한 기존 `dashkit-app:local` 이미지에서 `PROJECT=devtracker PROJECTS_DIR=/app/projects python -m dashkit migrate --check`를 실행한 결과 두 파일의 키 삽입이 표시되고 종료 코드 1을 반환했다. 파일은 읽기 전용 마운트로 보호했다. 이는 CLI 실측이며 `make migrate CHECK=1` 자체의 검증은 아니다. 구현 작업에서 최신 main과 실행 환경을 다시 확인한다.
 
 ## 제안하는 동작
 
