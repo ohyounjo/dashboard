@@ -95,7 +95,7 @@ Codex는 푸시만으로는 다시 리뷰하지 않아서, 고친 뒤에는 PR�
 **3단계**
 - 위젯 매니페스트 표시 `x-unique`, `x-date-range`를 새로 정의했다(기존 검사와 오류 문구 유지). `dataset` 없는 위젯을 허용했다.
 - prune 식별 규칙과 시간 조건 자동 추가(4절 표).
-- **guest 권한을 넓히지 않았다**(`can_read on TimeRange`).
+- **guest 권한을 넓히지 않았다**(기간 필터에 필요한 권한은 `can_time_range on Api`; 이름은 후속 실측에서 정정).
 
 **4단계**
 - plan은 차이가 있어도 종료 코드 0이다(검증·설정·접속 실패만 1).
@@ -127,10 +127,10 @@ Codex는 푸시만으로는 다시 리뷰하지 않아서, 고친 뒤에는 PR�
 
 ## 7. 남은 한계
 
-- **guest 권한을 넓히지 않아서 생긴 것:** 임베드 화면에서 기간(`time_range`) 필터는 기본값만 적용되고 값을 바꿀 수 없다. `chord`, `world_map`, `country_map`은 임베드 화면에서 그려지지 않는다(갤러리에서 뺌). 각각 `can_read on TimeRange`, `can_explore_json on Superset`을 `superset/init_guest_role.py`에 더하면 될 것으로 보이지만 그 경로로 guest가 조회할 수 있는 범위는 실측하지 않았다.
+- **guest 권한을 넓히지 않아서 생긴 것:** 임베드 화면에서 기간(`time_range`) 필터는 기본값만 적용되고 값을 바꿀 수 없다. `chord`, `world_map`, `country_map`은 임베드 화면에서 그려지지 않는다(갤러리에서 뺌). 현재 guest 권한은 세 개다. 후속 실측에서 필요한 권한은 각각 `can_time_range on Api`와 `can_explore_json on Superset`으로 확인했다. 전자는 데이터·메타데이터를 읽지 않아 추가해도 된다고 판단했지만, 후자는 생성 SQL을 노출하므로 지금은 추가하지 않도록 권고했다. 권한 변경은 하지 않았다. 실측 범위와 제약은 [Superset 실측 기록 13절](../contracts/superset-notes.md#13-guest-권한-추가-실측timerange-explore_json)을 따른다.
 - **prune:** 프로젝트를 전환했을 때 이전 프로젝트의 Superset 객체를 지우는 일은 여전히 `.state/managed.json`이 필요하다(같은 프로젝트 안의 이전 객체는 상태 파일 없이 지워진다).
 - **plan:** `sql:` 데이터셋의 새 열은 적용 전에 예측하지 못한다("적용해야 알 수 있음"). 이 변경 전에 적재된 DB는 한 번 `make apply`해야 데이터 차이가 나온다. 열 구성이나 기본 키를 바꾼 테이블은 전부 추가·전부 삭제로 센다. 행 지문은 솔트 없는 SHA-256이라 값의 범위가 좁은 키는 추측해 맞춰 볼 수 있다(원본은 저장하지 않음).
-- **설정 검사:** 막대·선 차트에서 `x`와 `groupby`에 같은 열을 넣으면 `make check`는 통과하지만 Superset이 차트 자리에 "Duplicate column/metric labels" 오류를 그린다(5b 통합 확인에서 발견, 고치지 않음).
+- **설정 검사:** 5b 통합 확인 당시에는 막대·선 차트의 `x`와 `groupby`에 같은 열을 넣어도 검사를 통과했지만, 이후 [PR #31](https://github.com/ohyounjo/dashboard/pull/31)에서 적용 전에 YAML 경로와 함께 충돌을 보고하도록 고쳤다. [PR #60](https://github.com/ohyounjo/dashboard/pull/60)은 자동 제거되는 서로 다른 지표와 일부 원본 유형 검사도 보완했다. 확인 범위 밖 원본 설정과 일부 지표 객체는 검사를 보장하지 않는다. 현재 지원 범위는 [차트 계약](../contracts/chart-shorthand.md#중복-라벨-검사)을 따른다.
 - **`make apply`:** backend 이미지를 다시 만들지 않는다. 템플릿 코드(`dashkit/`, `web/widgets/*/widget.json`)를 바꿨으면 `make up`이 필요하다.
 - **위젯:** 새 위젯의 고정 문구(`web/strings.js`)와 전용 CSS(`web/styles.css`)는 아직 위젯 폴더 밖이다.
 - **Studio:** Chromium 헤드리스로만 확인했다. Firefox·Safari, 터치 끌기(좁은 화면은 버튼으로 조작), 실제 OS 파일 드래그, 스크린 리더는 확인하지 않았다. 적용 중에 열려 있던 미리보기가 prune된 차트를 조회해 Superset 404·400이 콘솔에 한 번 찍힌다(적용 뒤 새로 고쳐짐). `ruamel` 예비 경로(앵커·별칭 등이 있는 파일)에서는 주석과 값은 남지만 파일 모양이 표준 꼴로 바뀐다.
