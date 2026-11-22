@@ -18,7 +18,9 @@ DB의 타입 표현 차이가 끼어들지 않는다. 이 파일의 계산 함�
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Iterable, Mapping, Sequence
@@ -28,7 +30,14 @@ FINGERPRINT_TABLE = "row_fingerprint"
 SNAPSHOT_TABLE = "load_snapshot"
 BATCH_TABLE = "batch"
 SNAPSHOT_VERSION = 1
+FINGERPRINT_SCHEME = "hmac-sha256-v1"
+FINGERPRINT_KEY_ENV = "PLAN_FINGERPRINT_KEY"
+MIN_FINGERPRINT_KEY_LEN = 16
 BATCH_COLUMNS = ("table_name", "file", "sha256", "added_at", "rows", "inserted", "updated", "skipped", "unchanged")
+
+
+class FingerprintKeyError(ValueError):
+    """행 지문 HMAC 비밀 키(PLAN_FINGERPRINT_KEY)가 없거나 유효하지 않음."""
 
 # schema.yaml의 type → 적재 뒤 information_schema.columns의 data_type(로더의 CREATE TABLE과 짝이다)
 INFO_TYPES = {
@@ -77,13 +86,48 @@ def _dump(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
-def row_key(columns: Sequence[str], primary_key: Sequence[str], row: Sequence[Any]) -> str:
-    """기본 키의 해시: 기본 키 값의 정규 표현을 primary_key 순서로 담은 JSON 배열의 SHA-256.
+def fingerprint_key(env: Mapping[str, str] | None = None) -> bytes:
+    """환경변수 PLAN_FINGERPRINT_KEY에서 HMAC 비밀 키를 읽는다. 미설정·자리표시자·16자 미만이면 거부한다."""
+    source = os.environ if env is None else env
+    raw = (source.get(FINGERPRINT_KEY_ENV) or "").strip()
+    if not raw or raw == "__GENERATE__":
+        raise FingerprintKeyError(
+            f"환경변수 {FINGERPRINT_KEY_ENV}가 설정되지 않았습니다(make env-secrets 또는 make env)")
+    if len(raw) < MIN_FINGERPRINT_KEY_LEN:
+        raise FingerprintKeyError(
+            f"환경변수 {FINGERPRINT_KEY_ENV}는 {MIN_FINGERPRINT_KEY_LEN}자 이상이어야 합니다")
+    return raw.encode("utf-8")
 
-    원본 키 값은 기록에 남기지 않는다(dash_reader가 읽는 기록에 raw의 원본 값이 없어야 한다).
-    """
+
+def try_fingerprint_key(env: Mapping[str, str] | None = None) -> bytes | None:
+    """유효한 PLAN_FINGERPRINT_KEY가 있으면 바이트를, 없거나 유효하지 않으면 None을 돌려준다."""
+    try:
+        return fingerprint_key(env)
+    except FingerprintKeyError:
+        return None
+
+
+def key_id(key: bytes) -> str:
+    """비밀 키에서 단방향 파생한 16자 hex 식별자(키 원본은 노출하지 않고 회전 여부만 판별)."""
+    return hmac.new(key, b"dashkit:fingerprint:key_id:v1", hashlib.sha256).hexdigest()[:16]
+
+
+def _hmac_key(key: bytes, table_name: str, pk_values: Sequence[str | None]) -> str:
+    payload = _dump(["v1", "row_key", table_name, list(pk_values)]).encode("utf-8")
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+
+def _hmac_row(key: bytes, table_name: str, pairs: Sequence[tuple[str, str | None]]) -> str:
+    payload = _dump(["v1", "row_hash", table_name, list(pairs)]).encode("utf-8")
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+
+def row_key(columns: Sequence[str], primary_key: Sequence[str], row: Sequence[Any],
+            *, table_name: str = "", key: bytes | None = None) -> str:
+    """기본 키의 HMAC-SHA256 지문(도메인·테이블 이름 분리). 원본 키 값은 기록에 남기지 않는다."""
+    k = fingerprint_key() if key is None else key
     values = [canonical(row[columns.index(c)]) for c in primary_key]
-    return hashlib.sha256(_dump(values).encode("utf-8")).hexdigest()
+    return _hmac_key(k, table_name, values)
 
 
 def row_label(columns: Sequence[str], primary_key: Sequence[str], row: Sequence[Any]) -> str:
@@ -92,24 +136,45 @@ def row_label(columns: Sequence[str], primary_key: Sequence[str], row: Sequence[
     return ", ".join("" if v is None else v for v in values)
 
 
-def row_hash(columns: Sequence[str], row: Sequence[Any]) -> str:
-    """행 해시. 열 이름순으로 (열, 정규 표현)을 직렬화한 것의 SHA-256이라 열 순서와 무관하다."""
+def row_hash(columns: Sequence[str], row: Sequence[Any],
+             *, table_name: str = "", key: bytes | None = None) -> str:
+    """행 HMAC-SHA256 지문. 열 이름순으로 (열, 정규 표현)을 직렬화하므로 열 순서와 무관하다."""
+    k = fingerprint_key() if key is None else key
     pairs = sorted(zip(columns, (canonical(v) for v in row)))
-    return hashlib.sha256(_dump(pairs).encode("utf-8")).hexdigest()
+    return _hmac_row(k, table_name, pairs)
 
 
-def fingerprints(table: Mapping[str, Any], rows: Iterable[Sequence[Any]]) -> list[tuple[str, str]]:
+def fingerprints(table: Mapping[str, Any], rows: Iterable[Sequence[Any]],
+                 *, table_name: str = "", key: bytes | None = None) -> list[tuple[str, str]]:
     """테이블의 행들 → [(row_key, row_hash)]. table은 schema.yaml의 정규화된 테이블 정의, 행의 열 순서는 table["columns"]."""
+    k = fingerprint_key() if key is None else key
     columns = list(table["columns"])
     pk = list(table["primary_key"])
-    return [(row_key(columns, pk, row), row_hash(columns, row)) for row in rows]
+    pk_idx = [columns.index(c) for c in pk]
+    sorted_idx = sorted(range(len(columns)), key=columns.__getitem__)
+    sorted_cols = [columns[i] for i in sorted_idx]
+    out: list[tuple[str, str]] = []
+    for row in rows:
+        canon = [canonical(v) for v in row]
+        rk = _hmac_key(k, table_name, [canon[i] for i in pk_idx])
+        rh = _hmac_row(k, table_name, [(sorted_cols[j], canon[sorted_idx[j]]) for j in range(len(sorted_idx))])
+        out.append((rk, rh))
+    return out
 
 
-def labels(table: Mapping[str, Any], rows: Iterable[Sequence[Any]]) -> dict[str, str]:
-    """{row_key(해시): 사람이 읽는 기본 키}. plan이 CSV 쪽 행(추가·변경)의 예시 키를 보여 주는 데 쓴다."""
+def labels(table: Mapping[str, Any], rows: Iterable[Sequence[Any]],
+           *, table_name: str = "", key: bytes | None = None) -> dict[str, str]:
+    """{row_key(지문): 사람이 읽는 기본 키}. plan이 CSV 쪽 행(추가·변경)의 예시 키를 보여 주는 데 쓴다."""
+    k = fingerprint_key() if key is None else key
     columns = list(table["columns"])
     pk = list(table["primary_key"])
-    return {row_key(columns, pk, row): row_label(columns, pk, row) for row in rows}
+    pk_idx = [columns.index(c) for c in pk]
+    out: dict[str, str] = {}
+    for row in rows:
+        values = [canonical(row[i]) for i in pk_idx]
+        rk = _hmac_key(k, table_name, values)
+        out[rk] = ", ".join("" if v is None else v for v in values)
+    return out
 
 
 def table_columns(table: Mapping[str, Any]) -> list[tuple[str, str]]:
@@ -161,9 +226,10 @@ def data_revision(schema: Mapping[str, Any], dashboard: Mapping[str, Any]) -> st
 
 def snapshot(project_name: str, schema: Mapping[str, Any], dashboard: Mapping[str, Any],
              row_counts: Mapping[str, int], revision: str | None = None,
-             sources: Mapping[str, Mapping[str, list[str]]] | None = None) -> dict[str, Any]:
+             sources: Mapping[str, Mapping[str, list[str]]] | None = None,
+             *, fingerprint_key_id: str | None = None) -> dict[str, Any]:
     """적재 스냅샷(JSON으로 저장). plan이 "구조가 바뀌었는지", 추가 적재가 "설정이 DB에 적용됐는지" 판단하는 데 쓴다."""
-    return {
+    doc: dict[str, Any] = {
         "version": SNAPSHOT_VERSION,
         "project": project_name,
         "data_revision": revision if revision is not None else data_revision(schema, dashboard),
@@ -185,6 +251,9 @@ def snapshot(project_name: str, schema: Mapping[str, Any], dashboard: Mapping[st
             for key, ds in dashboard["datasets"].items()
         },
     }
+    if fingerprint_key_id is not None:
+        doc["fingerprint"] = {"scheme": FINGERPRINT_SCHEME, "key_id": fingerprint_key_id}
+    return doc
 
 
 # ---------------------------------------------------------------- 쓰기(로더의 트랜잭션 안)
@@ -225,7 +294,13 @@ def write(cur: Any, snap: Mapping[str, Any], prints: Mapping[str, Sequence[tuple
             copy.write_row(tuple(row))
     cur.execute(sql.SQL("INSERT INTO {}.{} (id, snapshot) VALUES (1, %s)").format(meta, shot), (Jsonb(dict(snap)),))
     cur.execute(sql.SQL("REVOKE ALL ON SCHEMA {} FROM PUBLIC").format(meta))
-    for name in (reader, *readers):
+    reader_id = sql.Identifier(reader)
+    cur.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(meta, reader_id))
+    for tbl in (SNAPSHOT_TABLE, BATCH_TABLE):
+        cur.execute(sql.SQL("GRANT SELECT ON TABLE {}.{} TO {}").format(meta, sql.Identifier(tbl), reader_id))
+    for name in readers:
+        if name == reader:
+            continue
         role = sql.Identifier(name)
         cur.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(meta, role))
         cur.execute(sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}").format(meta, role))

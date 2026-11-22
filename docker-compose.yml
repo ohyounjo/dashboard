@@ -193,6 +193,8 @@ services:
       # 운용자 조회 계정(테스트가 권한 경계를 확인한다)
       DATA_DB_INSPECT_USER: ${DATA_DB_INSPECT_USER:-dash_inspect}
       DATA_DB_INSPECT_PASSWORD: ${DATA_DB_INSPECT_PASSWORD:?make env 필요}
+      PLAN_FINGERPRINT_KEY: ${PLAN_FINGERPRINT_KEY:?make env 필요}
+      PLAN_STATEMENT_TIMEOUT_MS: ${PLAN_STATEMENT_TIMEOUT_MS:-15000}
       STATE_DIR: ${STATE_DIR}
       BUILD_DIR: ${BUILD_DIR}
       # sync가 만든 Superset 객체의 화면 편집 차단(기본 1). contracts/state-and-uuid.md "표식"
@@ -224,6 +226,10 @@ services:
       SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?make env 필요}
       DATA_DB_OWNER_USER: ${DATA_DB_OWNER_USER}
       DATA_DB_OWNER_PASSWORD: ${DATA_DB_OWNER_PASSWORD:?make env 필요}
+      DATA_DB_INSPECT_USER: ${DATA_DB_INSPECT_USER:-dash_inspect}
+      DATA_DB_INSPECT_PASSWORD: ${DATA_DB_INSPECT_PASSWORD:?make env 필요}
+      PLAN_FINGERPRINT_KEY: ${PLAN_FINGERPRINT_KEY:?make env 필요}
+      PLAN_STATEMENT_TIMEOUT_MS: ${PLAN_STATEMENT_TIMEOUT_MS:-15000}
       STATE_DIR: ${STATE_DIR}
       BUILD_DIR: ${BUILD_DIR}
       SYNC_LOCK_UI: ${SYNC_LOCK_UI:-1}
@@ -277,6 +283,7 @@ services:
       DATA_DB_OWNER_PASSWORD: ${DATA_DB_OWNER_PASSWORD:?make env 필요}
       DATA_DB_INSPECT_USER: ${DATA_DB_INSPECT_USER:-dash_inspect}
       DATA_DB_INSPECT_PASSWORD: ${DATA_DB_INSPECT_PASSWORD:?make env 필요}
+      PLAN_FINGERPRINT_KEY: ${PLAN_FINGERPRINT_KEY:?make env 필요}
       STATE_DIR: ${STATE_DIR}
       BUILD_DIR: ${BUILD_DIR}
       SYNC_LOCK_UI: ${SYNC_LOCK_UI:-1}

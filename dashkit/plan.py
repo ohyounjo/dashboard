@@ -22,7 +22,17 @@ from typing import Any, Iterable, Mapping, Sequence
 import yaml
 
 from .config import Project, table_order
-from .loader.record import definition_hash, fingerprints, labels, table_columns
+from .loader import record
+from .loader.record import (
+    FINGERPRINT_SCHEME,
+    definition_hash,
+    fingerprints,
+    labels,
+    row_key,
+    row_label,
+    table_columns,
+    try_fingerprint_key,
+)
 
 Columns = list[tuple[str, str]]          # [(열 이름, information_schema data_type)], 순서 있음
 
@@ -72,15 +82,89 @@ def _no_column_change() -> dict[str, Any]:
 
 # ---------------------------------------------------------------- 행 비교(순수)
 
-def _row_result(added: int = 0, removed: int = 0, changed: int = 0, unchanged: int = 0,
-                reason: str | None = None) -> dict[str, Any]:
-    return {"added": added, "removed": removed, "changed": changed, "unchanged": unchanged,
-            "comparable": reason is None, "reason": reason, "keys": {"added": [], "removed": [], "changed": []}}
+def _row_result(added: int | None = 0, removed: int | None = 0, changed: int | None = 0,
+                unchanged: int | None = 0, *, matched: int | None = 0,
+                comparison: str = "full", reason: str | None = None,
+                comparable: bool | None = None) -> dict[str, Any]:
+    return {
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+        "unchanged": unchanged,
+        "matched": matched,
+        "comparable": (reason is None) if comparable is None else comparable,
+        "comparison": comparison,
+        "reason": reason,
+        "keys": {"added": [], "removed": [], "changed": []},
+    }
 
 
 def incomparable(new_count: int, old_count: int, reason: str) -> dict[str, Any]:
-    """행을 맞출 수 없을 때의 결과: 새 행은 전부 추가, 지난 행은 전부 삭제로 센다(comparable = False, reason에 이유)."""
-    return _row_result(added=new_count, removed=old_count, reason=reason)
+    """행을 맞출 수 없을 때의 결과: 새 행은 전부 추가, 지난 행은 전부 삭제로 센다(comparable = False, comparison = 'none')."""
+    return _row_result(added=new_count, removed=old_count, matched=0, comparison="none", reason=reason, comparable=False)
+
+
+def fingerprint_status(
+    snapshot: Mapping[str, Any] | None,
+    *,
+    fingerprints_readable: bool = True,
+    has_inspect: bool = True,
+    env: Mapping[str, str] | None = None,
+) -> tuple[bytes | None, str | None]:
+    """현재 환경과 적재 스냅샷으로 행 지문 비교가 가능한지 확인해 (key_bytes, 오류_이유)를 돌려준다."""
+    if not has_inspect or not fingerprints_readable:
+        return None, "운용 조회 계정(dash_inspect)을 사용할 수 없음(make data-init 후 make apply)"
+    key = try_fingerprint_key(env)
+    if key is None:
+        return None, "PLAN_FINGERPRINT_KEY가 설정되지 않아 행 지문을 비교할 수 없음"
+    if snapshot is not None:
+        fp = snapshot.get("fingerprint")
+        if not isinstance(fp, dict) or fp.get("scheme") != FINGERPRINT_SCHEME:
+            return None, "적재 기록의 행 지문 형식이 구버전이라 비교할 수 없음(한 번 apply하면 새 형식과 권한 경계로 갱신됨)"
+        if fp.get("key_id") != record.key_id(key):
+            return None, "행 지문 키가 지난 적재와 달라 비교할 수 없음(한 번 apply하면 새 키로 갱신됨)"
+    return key, None
+
+
+def _pk_unchanged(table: Mapping[str, Any], recorded: Mapping[str, Any]) -> bool:
+    """기본 키 열 이름·순서와 각 기본 키 열의 INFO_TYPES DB 타입이 모두 같은지 판정한다(enum ↔ text 동치)."""
+    pk = list(table["primary_key"])
+    if pk != list(recorded["primary_key"]):
+        return False
+    new_types = dict(table_columns(table))
+    old_types = dict((c, t) for c, t in recorded["columns"])
+    return all(new_types.get(k) == old_types.get(k) for k in pk)
+
+
+def diff_rows_key_only(
+    new_keys: Sequence[str],
+    old_keys: Sequence[str],
+    *,
+    names: Mapping[str, str] | None = None,
+    max_keys: int = MAX_KEYS,
+) -> dict[str, Any]:
+    """열 구성은 다르지만 기본 키가 같을 때 row_key만으로 추가·삭제·유지 행 수를 계산한다(값 비교 불가)."""
+    new_set = set(new_keys)
+    old_set = set(old_keys)
+    if len(new_set) != len(new_keys) or len(old_set) != len(old_keys):
+        return incomparable(len(new_keys), len(old_keys), "기본 키 값이 같은 행이 여럿이라 행을 맞출 수 없음")
+    names = names or {}
+    added_keys = [k for k in new_keys if k not in old_set]
+    matched = len(new_keys) - len(added_keys)
+    removed = len(old_keys) - matched
+    example_added = [names[k] for k in added_keys if k in names][:max_keys]
+    res = _row_result(
+        added=len(added_keys),
+        removed=removed,
+        changed=None,
+        unchanged=None,
+        matched=matched,
+        comparison="key_only",
+        reason=f"열 구성이 지난 적재와 달라 기본 키로만 행을 맞춤(유지된 {matched}행의 기존 열 값 변경 여부는 확인하지 않음)",
+        comparable=False,
+    )
+    res["keys"]["added"] = example_added
+    return res
 
 
 def diff_rows(
@@ -122,6 +206,7 @@ def diff_rows(
     for key, _digest in old:
         if key not in new_by_key:
             note("removed", key)
+    result["matched"] = result["changed"] + result["unchanged"]
     return result
 
 
@@ -133,40 +218,72 @@ def table_diff(
     old_prints: Iterable[Sequence[str]] = (),
     *,
     replaced_project: str | None = None,
+    key: bytes | None = None,
+    fingerprint_error: str | None = None,
 ) -> dict[str, Any]:
     """테이블 하나의 차이. table은 schema.yaml의 (정규화된) 테이블 정의, new_rows는 검증을 통과한 CSV 행
     (validate.TableData.rows, 열 순서는 table["columns"]), recorded는 적재 스냅샷의 그 테이블 항목
     ({"columns", "primary_key", "rows"}. 지난 적재에 없던 테이블이면 None), old_prints는 지난 적재의 행 지문이다.
 
-    status: new(지난 적재에 없음. 전부 추가) | changed | unchanged.
-    행을 맞출 수 없는 경우(comparable = False): 열 구성(이름·타입)이나 기본 키 정의가 지난 적재와 다름,
-    지난 적재가 다른 프로젝트의 것(replaced_project). 이때는 +CSV 행 수, −지난 적재의 행 수다.
+    comparison: full | key_only | none | unrecorded.
     """
     entry: dict[str, Any] = {"table": name, "rows": len(new_rows)}
     if recorded is None:
-        rows = diff_rows(fingerprints(table, new_rows), [], names=labels(table, new_rows))
-        return {**entry, "status": "new", "columns": _no_column_change(), **rows}
+        cols_list = list(table["columns"])
+        pk = list(table["primary_key"])
+        if key is None:
+            key = try_fingerprint_key()
+        if key is not None:
+            rows = diff_rows(fingerprints(table, new_rows, table_name=name, key=key), [],
+                             names=labels(table, new_rows, table_name=name, key=key))
+        else:
+            rows = _row_result(added=len(new_rows), removed=0, changed=0, unchanged=0, matched=0, comparison="full")
+            rows["keys"]["added"] = [row_label(cols_list, pk, r) for r in new_rows[:MAX_KEYS]]
+        return {**entry, "status": "new", "previous_rows": 0, "columns": _no_column_change(), **rows}
     old_columns = [(c, t) for c, t in recorded["columns"]]
     new_columns = table_columns(table)
     cols = diff_columns(new_columns, old_columns)
     old_count = int(recorded.get("rows", 0))
     if replaced_project is not None:
         rows = incomparable(len(new_rows), old_count, f"지난 적재는 다른 프로젝트 '{replaced_project}'의 것")
-    elif sorted(new_columns) != sorted(old_columns):
-        rows = incomparable(len(new_rows), old_count, "열 구성이 지난 적재와 달라 행을 맞출 수 없음")
+        return {**entry, "status": "changed", "previous_rows": old_count, "columns": cols, **rows}
+    if fingerprint_error is not None:
+        rows = _row_result(added=None, removed=None, changed=None, unchanged=None, matched=None,
+                           comparison="unrecorded", reason=fingerprint_error, comparable=False)
+        return {**entry, "status": "unrecorded", "previous_rows": old_count, "columns": cols, **rows}
+    if key is None:
+        key = try_fingerprint_key()
+    if key is None:
+        rows = _row_result(added=None, removed=None, changed=None, unchanged=None, matched=None,
+                           comparison="unrecorded", reason="PLAN_FINGERPRINT_KEY가 설정되지 않아 행 지문을 비교할 수 없음",
+                           comparable=False)
+        return {**entry, "status": "unrecorded", "previous_rows": old_count, "columns": cols, **rows}
+    if sorted(new_columns) != sorted(old_columns):
+        if _pk_unchanged(table, recorded):
+            cols_list = list(table["columns"])
+            pk = list(table["primary_key"])
+            new_keys = [row_key(cols_list, pk, r, table_name=name, key=key) for r in new_rows]
+            old_keys = [k for k, _h in old_prints]
+            rows = diff_rows_key_only(new_keys, old_keys, names=labels(table, new_rows, table_name=name, key=key))
+        else:
+            rows = incomparable(len(new_rows), old_count, "기본 키가 지난 적재와 달라 행을 맞출 수 없음")
     elif list(table["primary_key"]) != list(recorded["primary_key"]):
         rows = incomparable(len(new_rows), old_count, "기본 키가 지난 적재와 달라 행을 맞출 수 없음")
     else:
-        rows = diff_rows(fingerprints(table, new_rows), old_prints, names=labels(table, new_rows))
-    changed = rows["added"] or rows["removed"] or rows["changed"] or not rows["comparable"] or _columns_changed(cols)
-    return {**entry, "status": "changed" if changed else "unchanged", "columns": cols, **rows}
+        rows = diff_rows(fingerprints(table, new_rows, table_name=name, key=key), old_prints,
+                         names=labels(table, new_rows, table_name=name, key=key))
+    changed = bool(rows["added"] or rows["removed"] or rows["changed"] or not rows["comparable"] or _columns_changed(cols))
+    return {**entry, "status": "changed" if changed else "unchanged", "previous_rows": old_count, "columns": cols, **rows}
 
 
-def unrecorded_table(name: str, row_count: int) -> dict[str, Any]:
+def unrecorded_table(name: str, row_count: int, *, reason: str = NO_RECORD_TEXT,
+                     previous_rows: int | None = None) -> dict[str, Any]:
     """적재 기록이 없을 때의 항목. 비교할 수 없으므로 CSV 행 수만 싣는다(added·removed·changed는 None)."""
-    return {"table": name, "rows": row_count, "status": "unrecorded", "columns": _no_column_change(),
-            "added": None, "removed": None, "changed": None, "unchanged": None,
-            "comparable": False, "reason": NO_RECORD_TEXT, "keys": {"added": [], "removed": [], "changed": []}}
+    return {"table": name, "rows": row_count, "previous_rows": previous_rows, "status": "unrecorded",
+            "columns": _no_column_change(),
+            "added": None, "removed": None, "changed": None, "unchanged": None, "matched": None,
+            "comparable": False, "comparison": "unrecorded", "reason": reason,
+            "keys": {"added": [], "removed": [], "changed": []}}
 
 
 def append_sources(project: Project, table: str) -> dict[str, Any]:
@@ -219,9 +336,10 @@ def batch_diff(name: str, table: Mapping[str, Any], folder: Mapping[str, Any], r
     entry: dict[str, Any] = {"table": name, "mode": "append"}
     files = folder["files"]
     if folder["pending"]:
-        return {**entry, "rows": None, "status": "pending", "columns": _no_column_change(),
-                "added": None, "removed": None, "changed": None, "unchanged": None, "comparable": False,
-                "reason": PENDING_TEXT, "keys": {"added": [], "removed": [], "changed": []},
+        return {**entry, "rows": None, "previous_rows": None, "status": "pending", "columns": _no_column_change(),
+                "added": None, "removed": None, "changed": None, "unchanged": None, "matched": None,
+                "comparable": False, "comparison": "batch", "reason": PENDING_TEXT,
+                "keys": {"added": [], "removed": [], "changed": []},
                 "batches": {"added": [], "removed": [], "changed": []}}
     old = dict(old_batches or {}) if replaced_project is None and recorded is not None else {}
     added: list[str] = []
@@ -261,16 +379,19 @@ def batch_diff(name: str, table: Mapping[str, Any], folder: Mapping[str, Any], r
     rows_now = (sum(rec[2] for rec in (old_batches or {}).values())
                 if recorded is not None and replaced_project is None else 0)
     return {**entry, "rows": rows_now + new_rows - removed_rows if status != "unrecorded" else None,
+            "previous_rows": rows_now if status != "unrecorded" else None,
             "status": status, "columns": cols,
-            "added": new_rows, "removed": removed_rows, "changed": None, "unchanged": None,
-            "comparable": False, "reason": BATCH_TEXT, "keys": {"added": [], "removed": [], "changed": []},
+            "added": new_rows, "removed": removed_rows, "changed": None, "unchanged": None, "matched": None,
+            "comparable": False, "comparison": "batch", "reason": BATCH_TEXT,
+            "keys": {"added": [], "removed": [], "changed": []},
             "batches": batch_lists, "rules_changed": status == "changed" and rules_changed}
 
 
 def removed_table(name: str, recorded: Mapping[str, Any]) -> dict[str, Any]:
-    return {"table": name, "rows": 0, "status": "removed",
+    old_count = int(recorded.get("rows", 0))
+    return {"table": name, "rows": 0, "previous_rows": old_count, "status": "removed",
             "columns": {**_no_column_change(), "removed": [c for c, _t in recorded["columns"]]},
-            **_row_result(removed=int(recorded.get("rows", 0)))}
+            **_row_result(added=0, removed=old_count, matched=0, comparison="none", comparable=False)}
 
 
 # ---------------------------------------------------------------- 뷰 열(순수)
@@ -282,23 +403,32 @@ def predict_view_columns(
     project: Project,
     snapshot: Mapping[str, Any] | None,
     views_now: Mapping[str, Sequence[tuple[str, str]]],
+    *,
+    describe: Any = None,
+    raw_now: Mapping[str, Sequence[tuple[str, str]]] | None = None,
+    inspect_missing_reason: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """새 설정으로 만들어질 뷰의 열을 데이터셋마다 구한다. {키: {"columns": [(열, 타입)] 또는 None, "reason": 이유 또는 None}}.
 
     - `table:` 데이터셋: schema.yaml의 열 그대로다(뷰가 `SELECT * FROM raw.<테이블>`이므로).
-    - `sql:` 데이터셋: 쿼리의 결과 열은 적용해 봐야 안다. 다만 **바뀐 것이 없다**는 것은 적재 스냅샷으로 알 수 있다.
-      쿼리 정의의 해시가 지난 적재와 같고, 쿼리 글에 이름이 나오는 raw 테이블과 앞선 데이터셋 뷰의 구조
-      (열 이름·타입·순서)가 그대로면 지금 뷰의 열이 곧 새 열이다. 하나라도 다르면 "알 수 없음"으로 둔다.
-      이름은 글자 단위로만 찾으므로 실제로 읽지 않아도 걸릴 수 있다(안전한 쪽).
+    - `sql:` 데이터셋(쿼리 미변경): 스냅샷의 `datasets[k].sources`(구 스냅샷은 `_WORD` 폴백)와 선행/삭제 `dash` 뷰를
+      확인해 구조가 그대로면 지금 뷰의 열을 유지한다.
+    - `sql:` 데이터셋(쿼리 변경 또는 새 데이터셋): 참조하는 `raw` 테이블과 앞선 `dash` 뷰의 현재 DB 구조가 적용 후와
+      동일하고 `describe` 콜백(`dash_inspect` `PQprepare`/`PQdescribePrepared`)이 있으면 열을 미리 예측한다.
+      구조가 함께 바뀌거나 `dash_inspect`가 없거나 분석이 실패하면 "알 수 없음"과 구체적 이유를 돌려준다.
     - snapshot이 None이면(적재 기록이 없거나 다른 프로젝트의 것) `sql:` 데이터셋은 모두 "알 수 없음"이다.
     """
+    from .loader.current import DescribeError
+
     tables = project.schema["tables"]
     datasets = project.dashboard["datasets"]
     old_tables = (snapshot or {}).get("tables") or {}
     old_datasets = (snapshot or {}).get("datasets") or {}
-    # 구조가 바뀌는 raw 테이블: 새로 생김, 없어짐, 열이 달라짐
+    # 구조가 바뀌는 raw 테이블: 새로 생김, 없어짐, 열이 달라짐, 또는 실제 DB raw에 없음
     unstable = {t for t in tables
-                if t not in old_tables or [tuple(c) for c in old_tables[t]["columns"]] != table_columns(tables[t])}
+                if t not in old_tables
+                or [tuple(c) for c in old_tables[t]["columns"]] != table_columns(tables[t])
+                or (raw_now is not None and t not in raw_now)}
     unstable |= {t for t in old_tables if t not in tables}
     out: dict[str, dict[str, Any]] = {}
     for key, ds in datasets.items():
@@ -308,22 +438,46 @@ def predict_view_columns(
         if snapshot is None:
             out[key] = {"columns": None, "reason": NO_RECORD_TEXT}
             continue
-        if key not in old_datasets or key not in views_now:
-            out[key] = {"columns": None, "reason": "새 데이터셋"}
-            continue
-        if old_datasets[key].get("definition") != definition_hash(ds):
-            out[key] = {"columns": None, "reason": "쿼리가 바뀜"}
-            continue
         words = set(_WORD.findall(ds["sql"].lower()))
+        is_same_query = (key in old_datasets and key in views_now
+                         and old_datasets[key].get("definition") == definition_hash(ds))
+        if is_same_query:
+            ds_snap = old_datasets[key]
+            if "sources" in ds_snap and isinstance(ds_snap["sources"], Mapping):
+                used_raw = set(ds_snap["sources"])
+                blockers = sorted(f"raw.{t}" for t in unstable if t in used_raw)
+            else:
+                blockers = sorted(f"raw.{t}" for t in unstable if t in words)
+            for other, known in out.items():   # 앞선 데이터셋만(뷰는 설정 순서로 만들어진다)
+                if other in words and (known["columns"] is None or known["columns"] != list(views_now.get(other, []))):
+                    blockers.append(f"dash.{other}")
+            blockers += sorted(f"dash.{v}" for v in views_now if v not in datasets and v in words)
+            if blockers:
+                out[key] = {"columns": None, "reason": f"쿼리에 나오는 {', '.join(blockers)}의 구조가 바뀜"}
+            else:
+                out[key] = {"columns": list(views_now[key]), "reason": None}
+            continue
+
+        # 쿼리가 바뀌었거나 새 sql: 데이터셋
         blockers = sorted(f"raw.{t}" for t in unstable if t in words)
-        for other, known in out.items():   # 앞선 데이터셋만(뷰는 설정 순서로 만들어진다)
+        for other, known in out.items():
             if other in words and (known["columns"] is None or known["columns"] != list(views_now.get(other, []))):
                 blockers.append(f"dash.{other}")
         blockers += sorted(f"dash.{v}" for v in views_now if v not in datasets and v in words)
         if blockers:
             out[key] = {"columns": None, "reason": f"쿼리에 나오는 {', '.join(blockers)}의 구조가 바뀜"}
+            continue
+        base_reason = "새 데이터셋" if (key not in old_datasets or key not in views_now) else "쿼리가 바뀜"
+        if describe is None:
+            reason = f"{base_reason}({inspect_missing_reason})" if inspect_missing_reason else base_reason
+            out[key] = {"columns": None, "reason": reason}
+            continue
+        try:
+            cols = list(describe(ds["sql"]))
+        except DescribeError as exc:
+            out[key] = {"columns": None, "reason": f"쿼리 분석 실패: {exc}"}
         else:
-            out[key] = {"columns": list(views_now[key]), "reason": None}
+            out[key] = {"columns": cols, "reason": None}
     return out
 
 
@@ -566,23 +720,53 @@ def make_plan(
     if errors:
         raise PlanError("CSV 검증 실패, 차이를 계산하지 않음", errors)
 
+    # 읽기 전용 연결: dash_inspect 우선, 미설정·미생성 시 dash_reader 폴백(owner_conn은 절대 쓰지 않는다)
+    has_inspect = True
     try:
-        with current.reader(dbname) as conn:
+        with current.inspector(dbname) as conn:
             views_now = current.read_view_columns(conn)
-            rec = current.read_load_record(conn)
-    except current.CurrentError as exc:
-        raise PlanError("지금 상태를 읽지 못함", [str(exc)]) from None
+            rec = current.read_load_record(conn, include_fingerprints=True)
+            raw_now = current.read_raw_columns(conn)
+            other_load = rec.project if rec is not None and rec.project != project.name else None
+            snapshot = rec.snapshot if rec is not None and other_load is None else None
+            predicted = predict_view_columns(
+                project, snapshot, views_now,
+                describe=lambda q: current.describe_query(conn, q),
+                raw_now=raw_now,
+            )
+    except current.CurrentError:
+        has_inspect = False
+        try:
+            with current.reader(dbname) as conn:
+                views_now = current.read_view_columns(conn)
+                rec = current.read_load_record(conn, include_fingerprints=False)
+        except current.CurrentError as exc:
+            raise PlanError("지금 상태를 읽지 못함", [str(exc)]) from None
+        other_load = rec.project if rec is not None and rec.project != project.name else None
+        snapshot = rec.snapshot if rec is not None and other_load is None else None
+        predicted = predict_view_columns(
+            project, snapshot, views_now,
+            describe=None,
+            raw_now=None,
+            inspect_missing_reason="운용 조회 계정 dash_inspect가 없어 열을 미리 분석하지 못함",
+        )
 
     # 데이터
-    other_load = rec.project if rec is not None and rec.project != project.name else None
     if rec is None:
         table_diffs = [unrecorded_table(name, len(data[name].rows)) if name in data
                        else batch_diff(name, tables[name], folders[name], None, None) for name in order]
         load_record: dict[str, Any] = {"exists": False, "project": None}
     else:
         old_tables = rec.snapshot.get("tables") or {}
+        fkey, fp_err = fingerprint_status(
+            rec.snapshot if other_load is None else None,
+            fingerprints_readable=rec.fingerprints_readable,
+            has_inspect=has_inspect,
+            env=env,
+        )
         table_diffs = [table_diff(name, tables[name], data[name].rows, old_tables.get(name),
-                                  rec.fingerprints.get(name, []), replaced_project=other_load) if name in data
+                                  rec.fingerprints.get(name, []), replaced_project=other_load,
+                                  key=fkey, fingerprint_error=fp_err) if name in data
                        else batch_diff(name, tables[name], folders[name], old_tables.get(name),
                                        rec.batches.get(name, {}), replaced_project=other_load)
                        for name in order]
@@ -590,8 +774,6 @@ def make_plan(
         load_record = {"exists": True, "project": rec.project}
 
     # 뷰. 다른 프로젝트의 적재 기록은 이 프로젝트의 구조를 말해 주지 않는다
-    snapshot = rec.snapshot if rec is not None and other_load is None else None
-    predicted = predict_view_columns(project, snapshot, views_now)
     if other_load is not None:
         for p in predicted.values():
             if p["reason"] == NO_RECORD_TEXT:
@@ -674,10 +856,21 @@ def _table_text(t: Mapping[str, Any]) -> str:
             parts.append(RULES_TEXT)
         parts += _columns_text(t["columns"])
         return "  ".join(parts)
-    if t["status"] == "unrecorded":
-        return f"{t['rows']}행"
     if t["status"] == "removed":
         return f"테이블 삭제 ({MINUS}{t['removed']}행)"
+    if t["status"] == "unrecorded" or t["added"] is None:
+        reason = t.get("reason")
+        return f"{t['rows']}행 ({reason})" if reason and reason != NO_RECORD_TEXT else f"{t['rows']}행"
+    if t.get("comparison") == "key_only":
+        counts = f"+{t['added']}행 {MINUS}{t['removed']}행 · 유지 {t['matched']}행(값 미비교)"
+        parts = [counts] + _columns_text(t["columns"])
+        parts.append("(열 구성이 달라 기본 키로만 행을 맞춤)")
+        return "  ".join(parts)
+    if t.get("comparison") == "none":
+        counts = f"+{t['added']}행 {MINUS}{t['removed']}행"
+        parts = [counts] + _columns_text(t["columns"])
+        parts.append(f"({t['reason']}: 행 대응 불가, 전체 교체로 셈)")
+        return "  ".join(parts)
     counts = f"+{t['added']}행 {MINUS}{t['removed']}행 ~{t['changed']}행"
     if t["status"] == "new":
         return f"{counts}  (새 테이블)"
@@ -724,7 +917,7 @@ def format_plan(plan: Mapping[str, Any]) -> str:
 
     data = plan["data"]
     rows = []
-    if any(t["status"] == "unrecorded" for t in data):
+    if any(t["status"] == "unrecorded" and t.get("reason") == NO_RECORD_TEXT for t in data):
         rows.append(f"{NO_RECORD_TEXT}: 비교할 수 없음(한 번 apply하면 생김). CSV 행 수만 표시")
     rows += [f"{t['table']}  {_table_text(t)}" for t in data if t["status"] != "unchanged"]
     same = [t["table"] for t in data if t["status"] == "unchanged"]

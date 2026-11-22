@@ -129,7 +129,7 @@ Codex는 푸시만으로는 다시 리뷰하지 않아서, 고친 뒤에는 PR�
 
 - **guest 권한을 넓히지 않아서 생긴 것:** 임베드 화면에서 기간(`time_range`) 필터는 기본값만 적용되고 값을 바꿀 수 없다. `chord`, `world_map`, `country_map`은 임베드 화면에서 그려지지 않는다(갤러리에서 뺌). 각각 `can_read on TimeRange`, `can_explore_json on Superset`을 `superset/init_guest_role.py`에 더하면 될 것으로 보이지만 그 경로로 guest가 조회할 수 있는 범위는 실측하지 않았다.
 - **prune:** 프로젝트를 전환했을 때 이전 프로젝트의 Superset 객체를 지우는 일은 여전히 `.state/managed.json`이 필요하다(같은 프로젝트 안의 이전 객체는 상태 파일 없이 지워진다).
-- **plan:** `sql:` 데이터셋의 새 열은 적용 전에 예측하지 못한다("적용해야 알 수 있음"). 이 변경 전에 적재된 DB는 한 번 `make apply`해야 데이터 차이가 나온다. 열 구성이나 기본 키를 바꾼 테이블은 전부 추가·전부 삭제로 센다. 행 지문은 솔트 없는 SHA-256이라 값의 범위가 좁은 키는 추측해 맞춰 볼 수 있다(원본은 저장하지 않음).
+- **plan:** `sql:` 데이터셋은 `dash_inspect`의 `PQprepare`·`PQdescribePrepared`와 `sources`로 적용 전 열을 예측하고, 비키 열 변경은 `key_only`로 추가·삭제·유지 행을 분리하며, 행 지문은 `PLAN_FINGERPRINT_KEY` 기반 HMAC-SHA256과 `dash_reader` 권한 회수로 보호된다(#56). 다만 `raw`·선행 `dash` 구조가 함께 바뀌는 경우·빈 DB·`dash_inspect` 미연결 시에는 `unknown`으로 남고, 기본 키 변경·중복 키 시에는 전체 교체(`none`)로 센다. 구버전 스냅샷·키 회전 시에는 오탐 없이 1회 `make apply`를 안내한다.
 - **설정 검사:** 막대·선 차트에서 `x`와 `groupby`에 같은 열을 넣으면 `make check`는 통과하지만 Superset이 차트 자리에 "Duplicate column/metric labels" 오류를 그린다(5b 통합 확인에서 발견, 고치지 않음).
 - **`make apply`:** backend 이미지를 다시 만들지 않는다. 템플릿 코드(`dashkit/`, `web/widgets/*/widget.json`)를 바꿨으면 `make up`이 필요하다.
 - **위젯:** 새 위젯의 고정 문구(`web/strings.js`)와 전용 CSS(`web/styles.css`)는 아직 위젯 폴더 밖이다.

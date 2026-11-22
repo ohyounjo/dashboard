@@ -130,6 +130,10 @@ def rebuild_locked(project: Project, conn: psycopg.Connection, *,
 
 def _rebuild_on(project: Project, conn: psycopg.Connection, data: dict[str, TableData], order: list[str],
                 as_of_sql: str, exclude: frozenset[tuple[str, str]] = frozenset(), include: tuple = ()) -> dict[str, int]:
+    try:
+        record.fingerprint_key()
+    except record.FingerprintKeyError as exc:
+        raise LoadError([str(exc)]) from None
     sources, errors = _sources(project, order)
     if errors:
         raise LoadError(errors)
@@ -312,10 +316,16 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
             _step(cur, label, sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}").format(schema, inspect))
         _step(cur, label, sql.SQL("GRANT EXECUTE ON FUNCTION {}.as_of() TO {}").format(dash, inspect))
 
-    # 적재 기록(plan이 dash_reader로 읽는다). 원본 값은 넣지 않는다(기본 키의 해시와 행 해시, 파일 이름·해시·행 수뿐).
-    # 누적 테이블은 행 지문을 남기지 않는다(배치 단위로 비교한다)
-    prints = {t: record.fingerprints(tables[t], data[t].rows) for t in order if t in data}
-    snap = record.snapshot(project.name, project.schema, project.dashboard, counts, sources=sources)
+    # 적재 기록(dash_inspect가 row_fingerprint를 읽고, dash_reader는 load_snapshot·batch만 읽는다).
+    # 원본 값은 넣지 않고(PLAN_FINGERPRINT_KEY 기반 HMAC-SHA256), 누적 테이블은 행 지문을 남기지 않는다.
+    try:
+        fkey = record.fingerprint_key()
+    except record.FingerprintKeyError as exc:
+        raise _StepError([str(exc)]) from None
+    prints = {t: record.fingerprints(tables[t], data[t].rows, table_name=t, key=fkey)
+              for t in order if t in data}
+    snap = record.snapshot(project.name, project.schema, project.dashboard, counts,
+                           sources=sources, fingerprint_key_id=record.key_id(fkey))
     try:
         record.write(cur, snap, prints, os.environ.get("DATA_DB_READER_USER") or "dash_reader", batch_rows, readers)
     except psycopg.Error as exc:

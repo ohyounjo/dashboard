@@ -259,7 +259,8 @@ def test_table_dataset_column_added_shows_up_before_apply(applied, tmp_path, no_
 
     k = by(result["data"], "table")["kpi_snapshots"]
     assert k["columns"]["added"] == ["zz_age_days"] and k["comparable"] is False
-    assert (k["added"], k["removed"], k["changed"]) == (len(rows), len(rows), 0)       # 열 구성이 달라 행을 맞추지 않는다
+    assert k["comparison"] == "key_only"
+    assert (k["added"], k["removed"], k["matched"], k["changed"]) == (0, 0, len(rows), None)
     views = by(result["views"], "dataset")
     assert views["kpi_snapshots"]["status"] == "changed"
     assert views["kpi_snapshots"]["columns"] == {"added": ["zz_age_days"], "removed": [], "retyped": [], "reordered": False}
@@ -267,8 +268,8 @@ def test_table_dataset_column_added_shows_up_before_apply(applied, tmp_path, no_
     assert "dash.kpi_snapshots  열 추가: zz_age_days" in plan.format_plan(result)
 
 
-def test_changed_sql_dataset_is_marked_unknown(applied, tmp_path, no_owner):
-    """`sql:` 데이터셋의 쿼리를 바꾸면 새 열은 적용해야 안다. plan은 그렇게 표시하고 지금 열로 번들을 만든다."""
+def test_changed_sql_dataset_is_predictable_with_inspect_and_unknown_without(applied, tmp_path, no_owner, monkeypatch):
+    """`sql:` 데이터셋의 쿼리를 바꾸면 dash_inspect로 새 열을 적용 전에 예측하고, dash_inspect가 없으면 unknown으로 남긴다."""
     dbname, build = applied
     root = copy_project(PROJECT, tmp_path)
 
@@ -281,15 +282,24 @@ def test_changed_sql_dataset_is_marked_unknown(applied, tmp_path, no_owner):
     edit_yaml(root / PROJECT / "dashboard.yaml", widen)
     result = plan.make_plan(load_project(PROJECT, root), dbname=dbname, build_dir=build, state_dir=build)
     views = by(result["views"], "dataset")
-    assert views["docs"]["status"] == "unknown" and views["docs"]["reason"] == "쿼리가 바뀜"
+    assert views["docs"]["status"] == "changed" and views["docs"]["columns"]["added"] == ["zz_extra"]
     assert all(v["status"] == "unchanged" for k, v in views.items() if k != "docs")
-    assert result["superset"]["assumed_columns"] == ["docs"]
+    assert result["superset"]["assumed_columns"] == []
+    assert any(c["key"] == "docs" and "zz_extra" in c["detail"] for c in result["superset"]["datasets"]["changed"])
     assert result["changed"] is True
-    assert "dash.docs  적용해야 알 수 있음 (쿼리가 바뀜)" in plan.format_plan(result)
+    assert "dash.docs  열 추가: zz_extra" in plan.format_plan(result)
+
+    # dash_inspect가 없으면(owner_conn으로 폴백하지 않고) unknown으로 물러난다
+    monkeypatch.delenv("DATA_DB_INSPECT_PASSWORD", raising=False)
+    fallback = plan.make_plan(load_project(PROJECT, root), dbname=dbname, build_dir=build, state_dir=build)
+    fb_views = by(fallback["views"], "dataset")
+    assert fb_views["docs"]["status"] == "unknown" and "쿼리가 바뀜" in fb_views["docs"]["reason"]
+    assert fallback["superset"]["assumed_columns"] == ["docs"]
+    assert "적용해야 알 수 있음" in plan.format_plan(fallback)
 
 
 def test_schema_column_added_makes_dependent_sql_views_unknown(applied, tmp_path, no_owner):
-    """raw 테이블의 구조가 바뀌면 그 테이블 이름이 나오는 `sql:` 뷰는 "적용해야 알 수 있음"이다."""
+    """raw 테이블의 구조가 바뀌면 그 테이블을 읽는 `sql:` 뷰는 "적용해야 알 수 있음"이고, 행은 key_only로 맞춘다."""
     dbname, build = applied
     root = copy_project(PROJECT, tmp_path)
 
@@ -304,7 +314,9 @@ def test_schema_column_added_makes_dependent_sql_views_unknown(applied, tmp_path
     result = plan.make_plan(project, dbname=dbname, build_dir=build, state_dir=build)
 
     m = by(result["data"], "table")["members"]
-    assert m["status"] == "changed" and m["columns"]["added"] == ["zz_team"] and m["comparable"] is False
+    assert m["status"] == "changed" and m["columns"]["added"] == ["zz_team"]
+    assert m["comparison"] == "key_only" and m["comparable"] is False
+    assert (m["added"], m["removed"], m["matched"], m["changed"]) == (0, 0, len(rows), None)
     views = by(result["views"], "dataset")
     naming = {k for k, ds in project.dashboard["datasets"].items() if "sql" in ds and "members" in ds["sql"]}
     assert naming, "예시에 members를 읽는 sql 데이터셋이 있어야 함"
@@ -466,12 +478,15 @@ def test_load_record_matches_csv_for_every_example(name, scratch_db, tmp_path, m
     result = plan.make_plan(project, dbname=scratch_db, build_dir=tmp_path, state_dir=tmp_path)
     assert_nothing_to_do(result)
     assert {t["table"]: t["unchanged"] for t in result["data"]} == counts
-    with current.reader(scratch_db) as conn:
-        rec = current.read_load_record(conn)
+    with current.inspector(scratch_db) as conn:
+        rec = current.read_load_record(conn, include_fingerprints=True)
         views_now = current.read_view_columns(conn)
     got = json.loads(json.dumps(rec.snapshot))
     sources = {k: d.pop("sources") for k, d in got["datasets"].items()}
-    assert got == json.loads(json.dumps(record.snapshot(name, project.schema, project.dashboard, counts)))
+    assert got == json.loads(json.dumps(record.snapshot(
+        name, project.schema, project.dashboard, counts,
+        fingerprint_key_id=record.key_id(record.fingerprint_key()),
+    )))
     # 계보(contracts/ingest.md "계보"): 데이터셋마다 읽는 raw 테이블과 열. table: 데이터셋은 그 테이블의 모든 열
     assert set(sources) == set(project.dashboard["datasets"])
     for key, ds in project.dashboard["datasets"].items():
@@ -494,7 +509,7 @@ def test_load_record_matches_csv_for_every_example(name, scratch_db, tmp_path, m
         for original in originals:
             assert not any(v and v in keys for v in original)
             assert json.dumps(list(original), ensure_ascii=False, separators=(",", ":")) not in keys
-    with db.reader_conn(scratch_db) as conn:
+    with db.inspect_conn(scratch_db) as conn:
         whole = conn.execute(
             "SELECT coalesce(string_agg(f::text, ' '), '') FROM dashkit_meta.row_fingerprint f").fetchone()[0]
     long_keys = {v for t, spec in project.schema["tables"].items()
@@ -510,7 +525,7 @@ def test_load_record_matches_csv_for_every_example(name, scratch_db, tmp_path, m
 
 def test_record_stores_keys_and_hashes_only(applied):
     dbname, _build = applied
-    with db.reader_conn(dbname) as conn:
+    with db.inspect_conn(dbname) as conn:
         cols = conn.execute(
             "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'dashkit_meta' "
             "ORDER BY 1, ordinal_position").fetchall()
@@ -528,11 +543,13 @@ def test_record_stores_keys_and_hashes_only(applied):
         assert conn.execute("SELECT count(*) FROM dashkit_meta.load_snapshot").fetchone()[0] == 1
 
 
-def test_reader_can_read_the_record_but_not_write_it_or_raw(applied):
+def test_reader_can_read_snapshot_and_batch_but_not_fingerprints_or_raw(applied):
     dbname, _build = applied
     with db.reader_conn(dbname, autocommit=True) as conn:
-        assert conn.execute("SELECT count(*) FROM dashkit_meta.row_fingerprint").fetchone()[0] > 0
+        assert conn.execute("SELECT count(*) FROM dashkit_meta.load_snapshot").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM dashkit_meta.batch").fetchone()[0] >= 1
         for stmt in (
+            "SELECT count(*) FROM dashkit_meta.row_fingerprint",                  # dash_reader는 지문을 읽지 못한다
             "SELECT count(*) FROM raw.members",                                   # raw는 여전히 못 읽는다
             "INSERT INTO dashkit_meta.row_fingerprint VALUES ('t', 'k', 'h')",
             "UPDATE dashkit_meta.row_fingerprint SET row_hash = 'x'",
@@ -633,3 +650,111 @@ def test_live_plan_with_pending_changes_still_changes_nothing(superset, tmp_path
     assert "차트 +1 (zz_plan_extra)" in out and "제목 변경, 배치 변경" in out
     assert f"{table}  +0행 −1행 ~0행" in out
     assert _everything(superset) == before
+
+
+def test_describe_query_matches_information_schema_and_rejects_unsafe(scratch_db):
+    """describe_query가 실제 CREATE VIEW + information_schema와 1:1 일치하며 실행 없이 안전하게 거부한다."""
+    import time
+    from dashkit.loader.current import DescribeError
+
+    project = load_project(PROJECT, PROJECTS)
+    load(project, dbname=scratch_db)
+
+    query = (
+        "SELECT 'lit' AS lit_col, m.*, "
+        "1::integer AS int4_col, 1::bigint AS int8_col, 1.5::numeric AS num_col, "
+        "true AS bool_col, current_date AS date_col, now() AS ts_col, "
+        "(current_date - DATE '2026-01-01')::integer AS diff_col, "
+        "interval '1 day' AS iv_col, ARRAY['a', 'b']::text[] AS arr_col, "
+        "dash.as_of() AS as_of_col "
+        "FROM raw.members m"
+    )
+    with current.inspector(scratch_db) as conn:
+        predicted = current.describe_query(conn, query)
+        # pg_sleep은 실행되지 않고 즉시 분석된다
+        t0 = time.monotonic()
+        sleep_cols = current.describe_query(conn, "SELECT pg_sleep(10) AS s")
+        assert time.monotonic() - t0 < 2.0 and len(sleep_cols) == 1
+
+        # 위험·오류 쿼리는 모두 DescribeError로 거부된다
+        for bad in (
+            "SELECT * FROM raw.no_such_table",
+            "SELECT 1 AS x, 2 AS x",
+            "SELECT $1::text AS p",
+            "SELECT 1; SELECT 2",
+            "SELECT * FROM raw.members WHERE id = $1",
+        ):
+            with pytest.raises(DescribeError):
+                current.describe_query(conn, bad)
+
+    # 실제 CREATE VIEW의 information_schema 결과와 (이름, 타입) 1:1 일치 확인
+    with db.owner_conn(scratch_db) as conn:
+        try:
+            conn.execute(f"CREATE OR REPLACE VIEW dash.zz_probe_view AS {query}")
+            actual = current.read_view_columns(conn, ["zz_probe_view"])["zz_probe_view"]
+        finally:
+            conn.rollback()
+    assert predicted == actual
+
+
+def test_e2e_new_sql_dataset_and_key_only_plan(applied, tmp_path, no_owner):
+    """새 sql: 데이터셋 열 예측과 비키 열 추가 시 key_only 요약을 E2E로 검증한다."""
+    dbname, build = applied
+    root = copy_project(PROJECT, tmp_path)
+
+    def add_sql_ds(doc):
+        doc["datasets"]["member_issues"] = {
+            "sql": "SELECT m.id AS member_id, i.id AS issue_id FROM raw.members m JOIN raw.issues i ON i.assignee = m.id"
+        }
+
+    def add_col(doc):
+        doc["tables"]["members"]["columns"]["zz_team"] = {"type": "text"}
+
+    edit_yaml(root / PROJECT / "dashboard.yaml", add_sql_ds)
+    # 1) raw 구조가 그대로일 때 새 sql: 데이터셋의 열을 적용 전에 예측한다
+    pred_only = plan.make_plan(load_project(PROJECT, root), dbname=dbname, build_dir=build, state_dir=build)
+    views_only = by(pred_only["views"], "dataset")
+    assert views_only["member_issues"]["status"] == "new"
+    assert views_only["member_issues"]["columns"]["added"] == ["member_id", "issue_id"]
+
+    # 2) raw.members에 비키 열을 추가하면 행은 key_only로 요약되고, members를 읽는 새 sql: 뷰는 unknown으로 물러난다
+    edit_yaml(root / PROJECT / "schema.yaml", add_col)
+    path = root / PROJECT / "data" / "members.csv"
+    header, rows = read_csv(path)
+    new_row = {**rows[0], "id": "m999", "zz_team": "core"}
+    write_csv(path, header + ["zz_team"], [{**r, "zz_team": "a"} for r in rows] + [new_row])
+
+    result = plan.make_plan(load_project(PROJECT, root), dbname=dbname, build_dir=build, state_dir=build)
+    views = by(result["views"], "dataset")
+    assert views["member_issues"]["status"] == "unknown" and "raw.members" in views["member_issues"]["reason"]
+    m = by(result["data"], "table")["members"]
+    assert m["comparison"] == "key_only"
+    assert (m["added"], m["removed"], m["matched"], m["changed"]) == (1, 0, len(rows), None)
+
+
+def test_legacy_snapshot_and_key_rotation_recovery(scratch_db, tmp_path, monkeypatch):
+    """구버전 스냅샷(fingerprint 없음)과 키 회전 시 오탐 +N -N 없이 unrecorded 안내 후 1회 load로 복구한다."""
+    project = load_project(PROJECT, PROJECTS)
+    load(project, dbname=scratch_db)
+
+    # 1. 구버전 스냅샷 시뮬레이션: snapshot JSONB에서 fingerprint 키 제거
+    with db.owner_conn(scratch_db) as conn:
+        with conn.transaction():
+            conn.execute("UPDATE dashkit_meta.load_snapshot SET snapshot = snapshot - 'fingerprint'")
+    legacy_plan = plan.make_plan(project, dbname=scratch_db, build_dir=tmp_path / "b", state_dir=tmp_path / "s")
+    for entry in legacy_plan["data"]:
+        if entry.get("mode") != "append":
+            assert entry["comparison"] == "unrecorded" and entry["added"] is None and "구버전" in entry["reason"]
+    load(project, dbname=scratch_db)
+    recovered = plan.make_plan(project, dbname=scratch_db, build_dir=tmp_path / "b", state_dir=tmp_path / "s")
+    assert all(t["status"] == "unchanged" for t in recovered["data"])
+
+    # 2. 키 회전: 다른 PLAN_FINGERPRINT_KEY 설정 후 plan → unrecorded → 1회 load → 복구
+    monkeypatch.setenv("PLAN_FINGERPRINT_KEY", "rotated-new-fingerprint-key-32-bytes!")
+    rotated_plan = plan.make_plan(project, dbname=scratch_db, build_dir=tmp_path / "b", state_dir=tmp_path / "s")
+    for entry in rotated_plan["data"]:
+        if entry.get("mode") != "append":
+            assert entry["comparison"] == "unrecorded" and entry["added"] is None and "달라" in entry["reason"]
+    load(project, dbname=scratch_db)
+    after_load = plan.make_plan(project, dbname=scratch_db, build_dir=tmp_path / "b", state_dir=tmp_path / "s")
+    assert all(t["status"] == "unchanged" for t in after_load["data"])

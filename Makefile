@@ -237,7 +237,7 @@ outbox: dirs
 check: dirs
 	$(TOOLS) python -m dashkit check
 
-load: dirs
+load: dirs env-secrets
 	$(TOOLS) python -m dashkit load
 
 sync: dirs
@@ -261,7 +261,7 @@ ingest: dirs
 	  $(if $(DRY_RUN),--dry-run) $(if $(SKIP_INVALID),--skip-invalid) $(if $(FORCE),--force)
 
 # 적용 전에 무엇이 바뀌는지 본다(데이터, 뷰, Superset). 아무것도 바꾸지 않는다. contracts/plan.md
-plan:
+plan: env-secrets
 	$(TOOLS) python -m dashkit plan
 
 # 설정 파일을 최신 설정 버전 형식으로 고친다. CHECK=1이면 고칠 것이 있는지만 본다(있으면 종료 코드 1)
@@ -278,7 +278,7 @@ new: unit-image
 # ---------------------------------------------------------------- Studio(구성 화면, 보강설계서 6절)
 # 127.0.0.1에만 열리고 인증이 없다. 외부에 열지 않는다. 웹앱과 Superset은 Studio 출처를 frame-ancestors에 더해 다시 뜬다
 # (미리보기 iframe). make studio-down이 원래 정책('none')으로 되돌린다.
-studio: dirs
+studio: dirs env-secrets
 	STUDIO_PORT=$(STUDIO_PORT) STUDIO_ORIGIN=http://localhost:$(STUDIO_PORT) $(COMPOSE) --profile studio up -d --build studio web superset
 	$(call wait_healthy,superset web studio)
 	@echo "✔ Studio: http://localhost:$(STUDIO_PORT)  (끄기: make studio-down)"

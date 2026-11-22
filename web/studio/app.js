@@ -428,8 +428,29 @@ function planBody(plan) {
   const quiet = [];
   for (const d of plan.data || []) {
     if (d.status === "unchanged") { quiet.push(d.table); continue; }
-    if (d.status === "unrecorded") { row(S.planData, d.table, S.planUnrecorded(d.rows), "warn"); continue; }
-    const text = [S.planRows(d.added ?? 0, d.removed ?? 0, d.changed ?? 0), S.planStatus[d.status] || d.status, d.comparable === false && d.reason ? d.reason : null, ...cols(d.columns)].filter(Boolean).join(" · ");
+    if (d.mode === "append") {
+      if (d.status === "pending") { row(S.planData, d.table, d.reason || S.planPending, "warn"); continue; }
+      const b = d.batches || {};
+      const text = [
+        S.planBatches((b.added || []).length, (b.removed || []).length, (b.changed || []).length),
+        d.added != null && d.removed != null ? S.planRowsNoChanged(d.added, d.removed) : null,
+        d.status === "new" ? S.planStatus.new : null,
+        ...cols(d.columns),
+      ].filter(Boolean).join(" · ");
+      row(S.planData, d.table, text, "primary");
+      continue;
+    }
+    if (d.status === "unrecorded" || d.added == null) {
+      row(S.planData, d.table, d.reason ? S.planUnrecordedReason(d.rows, d.reason) : S.planUnrecorded(d.rows), "warn");
+      continue;
+    }
+    if (d.comparison === "key_only") {
+      const text = [S.planRowsKeyOnly(d.added, d.removed, d.matched ?? 0), S.planStatus[d.status] || d.status, d.reason || null, ...cols(d.columns)].filter(Boolean).join(" · ");
+      row(S.planData, d.table, text, "primary");
+      continue;
+    }
+    const rowSummary = d.changed == null ? S.planRowsNoChanged(d.added, d.removed) : S.planRows(d.added, d.removed, d.changed);
+    const text = [rowSummary, S.planStatus[d.status] || d.status, d.comparable === false && d.reason ? d.reason : null, ...cols(d.columns)].filter(Boolean).join(" · ");
     row(S.planData, d.table, text, "primary");
   }
   if (quiet.length) row(S.planData, quiet.join(", "), S.planNoChange);
@@ -442,6 +463,7 @@ function planBody(plan) {
   if (ss.first) row(S.planSuperset, "", S.planFirst, "primary");
   if (ss.replaces) row(S.planSuperset, ss.replaces.project, S.planReplaces(ss.replaces.objects), "warn");
   if (ss.pending_prune) row(S.planSuperset, "", S.planPrune(ss.pending_prune), "warn");
+  if ((ss.assumed_columns || []).length) row(S.planSuperset, ss.assumed_columns.join(", "), S.planAssumedCols(ss.assumed_columns.join(", ")), "warn");
   for (const [kind, label] of [["datasets", S.planDatasets], ["charts", S.planCharts], ["dashboards", S.planDashboards]]) {
     const g = ss[kind];
     if (!g) continue;

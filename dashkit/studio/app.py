@@ -323,18 +323,30 @@ def _one(files: dict[str, bytes]) -> bytes:
 
 
 def _table_diff(project: config.Project, table: str, rows: list) -> tuple[dict[str, Any] | None, str | None]:
-    """올린 CSV와 지난 적재의 차이(dashkit.plan의 방식, dash_reader만 쓴다). 읽지 못하면 (None, 이유)."""
+    """올린 CSV와 지난 적재의 차이(dash_inspect 우선, dash_reader 폴백, owner 미사용). 읽지 못하면 (None, 이유)."""
+    has_inspect = True
     try:
-        with current.reader() as conn:
-            record = current.read_load_record(conn, [table])
-    except current.CurrentError as exc:
-        return None, jobs.scrub(str(exc), jobs.secret_values())
+        with current.inspector() as conn:
+            record = current.read_load_record(conn, [table], include_fingerprints=True)
+    except current.CurrentError:
+        has_inspect = False
+        try:
+            with current.reader() as conn:
+                record = current.read_load_record(conn, [table], include_fingerprints=False)
+        except current.CurrentError as exc:
+            return None, jobs.scrub(str(exc), jobs.secret_values())
     if record is None:
         return plan.unrecorded_table(table, len(rows)), None
     other = record.project if record.project != project.name else None
     recorded = (record.snapshot.get("tables") or {}).get(table)
+    fkey, fp_err = plan.fingerprint_status(
+        record.snapshot if other is None else None,
+        fingerprints_readable=record.fingerprints_readable,
+        has_inspect=has_inspect,
+    )
     return plan.table_diff(table, project.schema["tables"][table], rows, recorded,
-                           record.fingerprints.get(table, []), replaced_project=other), None
+                           record.fingerprints.get(table, []), replaced_project=other,
+                           key=fkey, fingerprint_error=fp_err), None
 
 
 @api.post(PREFIX + "/projects/{p}/data/{table}/check")
