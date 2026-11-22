@@ -119,8 +119,9 @@ adhoc_filters:
 | 검증 항목 | 확인 내용 및 기대 결과 |
 |---|---|
 | 정적·번들·단위 테스트 | `make check`, `make plan`, `make test-unit`, `git diff --check` 통과. `issues_by_severity`의 `adhoc_filters` `subject`가 `updated`이고, 제외 차트 6개에 `TEMPORAL_RANGE`가 없으며 `scope.excluded`가 정확함. |
-| 통합 테스트 | 빈 테스트 볼륨에서 `AUTH_COOKIE_SECURE=0 make test` 통과. |
-| 임베드 화면 기본값·변경·재조회 | 실제 웹앱 임베드(`overview`, `issues`, `docs`)에서 기본 기간 표시 및 위 표의 기대 수치 확인. 기간 변경 시 `GET /api/v1/time_range/` 200, `POST /api/v1/chart/data` 200과 함께 차트 수치가 위 표와 일치하게 변경됨. |
+| 통합 테스트 | 빈 테스트 볼륨에서 `AUTH_COOKIE_SECURE=0 make test`(브라우저 검증을 이어갈 경우 `KEEP=1`) 통과. |
+| 격리 스택 `devtracker` 재적용 | `Makefile`의 `_test_run`은 마지막 5단계에서 `PROJECT=zz-ingest`를 `apply`한 뒤 폴더를 삭제하므로 `KEEP=1` 직후 `.test/state/embed.json`의 임베드 매핑이 비워진다. 브라우저 검증 전에 `make info`로 확인한 테스트 스택의 `TEST_ENV`(`COMPOSE_PROJECT_NAME`, `WEB_PORT`, `SUPERSET_PORT`, `STUDIO_PORT`, `WEB_ORIGINS`, `SUPERSET_PUBLIC_URL`, `WEB_PUBLIC_URL`, `STATE_DIR=/app/.test/state`, `BUILD_DIR=/app/.test/build`, `HOST_STATE_DIR=./.test/state`, `HOST_BUILD_DIR=./.test/build`)와 `PROJECT=devtracker`로 `make apply`를 다시 실행해 `devtracker` 상태를 복원한다(종료 후 `make test-down`). |
+| 임베드 화면 기본값·변경·재조회 | 위 재적용을 마친 격리 웹앱 임베드(`overview`, `issues`, `docs`)에서 기본 기간 표시 및 위 표의 기대 수치 확인. 기간 변경 시 `GET /api/v1/time_range/` 200, `POST /api/v1/chart/data` 200과 함께 차트 수치가 위 표와 일치하게 변경됨. |
 | 범위 밖 차트 유지 | `overview`에서 기간을 `2026-11-15 : 2026-11-20` 및 `2026-01-01 : 2026-02-01`로 변경해도 `kpi_progress`, `kpi_dday`, `kpi_open`, `kpi_critical`, `ms_bar`, `ms_remaining` 값이 그대로 유지됨. |
 | 기존 필터 조합 | `issues`에서 기간(`2026-11-15 : 2026-11-20`) + `심각도=critical` 적용 시 3건(`ISS-101`, `ISS-102`, `ISS-123`)만 표시. `docs`에서 기간(`2026-11-15 : 2026-11-20`) + `유형=PRD` 적용 시 1건(`D3`)만 표시. |
 | guest 권한 경계 유지 | 같은 guest token으로 `GET /api/v1/time_range/`(유효 200, 잘못된 식 400), `GET /api/v1/form_data/` 403, 다른 대시보드·다른 데이터셋·서브쿼리·CSV·쓰기 차단 유지. |
