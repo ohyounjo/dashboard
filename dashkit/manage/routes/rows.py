@@ -85,15 +85,52 @@ async def post_table_rows(table: str, request: Request, principal: Principal = D
     spec = project.schema["tables"][name]
     columns = [paging.Column(c, _SCHEMA_TYPES.get(s["type"], s["type"])) for c, s in spec["columns"].items()]
     q = _parse(body, columns)
+    sensitive_cols = {c for c, s in spec["columns"].items() if s.get("sensitive")}
+    if any(f["column"] in sensitive_cols for f in q.filters):
+        raise IngestError(422, "invalid_filter", "민감 열은 필터 조건으로 쓸 수 없습니다")
+    if any(col in sensitive_cols for col, _dir in q.sort):
+        raise IngestError(422, "invalid_query", "민감 열은 정렬 기준으로 쓸 수 없습니다")
     pk = list(spec["primary_key"])
+    query_columns = [c for c in columns if c.name not in sensitive_cols] if sensitive_cols else columns
+    selected_cols = q.columns or [c.name for c in columns]
 
     def work(cur):
         relation = sql.SQL("{}.{}").format(sql.Identifier("raw"), sql.Identifier(name))
         if q.key is not None:
-            return _one(cur, relation, columns, pk, q.key)
+            found = _one(cur, relation, query_columns, pk, q.key)
+            if sensitive_cols:
+                found["columns"] = [{"name": c.name, "type": c.type} for c in columns]
+                for c in sensitive_cols:
+                    found["row"][c] = "***"
+            return found
         loaded_at, recorded = _versions(cur)
         rec = recorded.get(name, {})
         version = paging.data_version(loaded_at, {f: r.sha256 for f, r in rec.items()})
+        if sensitive_cols:
+            db_cols = [c for c in selected_cols if c not in sensitive_cols]
+            q_db = paging.Query(
+                filters=q.filters,
+                sort=q.sort,
+                columns=db_cols or [c.name for c in query_columns[:1]],
+                limit=q.limit,
+                cursor=q.cursor,
+                count=q.count,
+            )
+            page = paging.fetch_page(
+                cur, relation, query_columns, q_db, key_columns=pk, version=version,
+                total_rows=sum(r.inserted for r in rec.values()) if rec else None, to_json=_to_json,
+            )
+            res = page.public()
+            col_map = {c.name: c for c in columns}
+            res["columns"] = [{"name": c, "type": col_map[c].type} for c in selected_cols]
+            for r in res["rows"]:
+                for c in list(r):
+                    if c not in selected_cols:
+                        del r[c]
+                for c in selected_cols:
+                    if c in sensitive_cols:
+                        r[c] = "***"
+            return res
         page = paging.fetch_page(cur, relation, columns, q, key_columns=pk, version=version,
                                  total_rows=sum(r.inserted for r in rec.values()) if rec else None, to_json=_to_json)
         return page.public()

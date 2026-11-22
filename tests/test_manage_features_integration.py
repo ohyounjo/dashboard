@@ -298,6 +298,41 @@ def test_export_api_streaming_limits_sensitive_and_audit(clients, monkeypatch):
     sec_rows = list(csv.reader(io.StringIO(r_sec.body.decode("utf-8-sig"))))
     assert sec_rows == [["id", "secret"], ["id-1", "***"]]
 
+    # rows/query에서도 sensitive: true 열 마스킹 및 필터/정렬 거절 검증
+    from dashkit.manage.routes import rows as rows_mod
+
+    monkeypatch.setattr(rows_mod, "_project", lambda: SimpleNamespace(name="p", schema=fake_schema))
+    monkeypatch.setattr(rows_mod, "_table", lambda _p, t: t)
+    assert admin_c.post(
+        "/api/manage/tables/secret_tbl/rows/query",
+        json={"filters": [{"column": "secret", "op": "eq", "value": "x"}]},
+        headers=admin_h,
+    ).status == 422
+    assert admin_c.post(
+        "/api/manage/tables/secret_tbl/rows/query",
+        json={"sort": [{"column": "secret", "dir": "asc"}]},
+        headers=admin_h,
+    ).status == 422
+    monkeypatch.setattr(rows_mod, "_versions", lambda _cur: (datetime.now(timezone.utc), {}))
+    monkeypatch.setattr(
+        rows_mod.paging,
+        "fetch_page",
+        lambda _cur, _rel, cols, _q, **_kw: SimpleNamespace(
+            public=lambda: {
+                "columns": [{"name": c.name, "type": c.type} for c in cols],
+                "rows": [{"id": "id-1"}],
+                "next_cursor": None,
+                "total": 1,
+                "changed": False,
+                "truncated_cells": [],
+            }
+        ),
+    )
+    monkeypatch.setattr(rows_mod, "_run", lambda work: work(None))
+    r_rows = admin_c.post("/api/manage/tables/secret_tbl/rows/query", json={"limit": 10}, headers=admin_h)
+    assert r_rows.status == 200
+    assert json.loads(r_rows.body)["rows"] == [{"id": "id-1", "secret": "***"}]
+
 
 def test_freshness_api_app_and_manage_tables(clients, monkeypatch):
     from dashkit import db

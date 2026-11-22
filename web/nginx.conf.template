@@ -43,6 +43,19 @@ server {
         proxy_read_timeout 60s;
     }
 
+    # 내보내기 경로는 쿼리 문자열에 필터 값이 포함되므로 접근 로그를 남기지 않는다(contracts/manage.md)
+    location ~ ^/api/manage/tables/[^/]+/export$ {
+        access_log off;
+        set $dashkit_manager http://manager:8100;
+        proxy_pass $dashkit_manager;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+
     # 관리 서비스(make manage로 뜬다. contracts/manage.md). 떠 있지 않으면 502이고 운용 화면은 데이터 메뉴를 숨긴다.
     # 본문 상한은 여러 파일을 한 번에 올릴 때의 합계 한도(INGEST_MAX_REQUEST_MB 기본 500)에 맞춘다.
     location /api/manage/ {

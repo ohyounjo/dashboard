@@ -178,3 +178,15 @@ def test_load_project_accepts_freshness_and_sensitive(tmp_path):
     loaded = config.load_project("demo", tmp_path)
     assert loaded.schema["tables"]["items"]["freshness"] == "7d"
     assert loaded.schema["tables"]["items"]["columns"]["secret"]["sensitive"] is True
+
+
+def test_export_access_logs_disabled():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    nginx_conf = (root / "web" / "nginx.conf.template").read_text(encoding="utf-8")
+    assert "location ~ ^/api/manage/tables/[^/]+/export$" in nginx_conf
+    assert "access_log off;" in nginx_conf
+
+    main_py = (root / "dashkit" / "__main__.py").read_text(encoding="utf-8")
+    assert "access_log=False" in main_py

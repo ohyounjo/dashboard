@@ -234,7 +234,7 @@ def cmd_manage(args) -> int:
     """관리 서비스(contracts/manage.md). 로그인한 운용자만 쓴다. 포트는 밖에 열지 않는다(nginx의 /api/manage/로만)."""
     import uvicorn
 
-    uvicorn.run("dashkit.manage.app:app", host=args.host, port=args.port, proxy_headers=True)
+    uvicorn.run("dashkit.manage.app:app", host=args.host, port=args.port, proxy_headers=True, access_log=False)
     return 0
 
 
