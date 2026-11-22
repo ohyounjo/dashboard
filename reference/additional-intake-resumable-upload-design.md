@@ -65,7 +65,7 @@
 4. **엑셀 날짜·시각 일련번호(Serial Number) 변환 규칙:**
    - `xl/styles.xml`의 `<cellXfs>` → `numFmtId`를 조회한다. 표준 날짜·시각 서식 ID(`14`~`22`, `27`~`36`, `45`~`47`, `50`~`58`)이거나 사용자 정의 `formatCode`에서 따옴표(`"..."`)·이스케이프(`\x`)·색상(`[Red]`)을 제거한 뒤 숫자 기호(`0`, `#`, `?`) 없이 날짜·시각 토큰(`y`, `m`, `d`, `h`, `s`)이 포함된 경우 날짜·시각 서식으로 판정한다.
    - 단, 대상 테이블의 스키마 열이 `integer`나 `number`인데 엑셀에서 실수로 날짜 서식이 입혀진 경우까지 깨지지 않도록, `XlsxParser`는 셀 값을 복원할 때 날짜 서식이면 ISO 문자열로 복원하되, **1900년 윤년 버그(일련번호 60 = 1900-02-29, 1900-03-01 이후는 `1899-12-30 + timedelta(days=serial)`)** 와 `workbookPr date1904="1"`(`1904-01-01 + timedelta(days=serial)`)을 모두 정확히 처리한다.
-   - 시·분·초 토큰(`h`, `s`)이 없고 소수부가 0이면 `YYYY-MM-DD`, 시각이 포함되면 초 단위 반올림 후 `YYYY-MM-DDTHH:MM:SS`로 변환한다.
+   - 시·분·초 토큰(`h`, `s`)이 없고 소수부가 0이면 `YYYY-MM-DD`, 시각이 포함되면 `Decimal` 기반 마이크로초 정밀도(`round(frac_days * 86_400_000_000)` 마이크로초)로 계산한 뒤 `dt.isoformat()`(`datetime.fromisoformat()`과 동일한 규칙: 마이크로초가 0이면 `YYYY-MM-DDTHH:MM:SS`, 0이 아니면 `YYYY-MM-DDTHH:MM:SS.ffffff`)으로 변환해 초 미만 정밀도를 보존한다.
 
 ### 2-3. `PARSERS` 인터페이스 및 오류 위치
 
@@ -403,7 +403,7 @@ python -m dashkit ingest-watch [--interval 5] [--dir <경로>] [--table <테이�
 
 | 영역 | 검증 시나리오 |
 |---|---|
-| **동일 정규형 보장 (`xlsx` vs `csv` vs `rows` vs `cursor`)** | - 동일한 행 데이터(문자열, 천 단위 쉼표 숫자, `YYYY/MM/DD` 및 엑셀 날짜 일련번호, 참거짓, 빈 칸 NULL, 빠진 선택 열)를 `CsvParser`, `RowsParser`, `XlsxParser`, `CursorParser`로 각각 접수했을 때 `CanonicalWriter`가 만드는 정규형 `.csv.gz`의 바이트와 `sha256`이 100% 일치함 |
+| **동일 정규형 보장 (`xlsx` vs `csv` vs `rows` vs `cursor`)** | - 동일한 행 데이터(문자열, 천 단위 쉼표 숫자, `YYYY/MM/DD` 및 엑셀 날짜·마이크로초 포함 시각 일련번호, 참거짓, 빈 칸 NULL, 빠진 선택 열)를 `CsvParser`, `RowsParser`, `XlsxParser`, `CursorParser`로 각각 접수했을 때 `CanonicalWriter`가 만드는 정규형 `.csv.gz`의 바이트와 `sha256`이 100% 일치함 |
 | **`xlsx` 파서 정상·경계·악성 입력** | - 공유 문자열(`t="s"`), 인라인 문자열(`inlineStr`), 서식 있는 텍스트(`<r><t>`), 숫자, 부울(`t="b"`), 1900/1904 날짜 일련번호, 희소 셀(`r="A1"`, `r="D1"`), 앞뒤 빈 행·빈 끝 열 정상 파싱<br>- 다중 시트에서 기본 첫 가시 시트 선택 및 `sheet` 이름/번호 지정, 없는 시트 422 오류<br>- 오류 위치가 `<파일 이름>:<엑셀 행 번호>:<열>`로 정확히 보고됨<br>- ZIP가 아닌 파일, 암호화된 xlsx / 구형 `.xls`, `<!DOCTYPE`/`<!ENTITY` 포함 XML, 비압축 크기 한도 초과(ZIP 폭탄 모사) 시 메모리 폭주 없이 즉시 `422` 거절 및 파일 핸들 정리 |
 | **원본 DB 가져오기 (`ingest-db`)** | - `CursorParser`가 2,000행 이상을 스트리밍으로 읽고 데이터 유형(`int`, `Decimal`, `bool`, `date`, `datetime`, `UUID`, `None`)을 정확히 변환함<br>- 지원하지 않는 `bytea`·JSON 배열 열 포함 시 정확한 행·열 위치 오류 보고<br>- `--dsn-env`에 지정된 환경 변수가 없거나 잘못된 변수 이름일 때 거절<br>- 접속 실패·쿼리 오류 시 DSN 원문과 비밀번호가 표준 에러·예외 메시지·로그·감사 로그 어디에도 포함되지 않음(`sanitize_db_error` 검증)<br>- 외부 DB 세션이 `read_only=True`로 열려 쓰기 쿼리(`INSERT`/`UPDATE`/`DROP` 또는 쓰기 CTE)가 외부 DB에서 실행 차단됨 |
 | **감시 폴더 (`ingest-watch`)** | - 대기 폴더의 `.csv`, `.csv.gz`, `.xlsx`가 참조 순서·이름순으로 적재되고 `_done/`으로 이동함<br>- `.`·`_` 시작 파일, `.part`·`.tmp` 파일, 아직 수정 시각/크기가 안정되지 않은 파일은 건너뜀<br>- **`_processing/` 재시작 복구:** `_processing/`으로 이동한 직후(적재 전) 중단된 파일은 다음 시작/스캔에서 회수되어 정상 적재되고 `_done/`으로 이동함; 적재 커밋 직후 중단되어 `_processing/`에 남은 파일은 재시작 복구 시 기존 배치 중복 감지(`duplicate_file`)와 연동해 중복 적재나 `_failed/` 격리 없이 `_done/`으로 정상 마감됨<br>- 심볼릭 링크, 크기 초과 파일, 검증 실패 파일은 `_failed/`로 격리되고 `.error.json`이 생성되며 다음 스캔에서 재실행되지 않음<br>- **민감 열 오류 값 마스킹:** `sensitive: true` 열의 값이 유형·패턴·범위 검증에 실패하거나 열 개수 불일치가 발생했을 때 `redact_sensitive_errors`가 원문 값을 마스킹해 `.error.json`에 민감 값이 절대 남지 않음을 검증<br>- `409 apply_running` 등 일시적 잠금 실패 시 `_failed/`로 버리지 않고 다음 스캔에 재시도함 |
