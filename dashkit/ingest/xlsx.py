@@ -10,6 +10,7 @@ import io
 import posixpath
 import re
 import xml.etree.ElementTree as ET
+import xml.parsers.expat as expat
 import zipfile
 import zlib
 from dataclasses import dataclass
@@ -24,14 +25,13 @@ MAX_XLSX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_XLSX_COMPRESSION_RATIO = 100
 MAX_SHARED_STRINGS_BYTES = 128 * 1024 * 1024
 MAX_XLSX_COLUMNS = 16_384
+MAX_XLSX_ROWS = 1_048_576
 
 _OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 _CELL_REF_RE = re.compile(r"([A-Za-z]+)\d+")
 _BUILTIN_DATE_FMTS = frozenset(range(14, 18)) | frozenset(range(27, 32)) | frozenset(range(50, 59))
 _BUILTIN_TIME_FMTS = frozenset(range(18, 23)) | frozenset(range(32, 37)) | frozenset(range(45, 48))
 _BUILTIN_DATETIME_FMTS = _BUILTIN_DATE_FMTS | _BUILTIN_TIME_FMTS
-_PROLOG_ENTITY_RE = re.compile(rb"<!(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
-_ROOT_START_RE = re.compile(rb"<[A-Za-z_]")
 _ZIP_CORRUPT_ERRORS = (zipfile.BadZipFile, zlib.error, EOFError, KeyError, OSError)
 
 
@@ -42,6 +42,7 @@ class XlsxLimits:
     max_shared_strings_bytes: int = MAX_SHARED_STRINGS_BYTES
     max_cell_chars: int = MAX_CELL_CHARS
     max_columns: int = MAX_XLSX_COLUMNS
+    max_rows: int = MAX_XLSX_ROWS
 
 
 def _local(tag: str) -> str:
@@ -218,41 +219,42 @@ class _BoundedStream(io.RawIOBase):
         self._limits = limits
         self.entry_bytes = 0
         self._in_prolog = True
-        self._prolog_tail = b""
+        self._expat: expat.XMLParserType | None = self._make_prolog_parser()
+
+    def _make_prolog_parser(self) -> expat.XMLParserType:
+        p = expat.ParserCreate()
+
+        def _reject_dtd(*_args: Any) -> None:
+            raise IntakeError("invalid_csv", "안전하지 않은 XML 선언이 포함되어 있습니다",
+                              [f"{self._name}:1:-: XML 엔티티 선언(DOCTYPE/ENTITY)은 허용되지 않습니다"])
+
+        def _reject_ext(*_args: Any) -> int:
+            _reject_dtd()
+            return 0
+
+        def _on_root(*_args: Any) -> None:
+            self._in_prolog = False
+
+        p.StartDoctypeDeclHandler = _reject_dtd
+        p.EntityDeclHandler = _reject_dtd
+        p.UnparsedEntityDeclHandler = _reject_dtd
+        p.ExternalEntityRefHandler = _reject_ext
+        p.StartElementHandler = _on_root
+        return p
 
     def readable(self) -> bool:
         return True
 
     def _check_prolog(self, data: bytes) -> None:
-        if not self._in_prolog or not data:
+        if not self._in_prolog or not data or self._expat is None:
             return
-        buf = self._prolog_tail + data
-        # 루트 요소(<workbook, <sst, <worksheet 등) 시작 전의 프롤로그만 검사한다
-        idx = 0
-        root_pos = None
-        while idx < len(buf):
-            pos = buf.find(b"<", idx)
-            if pos < 0:
-                break
-            nxt = buf[pos + 1:pos + 2]
-            if not nxt:
-                break
-            if nxt in (b"?", b"!"):
-                idx = pos + 2
-                continue
-            if _ROOT_START_RE.match(buf, pos):
-                root_pos = pos
-                break
-            idx = pos + 1
-        scan = buf[:root_pos] if root_pos is not None else buf
-        if _PROLOG_ENTITY_RE.search(scan):
-            raise IntakeError("invalid_csv", "안전하지 않은 XML 선언이 포함되어 있습니다",
-                              [f"{self._name}:1:-: XML 엔티티 선언(DOCTYPE/ENTITY)은 허용되지 않습니다"])
-        if root_pos is not None:
-            self._in_prolog = False
-            self._prolog_tail = b""
-        else:
-            self._prolog_tail = buf[-16:]
+        try:
+            self._expat.Parse(data, False)
+        except expat.ExpatError as exc:
+            raise IntakeError("invalid_csv", "xlsx XML을 읽을 수 없습니다",
+                              [f"{self._name}:1:-: XML 오류: {exc}"]) from None
+        if not self._in_prolog:
+            self._expat = None
 
     def read(self, size: int = -1) -> bytes:
         data = self._raw.read(size)
@@ -473,7 +475,8 @@ class XlsxParser(Parser):
                     else:
                         if tag == "numFmt":
                             try:
-                                fid = int(elem.attrib["numFmtId"])
+                                raw_fid = elem.attrib["numFmtId"]
+                                fid = int(raw_fid) if len(raw_fid) <= 9 else -1
                             except (KeyError, ValueError):
                                 fid = -1
                             if fid >= 0 and "formatCode" in elem.attrib:
@@ -481,7 +484,8 @@ class XlsxParser(Parser):
                             elem.clear()
                         elif tag == "xf" and in_cell_xfs:
                             try:
-                                fid = int(elem.attrib.get("numFmtId", "0"))
+                                raw_num_fmt = elem.attrib.get("numFmtId", "0")
+                                fid = int(raw_num_fmt) if len(raw_num_fmt) <= 9 else 0
                             except ValueError:
                                 fid = 0
                             if fid in _BUILTIN_DATE_FMTS:
@@ -504,7 +508,10 @@ class XlsxParser(Parser):
     def _cell_value(self, ctype: str, style_idx: int | None, raw_v: str, inline_parts: list[str]) -> str:
         if ctype == "s":
             try:
-                idx = int(raw_v.strip())
+                raw_idx = raw_v.strip()
+                if len(raw_idx) > 12:
+                    return ""
+                idx = int(raw_idx)
                 return self._shared_strings[idx]
             except (ValueError, IndexError):
                 return ""
@@ -556,10 +563,28 @@ class XlsxParser(Parser):
                     if tag == "row":
                         in_row = True
                         r_attr = elem.attrib.get("r")
-                        if r_attr and r_attr.isdigit():
+                        if r_attr is not None:
+                            if not r_attr or len(r_attr) > 10 or not r_attr.isdigit():
+                                raise IntakeError(
+                                    "invalid_csv",
+                                    "xlsx 행 번호 형식이 올바르지 않습니다",
+                                    [f"{self.name}:{max(prev_row_num, 1)}:-: 잘못된 행 번호 r='{r_attr[:32]}'"],
+                                )
                             cur_row_num = int(r_attr)
+                            if cur_row_num <= 0 or cur_row_num > self.limits.max_rows:
+                                raise IntakeError(
+                                    "invalid_csv",
+                                    f"xlsx 행 번호가 허용 한도({self.limits.max_rows}행)를 벗어났습니다",
+                                    [f"{self.name}:{max(prev_row_num, 1)}:-: 행 번호 {cur_row_num}이 허용 범위를 벗어남"],
+                                )
                         else:
                             cur_row_num = prev_row_num + 1
+                            if cur_row_num > self.limits.max_rows:
+                                raise IntakeError(
+                                    "invalid_csv",
+                                    f"xlsx 행 수가 허용 한도({self.limits.max_rows}행)를 초과했습니다",
+                                    [f"{self.name}:{cur_row_num}:-: 최대 행 수 초과"],
+                                )
                         prev_row_num = cur_row_num
                         row_cells = []
                         prev_col = -1
@@ -567,7 +592,7 @@ class XlsxParser(Parser):
                         in_c = True
                         c_type = elem.attrib.get("t", "n")
                         s_attr = elem.attrib.get("s")
-                        c_style = int(s_attr) if s_attr and s_attr.isdigit() else None
+                        c_style = int(s_attr) if s_attr and len(s_attr) <= 9 and s_attr.isdigit() else None
                         r_attr = elem.attrib.get("r")
                         parsed_col = _col_index(r_attr) if r_attr else None
                         c_col = parsed_col if parsed_col is not None else (prev_col + 1)

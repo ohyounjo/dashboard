@@ -972,13 +972,28 @@ def test_watch_processing_recovery_transient_retry_and_sensitive_redaction(tmp_p
             cell_xfs=[0, 164],
         )
     )
+    long_row_buf = _io.BytesIO()
+    with _zipfile.ZipFile(long_row_buf, "w", compression=_zipfile.ZIP_DEFLATED) as _zf_out:
+        with _zipfile.ZipFile(_io.BytesIO(_make_xlsx([{"name": "S1", "rows": [["id"]]}])), "r") as _zf_in:
+            for _item in _zf_in.infolist():
+                if _item.filename != "xl/worksheets/sheet1.xml":
+                    _zf_out.writestr(_item.filename, _zf_in.read(_item.filename))
+        _zf_out.writestr(
+            "xl/worksheets/sheet1.xml",
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+            '<row r="1"><c r="A1" t="inlineStr"><is><t>id</t></is></c></row>'
+            f'<row r="{"9" * 5000}"><c r="A2" t="inlineStr"><is><t>E996</t></is></c></row>'
+            '</sheetData></worksheet>',
+        )
+    (inbox / "01_bad_row_num.xlsx").write_bytes(long_row_buf.getvalue())
     (inbox / "02_ok.csv").write_text("id,group_id,state\nE962,g1,open\n", encoding="utf-8")
     st_corrupt = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db)
-    assert st_corrupt["failed"] == 3 and st_corrupt["succeeded"] == 1
+    assert st_corrupt["failed"] == 4 and st_corrupt["succeeded"] == 1
     assert not list(proc.iterdir())
     assert any(p.name.endswith("-01_bad.csv.gz.error.json") for p in (inbox / "_failed").iterdir())
     assert any(p.name.endswith("-01_bad_crc.xlsx.error.json") for p in (inbox / "_failed").iterdir())
     assert any(p.name.endswith("-01_bad_date.xlsx.error.json") for p in (inbox / "_failed").iterdir())
+    assert any(p.name.endswith("-01_bad_row_num.xlsx.error.json") for p in (inbox / "_failed").iterdir())
     assert any(p.name.endswith("-02_ok.csv") for p in (inbox / "_done").iterdir())
 
     rebuilt_equals_current(root, scratch_db)

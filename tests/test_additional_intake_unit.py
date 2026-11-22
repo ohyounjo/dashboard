@@ -528,6 +528,57 @@ def test_xlsx_security_defenses_and_filename_checks(tmp_path):
     dp.close()
     assert len(dt_rows) == 1 and isinstance(dt_rows[0][1], RowError) and dt_rows[0][1].fatal is True
 
+    # 5-g) UTF-16 XML 내 DOCTYPE/ENTITY 선언 차단
+    utf16_xxe = tmp_path / "utf16_xxe.xlsx"
+    u16_sheet = (
+        '<?xml version="1.0" encoding="UTF-16"?>'
+        '<!DOCTYPE foo [ <!ENTITY lol "expanded"> ]>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>&lol;</t></is></c></row>'
+        '</sheetData></worksheet>'
+    ).encode("utf-16")
+    with zipfile.ZipFile(utf16_xxe, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(huge_header, "r") as src_zf:
+            for item in src_zf.infolist():
+                if item.filename != "xl/worksheets/sheet1.xml":
+                    zf.writestr(item.filename, src_zf.read(item.filename))
+        zf.writestr("xl/worksheets/sheet1.xml", u16_sheet)
+    with pytest.raises(IntakeError) as u16_exc:
+        XlsxParser(utf16_xxe, "utf16_xxe.xlsx").header()
+    assert u16_exc.value.detail == "invalid_csv"
+
+    # 5-h) 5,000자리 <row r="..."> / 최대 행 수 초과 → ValueError 대신 IntakeError / fatal RowError
+    long_row_xlsx = tmp_path / "long_row_num.xlsx"
+    with zipfile.ZipFile(long_row_xlsx, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(huge_header, "r") as src_zf:
+            for item in src_zf.infolist():
+                if item.filename != "xl/worksheets/sheet1.xml":
+                    zf.writestr(item.filename, src_zf.read(item.filename))
+        zf.writestr("xl/worksheets/sheet1.xml",
+                    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+                    f'<row r="{"9" * 5000}"><c r="A1" t="inlineStr"><is><t>id</t></is></c></row>'
+                    '</sheetData></worksheet>')
+    with pytest.raises(IntakeError) as row_exc:
+        XlsxParser(long_row_xlsx, "long_row_num.xlsx").header()
+    assert row_exc.value.detail == "invalid_csv"
+
+    over_max_row_xlsx = tmp_path / "over_max_row.xlsx"
+    with zipfile.ZipFile(over_max_row_xlsx, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(huge_header, "r") as src_zf:
+            for item in src_zf.infolist():
+                if item.filename != "xl/worksheets/sheet1.xml":
+                    zf.writestr(item.filename, src_zf.read(item.filename))
+        zf.writestr("xl/worksheets/sheet1.xml",
+                    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+                    '<row r="1"><c r="A1" t="inlineStr"><is><t>id</t></is></c></row>'
+                    f'<row r="{"9" * 5000}"><c r="A2" t="inlineStr"><is><t>1</t></is></c></row>'
+                    '</sheetData></worksheet>')
+    orp = XlsxParser(over_max_row_xlsx, "over_max_row.xlsx")
+    assert orp.header() == ["id"]
+    orows = list(orp.rows())
+    orp.close()
+    assert len(orows) == 1 and isinstance(orows[0][1], RowError) and orows[0][1].fatal is True
+
     # 6) 파일 이름 검증 분리: Studio(check_filename)는 .csv만, 관리 서비스(check_ingest_filename)는 .csv·.xlsx 허용
     assert upload.check_ingest_filename("orders.xlsx") == "orders.xlsx"
     assert upload.check_ingest_filename("orders.CSV") == "orders.CSV"
