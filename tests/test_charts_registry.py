@@ -131,5 +131,23 @@ def test_label_conflicts_follow_declaration(tmp_path, monkeypatch):
     assert conflicts(None, {"viz": "zz_two", "b": ["c", "c"]}) == [["b", 1]]
 
 
+def test_table_page_size_params():
+    raw_paged = charts.build_params({"viz": "table", "columns": ["id", "name"], "page_size": 25})
+    assert raw_paged["query_mode"] == "raw"
+    assert raw_paged["server_pagination"] is True
+    assert raw_paged["server_page_length"] == 25
+
+    overridden = bundle.chart_params({"viz": "table", "columns": ["id", "name"], "page_size": 25,
+                                      "params": {"server_page_length": 50}})
+    assert overridden["server_pagination"] is True
+    assert overridden["server_page_length"] == 50
+
+    raw_plain = charts.build_params({"viz": "table", "columns": ["id", "name"]})
+    assert "server_pagination" not in raw_plain and "server_page_length" not in raw_plain
+
+    agg = charts.build_params({"viz": "table", "groupby": ["phase"], "metrics": ["cnt"]})
+    assert "server_pagination" not in agg and "server_page_length" not in agg
+
+
 def test_generated_docs_are_current():
     assert generated.check() == [], "생성 구간이 최신이 아님: make gen"

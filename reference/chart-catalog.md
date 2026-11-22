@@ -76,7 +76,7 @@ metric: { expressionType: SQL, sqlExpression: "SUM(amount)", label: 매출 }   #
 | `sankey` | 생키 | `sankey_v2` | `source`, `target`, `metric` | — |
 | `scatter` | 시계열 산점 | `echarts_timeseries_scatter` | `x`, `metrics` | `time_grain`, `groupby`, `format` |
 | `sunburst` | 선버스트 | `sunburst_v2` | `columns`, `metric` | `format` |
-| `table` | 표 | `table` | — | `columns`, `groupby`, `metrics`, `order_by`, `row_limit`, `search`, `format` |
+| `table` | 표 | `table` | — | `columns`, `groupby`, `metrics`, `order_by`, `row_limit`, `page_size`, `search`, `format` |
 | `treemap` | 트리맵 | `treemap_v2` | `groupby`, `metric` | `format` |
 | `waterfall` | 폭포 | `waterfall` | `x`, `metric` | `time_grain`, `groupby`, `show_value`, `format` |
 | `word_cloud` | 워드 클라우드 | `word_cloud` | `series`, `metric` | `rotation` |

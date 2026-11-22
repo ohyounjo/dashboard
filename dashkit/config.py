@@ -627,6 +627,13 @@ def _check_dashboard_refs(project: Project) -> list[str]:
             metric_labels = {m: label for m, label in (ds.get("labels") or {}).items() if m in ds["metrics"]}
             for lpath, reason in chart_registry.label_conflicts(chart, metric_labels):
                 errors.append(f"{f}:{fmt_path(cpath + lpath)}: {reason}")
+            if (isinstance(chart.get("page_size"), int) and not isinstance(chart.get("page_size"), bool)
+                    and isinstance(chart.get("row_limit"), int) and not isinstance(chart.get("row_limit"), bool)
+                    and chart["page_size"] > chart["row_limit"]):
+                errors.append(
+                    f"{f}:{fmt_path(cpath + ['page_size'])}: page_size({chart['page_size']})는 "
+                    f"row_limit({chart['row_limit']}) 이하여야 함"
+                )
 
         errors += _check_layout(f, dpath, d, keys_here)
         errors += _check_filters(f, dpath, d, datasets, keys_here)
