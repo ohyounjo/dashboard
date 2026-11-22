@@ -428,7 +428,12 @@ def _rewrite_replace_csv(tname: str, content: bytes, col_plan: list[dict[str, An
     rows = list(csv.reader(io.StringIO(text, newline="")))
     if not rows:
         return content
-    old_idx = {h: i for i, h in enumerate(rows[0])}
+    header = [h.strip() for h in rows[0]]
+    old_idx = {h: i for i, h in enumerate(header)}
+    missing_hdr = [entry["source"] for entry in col_plan if not entry["is_new"] and entry["source"] not in old_idx]
+    if missing_hdr:
+        raise IngestError(422, "invalid_rows", "CSV 머리글이 스키마와 맞지 않습니다",
+                          [f"data/{tname}.csv:1: 열 '{c}'가 머리글에 없음" for c in missing_hdr])
     new_cols = new_table_spec["columns"]
     out = io.StringIO()
     w = csv.writer(out, lineterminator="\n")
@@ -444,10 +449,7 @@ def _rewrite_replace_csv(tname: str, content: bytes, col_plan: list[dict[str, An
                 out_row.append(entry["default"])
                 continue
             src = entry["source"]
-            if src not in old_idx or old_idx[src] >= len(row):
-                out_row.append("")
-                continue
-            raw_text = row[old_idx[src]]
+            raw_text = row[old_idx[src]] if old_idx[src] < len(row) else ""
             converted, err = _convert_cell(raw_text, new_cols[cname],
                                            old_type=entry["old_type"], is_narrowed=entry["narrowed"])
             if err is not None:
@@ -643,6 +645,24 @@ def _staged(project: config.Project, changes: Mapping[str, tuple[bytes | None, b
         raise IngestError(exc.status, exc.detail, exc.message, exc.errors) from None
 
 
+def check_conflict_policy_with_rewrite(project: config.Project, new_project: config.Project,
+                                       op_list: list[Mapping[str, Any]] | None) -> None:
+    """append 테이블의 충돌 정책(on_conflict) 변경과 배치 재작성(열 이름 변경·삭제·유형 좁히기)은 함께 실행하지 않는다."""
+    if not op_list:
+        return
+    _col_plans, needs_rewrite = _table_evolution_plans(project, op_list)
+    for tname, rewrite in needs_rewrite.items():
+        if not rewrite:
+            continue
+        old_t = project.schema["tables"].get(tname)
+        new_t = new_project.schema["tables"].get(tname)
+        if old_t is None or new_t is None or (old_t.get("mode") or "replace") != "append":
+            continue
+        if (old_t.get("on_conflict") or "error") != (new_t.get("on_conflict") or "error"):
+            raise IngestError(422, "invalid_op",
+                              f"충돌 정책(on_conflict) 변경과 배치 재작성은 함께 실행할 수 없습니다({tname}). 먼저 충돌 정책을 적용한 뒤 실행하세요")
+
+
 def validate(project_name: str, op_list: list[Mapping[str, Any]],
              extra: Mapping[str, bytes | None] | None = None) -> list[str]:
     """잠금 없이 미리 검사한다(요청을 받을 때 400·422를 바로 알리려고). 작업은 잠금 안에서 다시 검사한다. 바뀔 파일 목록."""
@@ -652,7 +672,9 @@ def validate(project_name: str, op_list: list[Mapping[str, Any]],
         raise IngestError(422, "invalid_config", "지금 설정이 검사를 통과하지 못합니다", exc.errors) from None
     changes = plan_files(project, op_list, extra)
     if changes:
-        check_mode_switch(project, _staged(project, changes).project)
+        staged_proj = _staged(project, changes).project
+        check_mode_switch(project, staged_proj)
+        check_conflict_policy_with_rewrite(project, staged_proj, op_list)
     return sorted(changes)
 
 
@@ -709,6 +731,7 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
             say(f"▶ 검사: {', '.join(changes)}")
             staged = _staged(project, changes)
             check_mode_switch(project, staged.project)          # 잠금 안에서 폴더를 다시 본다(이력 되돌리기 포함)
+            check_conflict_policy_with_rewrite(project, staged.project, op_list)
             new_revision = data_revision(staged.project.schema, staged.project.dashboard)
             compactions: list[dict[str, Any]] = []
             if restore is None and op_list:

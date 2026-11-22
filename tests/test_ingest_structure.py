@@ -510,3 +510,19 @@ def test_schema_evolution_crash_recovery(root, scratch_db, fault, where, kept):
     else:
         assert files(root) == before and all_rows(scratch_db) == before_rows
     rebuilt_equals_current(root, scratch_db)
+
+
+def test_replace_csv_strips_header_whitespace_and_rejects_on_conflict_change_with_rewrite(root, scratch_db):
+    # 1) replace CSV 머리글의 앞뒤 공백을 제거해 기존 열 값을 보존한다
+    p = root / "ledger/data/groups.csv"
+    p.write_text("id, label \ng1,important\n", encoding="utf-8")
+    load(load_project("ledger", root), dbname=scratch_db)
+    change(root, scratch_db, [{"op": "column.rename", "table": "groups", "column": "label", "to": "title"}])
+    assert sorted(rows(scratch_db, "groups")) == [("g1", "important")]
+
+    # 2) append 테이블에서 on_conflict 변경과 열 이름 변경·삭제·유형 좁히기를 함께 요청하면 거절한다
+    err = pytest.raises(IngestError, change, root, scratch_db, [
+        {"op": "table.update", "table": "entries", "set": {"on_conflict": "skip"}},
+        {"op": "column.rename", "table": "entries", "column": "memo", "to": "details"},
+    ]).value
+    assert (err.status, err.detail) == (422, "invalid_op")
