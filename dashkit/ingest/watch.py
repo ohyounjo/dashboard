@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import fcntl
 import gzip
+import hashlib
 import json
 import logging
 import os
@@ -44,6 +45,7 @@ _SKIP_EXTS = (".tmp", ".part", ".crdownload", ".error.json", ".lock")
 _ALLOWED_EXTS = (".csv.gz", ".csv", ".xlsx")
 _PROC_PREFIX_RE = re.compile(r"^(\d{8}T\d{6}(?:\d{6})?Z)-(.+)$")
 _TRANSIENT_DETAILS = frozenset({"apply_running", "db_unavailable", "recovery_unknown", "commit_unknown"})
+_MAX_ARCHIVE_NAME_BYTES = 180
 
 
 def _max_upload_bytes() -> int:
@@ -74,14 +76,30 @@ def _source_kind(name: str) -> str:
     return "xlsx" if name.lower().endswith(".xlsx") else "csv"
 
 
+def _bounded_orig_name(orig_name: str, *, max_bytes: int = _MAX_ARCHIVE_NAME_BYTES) -> str:
+    """타임스탬프·충돌 접두사·.error.json 접미사를 붙여도 NAME_MAX(255바이트)를 넘지 않게 보관 이름을 줄인다."""
+    encoded = orig_name.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return orig_name
+    low = orig_name.lower()
+    ext = next((e for e in _ALLOWED_EXTS if low.endswith(e)), Path(orig_name).suffix)
+    stem = orig_name[:-len(ext)] if ext else orig_name
+    digest = hashlib.sha256(encoded).hexdigest()[:8]
+    suffix = f"-{digest}{ext}"
+    budget = max(max_bytes - len(suffix.encode("utf-8")), 8)
+    trimmed = stem.encode("utf-8")[:budget].decode("utf-8", errors="ignore")
+    return f"{trimmed}{suffix}"
+
+
 def _unique_target(folder: Path, prefix: str, orig_name: str) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
-    candidate = folder / f"{prefix}-{orig_name}"
+    safe_name = _bounded_orig_name(orig_name)
+    candidate = folder / f"{prefix}-{safe_name}"
     if not candidate.exists() and not candidate.is_symlink():
         return candidate
     n = 1
     while True:
-        candidate = folder / f"{prefix}-{n}-{orig_name}"
+        candidate = folder / f"{prefix}-{n}-{safe_name}"
         if not candidate.exists() and not candidate.is_symlink():
             return candidate
         n += 1

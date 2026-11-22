@@ -292,19 +292,17 @@ _SENSITIVE_COL_PATTERNS = (
     re.compile(r"^(?P<prefix>rows\[\d+\]\.(?P<col>[^:\s]+): )(?P<reason>.+)$", re.DOTALL),
     re.compile(r"^(?P<prefix>.+?:(?P<col>[^:\s]+): )(?P<reason>.+)$", re.DOTALL),
 )
-_REASON_SUFFIX_RE = re.compile(r"(?:\s\((?:pattern |허용: ).*\)|가 없음)$", re.DOTALL)
+_QUOTED_REASON_RE = re.compile(
+    r"^(?P<head>[^']*)'(?P<val>.*)'(?P<tail>\s+\((?:pattern [^']*|허용: [^']*)\)|가 없음)?$",
+    re.DOTALL,
+)
 
 
 def _mask_quoted_reason(reason: str) -> str:
-    start_q = reason.find("'")
-    if start_q < 0:
+    m = _QUOTED_REASON_RE.match(reason)
+    if not m:
         return reason
-    m_suf = _REASON_SUFFIX_RE.search(reason)
-    limit = m_suf.start() if m_suf else len(reason)
-    end_q = reason.rfind("'", start_q + 1, limit)
-    if end_q <= start_q:
-        return reason
-    return reason[:start_q] + "'***'" + reason[end_q + 1:]
+    return f"{m.group('head')}'***'{m.group('tail') or ''}"
 
 
 def redact_sensitive_errors(table: Mapping[str, Any], errors: Sequence[str]) -> list[str]:
@@ -575,8 +573,16 @@ class Intake:
                 if problems:
                     report.invalid += 1
                     self.last_problems = []
+                    value_by_col = dict(zip(self.header, values))
                     for col, reason in problems:
-                        shown_reason = _mask_quoted_reason(reason) if col in sensitive else reason
+                        if col in sensitive:
+                            raw_val = value_by_col.get(col, "")
+                            if raw_val and f"'{raw_val}'" in reason:
+                                shown_reason = reason.replace(f"'{raw_val}'", "'***'", 1)
+                            else:
+                                shown_reason = _mask_quoted_reason(reason)
+                        else:
+                            shown_reason = reason
                         self.last_problems.append(f"{col}: {shown_reason}")
                         report.error(f"{where(at, col)}: {shown_reason}")
                     yield at, values, None

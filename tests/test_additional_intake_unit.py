@@ -779,7 +779,7 @@ def test_dsn_env_validation_sql_guard_and_error_sanitization(monkeypatch, tmp_pa
 
 # ---------------------------------------------------------------- 4. 민감 열 오류 마스킹 단위 테스트
 
-def test_redact_sensitive_errors_masks_values_and_raw_rows():
+def test_redact_sensitive_errors_masks_values_and_raw_rows(tmp_path):
     table_spec = {
         "primary_key": ["id"],
         "columns": {
@@ -819,6 +819,29 @@ def test_redact_sensitive_errors_masks_values_and_raw_rows():
     assert "line1-secret" not in joined_ml and "line2-secret" not in joined_ml
     assert masked_ml[0] == "dup.csv:3:secret_pk: 기본 키 중복 (***, 처음 나온 줄 dup.csv:2)"
     assert masked_ml[1] == "dup.csv:4:secret_pk: 형식 불일치 '***' (pattern ^[a-z]+$)"
+
+    # 값 내부에 오류 접미사 문자열(' (pattern ', ' (허용: ')이 포함된 경우에도 마스킹 누락 없음 + Intake 직접 검증
+    suffix_errs = [
+        "bad.csv:2:secret_pk: 형식 불일치 'customer-secret (pattern x)' (pattern ^[A-Z]+$)",
+        "bad.csv:3:secret_pk: 허용되지 않은 값 'customer-secret (허용: z)' (허용: A, B)",
+    ]
+    masked_suf = redact_sensitive_errors(pk_spec, suffix_errs)
+    assert "customer-secret" not in "\n".join(masked_suf)
+    assert masked_suf[0] == "bad.csv:2:secret_pk: 형식 불일치 '***' (pattern ^[A-Z]+$)"
+    assert masked_suf[1] == "bad.csv:3:secret_pk: 허용되지 않은 값 '***' (허용: A, B)"
+
+    intake_csv = tmp_path / "suffix_intake.csv"
+    intake_csv.write_text("secret_pk\ncustomer-secret (pattern x)\n", encoding="utf-8")
+    intake_tbl = {
+        "primary_key": ["secret_pk"],
+        "columns": {"secret_pk": {"type": "text", "sensitive": True, "pattern": r"^[A-Z]+$"}},
+    }
+    ip = CsvParser(intake_csv, "suffix_intake.csv")
+    it = Intake(ip, "secrets", intake_tbl)
+    list(it.rows())
+    ip.close()
+    assert it.report.invalid == 1 and "customer-secret" not in "\n".join(it.report.errors)
+    assert "(pattern x)" not in "\n".join(it.report.errors)
 
 
 # ---------------------------------------------------------------- 5. 이어 올리기(Uploads) 수명주기 단위 테스트

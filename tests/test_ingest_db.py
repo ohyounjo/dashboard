@@ -1031,6 +1031,24 @@ def test_watch_processing_recovery_transient_retry_and_sensitive_redaction(tmp_p
     pk_err_txt = pk_err_files[0].read_text(encoding="utf-8")
     assert "line1-secret" not in pk_err_txt and "line2-secret" not in pk_err_txt
 
+    # 7) 244바이트 긴 파일 이름(NAME_MAX 경계) 정상 적재·실패 격리 + 접미사 포함 민감 값 마스킹
+    long_ok_name = ("a" * 240) + ".csv"
+    long_bad_name = ("b" * 240) + ".csv"
+    (pk_inbox / long_ok_name).write_text("secret_id\noktoken\n", encoding="utf-8")
+    (pk_inbox / long_bad_name).write_text(
+        "secret_id\noktoken\noktoken\n",
+        encoding="utf-8",
+    )
+    st_long = watch_once("ledger", settle_ms=0, projects_dir=root_pk, dbname=scratch_db)
+    assert st_long["succeeded"] == 1 and st_long["failed"] == 1
+    assert not list((pk_inbox / "_processing").iterdir())
+    assert len(list((pk_inbox / "_done").glob("*.csv"))) == 1
+    long_err_files = [p for p in (pk_inbox / "_failed").glob("*.error.json") if p not in pk_err_files]
+    assert len(long_err_files) == 1
+    long_err_doc = _json.loads(long_err_files[0].read_text(encoding="utf-8"))
+    assert long_err_doc["file"] == long_bad_name
+    assert "oktoken" not in _json.dumps(long_err_doc["errors"], ensure_ascii=False)
+
     rebuilt_equals_current(root_pk, scratch_db)
 
 
