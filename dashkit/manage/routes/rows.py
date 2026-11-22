@@ -93,6 +93,7 @@ def _all_sensitive_page(
     *,
     version: str,
     total_rows: int | None,
+    mask_relation: sql.Composed | None = None,
 ) -> dict[str, Any]:
     """모든 열이 sensitive: true인 경우 민감 값을 읽지 않고 상수 SELECT로 페이지 나눔을 수행한다."""
     offset = 0
@@ -106,9 +107,10 @@ def _all_sensitive_page(
     if offset > paging.MAX_OFFSET:
         raise paging.QueryError("invalid_query", f"건너뛰기 조회는 {paging.MAX_OFFSET:,}행까지입니다(조건으로 좁혀 주세요)")
 
+    target_rel = mask_relation or relation
     where_sql, where_params = paging.where_clause(q.filters)
     cur.execute(
-        sql.SQL("SELECT 1 FROM {} WHERE {} LIMIT %s OFFSET %s").format(relation, where_sql),
+        sql.SQL("SELECT 1 FROM {} WHERE {} LIMIT %s OFFSET %s").format(target_rel, where_sql),
         [*where_params, q.limit + 1, offset],
     )
     fetched = cur.fetchall()
@@ -119,7 +121,7 @@ def _all_sensitive_page(
     total: int | str | None = total_rows if not q.filters else None
     if q.count and total is None:
         cur.execute(
-            sql.SQL("SELECT COUNT(*) FROM (SELECT 1 FROM {} WHERE {} LIMIT %s) AS _c").format(relation, where_sql),
+            sql.SQL("SELECT COUNT(*) FROM (SELECT 1 FROM {} WHERE {} LIMIT %s) AS _c").format(target_rel, where_sql),
             [*where_params, paging.COUNT_CAP + 1],
         )
         cnt = int(cur.fetchone()[0])
@@ -146,6 +148,7 @@ def _fetch_masked(
     sensitive_cols: set[str],
     version: str,
     total_rows: int | None,
+    mask_relation: sql.Composed | None = None,
 ) -> dict[str, Any]:
     selected_cols = q.columns or [c.name for c in columns]
     if q.key is not None:
@@ -171,7 +174,10 @@ def _fetch_masked(
 
     query_columns = [c for c in columns if c.name not in sensitive_cols]
     if not query_columns:
-        return _all_sensitive_page(cur, relation, columns, selected_cols, q, version=version, total_rows=total_rows)
+        return _all_sensitive_page(
+            cur, relation, columns, selected_cols, q,
+            version=version, total_rows=total_rows, mask_relation=mask_relation,
+        )
 
     db_cols = [c for c in selected_cols if c not in sensitive_cols]
     q_db = paging.Query(
@@ -221,6 +227,9 @@ async def post_table_rows(table: str, request: Request, principal: Principal = D
         return _fetch_masked(
             cur, relation, columns, q, key_columns=pk, sensitive_cols=sensitive_cols,
             version=version, total_rows=total,
+            mask_relation=sql.SQL("{}.{}").format(
+                sql.Identifier("dashkit_meta"), sql.Identifier(paging.mask_view_name("raw", name)),
+            ),
         )
 
     return await run_in_threadpool(_run, work)
@@ -293,6 +302,9 @@ async def post_dataset_rows(dataset: str, request: Request, principal: Principal
         return _fetch_masked(
             cur, relation, columns, q, key_columns=key_columns, sensitive_cols=sensitive_cols,
             version=version, total_rows=total,
+            mask_relation=sql.SQL("{}.{}").format(
+                sql.Identifier("dashkit_meta"), sql.Identifier(paging.mask_view_name("dash", key)),
+            ),
         )
 
     return await run_in_threadpool(_run, work)

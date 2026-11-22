@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 from psycopg import sql
 
-from .. import db
+from .. import db, paging
 from ..config import Project, check_view_columns, resolve_as_of, table_order
 from . import record
 from .validate import TableData, validate_csv
@@ -319,8 +319,10 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
     _step(cur, label, sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}").format(dash, reader))
     _step(cur, label, sql.SQL("GRANT EXECUTE ON FUNCTION {}.as_of() TO {}").format(dash, reader))
     readers: list[str] = []
+    all_sensitive_relations: list[tuple[str, str]] = []
     cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (inspect_role(),))
-    if cur.fetchone():
+    inspect_exists = cur.fetchone() is not None
+    if inspect_exists:
         inspect = sql.Identifier(inspect_role())
         readers.append(inspect_role())
         for schema in (raw, dash):
@@ -337,6 +339,8 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
                     _step(cur, label, sql.SQL("GRANT SELECT ({}) ON TABLE {}.{} TO {}").format(
                         sql.SQL(", ").join(non_sens), raw, sql.Identifier(tname), inspect,
                     ))
+                else:
+                    all_sensitive_relations.append((RAW, tname))
         for ds_key, ds in project.dashboard["datasets"].items():
             if "table" in ds:
                 tname = ds["table"]
@@ -355,6 +359,8 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
                         _step(cur, label, sql.SQL("GRANT SELECT ({}) ON TABLE {}.{} TO {}").format(
                             sql.SQL(", ").join(non_sens), dash, sql.Identifier(ds_key), inspect,
                         ))
+                    else:
+                        all_sensitive_relations.append((DASH, ds_key))
             else:
                 ds_sources = sources.get(ds_key, {})
                 reads_sensitive = any(
@@ -382,6 +388,14 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
                            fingerprint_key_id=record.key_id(fkey))
     try:
         record.write(cur, snap, prints, os.environ.get("DATA_DB_READER_USER") or "dash_reader", batch_rows, readers)
+        for schema_name, rel_name in all_sensitive_relations:
+            view_id = sql.Identifier(paging.mask_view_name(schema_name, rel_name))
+            cur.execute(sql.SQL("CREATE VIEW {}.{} AS SELECT 1 AS _masked FROM {}.{}").format(
+                sql.Identifier("dashkit_meta"), view_id, sql.Identifier(schema_name), sql.Identifier(rel_name),
+            ))
+            cur.execute(sql.SQL("GRANT SELECT ON TABLE {}.{} TO {}").format(
+                sql.Identifier("dashkit_meta"), view_id, inspect,
+            ))
     except psycopg.Error as exc:
         raise _StepError([f"적재 기록({record.META}) 쓰기: {_pg_message(exc)}"]) from None
     return {t: counts[t] for t in order}

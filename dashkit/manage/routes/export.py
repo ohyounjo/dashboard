@@ -106,15 +106,22 @@ async def export_table_rows(
     order_sql = paging._order(order_keys)
     max_rows = context.limits().export_max_rows
 
-    select_sql = sql.SQL(", ").join(map(sql.Identifier, sql_cols)) if sql_cols else sql.SQL("1")
-    stmt = sql.SQL("SELECT {select} FROM {schema}.{table} WHERE {where} ORDER BY {order} LIMIT %s").format(
-        select=select_sql,
-        schema=sql.Identifier("raw"),
-        table=sql.Identifier(name),
-        where=where_sql,
-        order=order_sql,
-    )
-    params = [*where_params, max_rows + 1]
+    if sql_cols:
+        select_sql = sql.SQL(", ").join(map(sql.Identifier, sql_cols))
+        stmt = sql.SQL("SELECT {select} FROM {schema}.{table} WHERE {where} ORDER BY {order} LIMIT %s").format(
+            select=select_sql,
+            schema=sql.Identifier("raw"),
+            table=sql.Identifier(name),
+            where=where_sql,
+            order=order_sql,
+        )
+        params = [*where_params, max_rows + 1]
+    else:
+        stmt = sql.SQL("SELECT 1 FROM {schema}.{table} LIMIT %s").format(
+            schema=sql.Identifier("dashkit_meta"),
+            table=sql.Identifier(paging.mask_view_name("raw", name)),
+        )
+        params = [max_rows + 1]
 
     def _open_stream():
         conn = rows._connect()

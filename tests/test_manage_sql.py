@@ -280,6 +280,34 @@ def test_sql_console_blocks_sensitive_columns_and_views(sql_clients, monkeypatch
         )
         assert r_ok.status == 200
         assert json.loads(r_ok.body)["rows"] == [[1]]
+
+        # 모든 열이 sensitive: true인 테이블: 원본 SELECT는 403 차단, 마스킹 뷰는 _masked만 노출
+        all_sens_tbl = f"_test_allsens_{secrets.token_hex(4)}"
+        from dashkit import paging
+        mask_v = paging.mask_view_name("raw", all_sens_tbl)
+        with db.owner_conn() as conn:
+            conn.execute(f"CREATE TABLE raw.{all_sens_tbl} (secret text)")
+            conn.execute(f"INSERT INTO raw.{all_sens_tbl} VALUES ('only-secret')")
+            conn.execute(f"REVOKE ALL ON raw.{all_sens_tbl} FROM PUBLIC, {role}")
+            conn.execute(f'CREATE VIEW dashkit_meta."{mask_v}" AS SELECT 1 AS _masked FROM raw.{all_sens_tbl}')
+            conn.execute(f'GRANT SELECT ON dashkit_meta."{mask_v}" TO {role}')
+        try:
+            assert op_c.post(
+                "/api/manage/sql",
+                headers=op_h,
+                body=json.dumps({"sql": f"SELECT * FROM raw.{all_sens_tbl}"}).encode(),
+            ).status == 403
+            r_mask = op_c.post(
+                "/api/manage/sql",
+                headers=op_h,
+                body=json.dumps({"sql": f'SELECT COUNT(*) FROM dashkit_meta."{mask_v}"'}).encode(),
+            )
+            assert r_mask.status == 200
+            assert json.loads(r_mask.body)["rows"] == [[1]]
+        finally:
+            with db.owner_conn() as conn:
+                conn.execute(f'DROP VIEW IF EXISTS dashkit_meta."{mask_v}"')
+                conn.execute(f"DROP TABLE IF EXISTS raw.{all_sens_tbl}")
     finally:
         with db.owner_conn() as conn:
             conn.execute(f"DROP VIEW IF EXISTS dash.{view_name}")

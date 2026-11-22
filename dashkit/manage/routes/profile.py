@@ -47,11 +47,17 @@ async def get_table_profile(table: str, principal: Principal = Depends(require_o
             exprs.append(sql.SQL("MIN({})").format(ident))
             exprs.append(sql.SQL("MAX({})").format(ident))
 
-    stmt = sql.SQL("SELECT {} FROM {}.{}").format(
-        sql.SQL(", ").join(exprs),
-        sql.Identifier("raw"),
-        sql.Identifier(name),
-    )
+    if len(exprs) == 1:
+        stmt = sql.SQL("SELECT COUNT(*) FROM {}.{}").format(
+            sql.Identifier("dashkit_meta"),
+            sql.Identifier(paging.mask_view_name("raw", name)),
+        )
+    else:
+        stmt = sql.SQL("SELECT {} FROM {}.{}").format(
+            sql.SQL(", ").join(exprs),
+            sql.Identifier("raw"),
+            sql.Identifier(name),
+        )
 
     def work(cur) -> dict[str, Any]:
         cur.execute(stmt)
