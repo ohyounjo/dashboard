@@ -308,6 +308,23 @@ def test_sql_console_blocks_sensitive_columns_and_views(sql_clients, monkeypatch
             with db.owner_conn() as conn:
                 conn.execute(f'DROP VIEW IF EXISTS dashkit_meta."{mask_v}"')
                 conn.execute(f"DROP TABLE IF EXISTS raw.{all_sens_tbl}")
+
+        # 혼합·전체 민감 열 뷰에서도 _view_columns(pg_attribute)가 전체 열 메타데이터를 유지하는지 검증
+        from dashkit.manage.routes.rows import _view_columns
+        mix_v = f"_test_mix_v_{secrets.token_hex(4)}"
+        with db.owner_conn() as conn:
+            conn.execute(f"CREATE VIEW dash.{mix_v} AS SELECT id, secret FROM raw.{tbl}")
+            conn.execute(f"REVOKE ALL ON dash.{mix_v} FROM PUBLIC, {role}")
+            conn.execute(f"GRANT SELECT (id) ON dash.{mix_v} TO {role}")
+        try:
+            with db.inspect_conn() as ic:
+                with ic.cursor() as cur:
+                    cols = _view_columns(cur, mix_v)
+            assert [c.name for c in cols] == ["id", "secret"]
+            assert [c.type for c in cols] == ["integer", "text"]
+        finally:
+            with db.owner_conn() as conn:
+                conn.execute(f"DROP VIEW IF EXISTS dash.{mix_v}")
     finally:
         with db.owner_conn() as conn:
             conn.execute(f"DROP VIEW IF EXISTS dash.{view_name}")

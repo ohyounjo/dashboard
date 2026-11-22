@@ -252,8 +252,17 @@ def _parse(body: dict[str, Any], columns: list[paging.Column]) -> paging.Query:
 
 
 def _view_columns(cur, key: str) -> list[paging.Column]:
-    cur.execute("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'dash' "
-                "AND table_name = %s ORDER BY ordinal_position", (key,))
+    # pg_attribute는 열 단위 SELECT 권한이 제한된 뷰에서도 전체 열 메타데이터를 돌려준다
+    cur.execute(
+        """SELECT a.attname, pg_catalog.format_type(a.atttypid, -1)
+             FROM pg_catalog.pg_attribute a
+             JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'dash' AND c.relname = %s
+              AND a.attnum > 0 AND NOT a.attisdropped
+            ORDER BY a.attnum""",
+        (key,),
+    )
     return [paging.Column(c, _VIEW_TYPES.get(t, "text")) for c, t in cur.fetchall()]
 
 
