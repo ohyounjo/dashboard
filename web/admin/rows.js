@@ -79,7 +79,7 @@ export function rowsView({ path, exportPath = null, columns: known = null, label
   const applyBtn = h("button", { type: "submit", class: "btn small primary" }, D.applyFilters);
   const clearBtn = h("button", { type: "button", class: "btn small", hidden: true, onclick: () => { entries = []; drawFilters(); restart(); } }, D.clearFilters);
   const exportBtn = exportPath ? h("button", { type: "button", class: "btn small", onclick: () => {
-    const { filters } = Q.buildFilters(entries, cols);
+    const { filters } = Q.buildFilters(entries.map((e) => ({ column: e.column, op: e.op, value: e.input.get() })), cols || []);
     window.location.assign(Q.buildExportUrl(exportPath, { filters, sort }));
   } }, D.exportCsv) : null;
   const form = h("form", { class: "d-filter-form", "aria-label": D.filtersLabel }, filterRows, h("div", { class: "a-actions" }, addBtn, applyBtn, clearBtn, exportBtn));

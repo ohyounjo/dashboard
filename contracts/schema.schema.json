@@ -94,6 +94,11 @@
           "description": "올린 파일의 머리글이 이 이름이면 이 열로 본다(contracts/ingest.md \"머리글 맞추기\"). 같은 테이블의 다른 열 이름이나 다른 열의 aliases와 겹칠 수 없다.",
           "type": "array", "uniqueItems": true,
           "items": { "type": "string", "minLength": 1 }
+        },
+        "sensitive": {
+          "description": "민감 열 여부(선택). true면 운용 API(행 조회·내보내기·통계)에서 값을 가리거나 제외한다.",
+          "type": "boolean",
+          "default": false
         }
       },
       "allOf": [

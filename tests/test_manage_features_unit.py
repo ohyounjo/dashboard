@@ -146,3 +146,35 @@ def test_freshness_not_in_data_revision_and_ops_support():
         "value": {"primary_key": "id", "freshness": "30m", "columns": {"id": {"type": "text"}}},
     })
     assert doc["tables"]["events"]["freshness"] == "30m"
+
+
+def test_load_project_accepts_freshness_and_sensitive(tmp_path):
+    proj = tmp_path / "demo"
+    (proj / "data").mkdir(parents=True)
+    (proj / "data" / "items.csv").write_text("id,secret\n1,abc\n", encoding="utf-8")
+    (proj / "schema.yaml").write_text(
+        "tables:\n"
+        "  items:\n"
+        "    primary_key: id\n"
+        "    freshness: 7d\n"
+        "    columns:\n"
+        "      id: {type: text}\n"
+        "      secret: {type: text, sensitive: true}\n",
+        encoding="utf-8",
+    )
+    (proj / "dashboard.yaml").write_text(
+        "app: {title: Demo, as_of: '2026-11-22'}\n"
+        "datasets:\n"
+        "  items: {table: items}\n"
+        "dashboards:\n"
+        "  main:\n"
+        "    title: Main\n"
+        "    charts: [{key: c1, title: C1, viz: table, dataset: items, columns: [id]}]\n"
+        "    layout: [[c1]]\n"
+        "tabs:\n"
+        "  - {key: main, label: Main, icon: grid, sections: [{type: superset, dashboard: main}]}\n",
+        encoding="utf-8",
+    )
+    loaded = config.load_project("demo", tmp_path)
+    assert loaded.schema["tables"]["items"]["freshness"] == "7d"
+    assert loaded.schema["tables"]["items"]["columns"]["secret"]["sensitive"] is True
