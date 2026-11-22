@@ -521,18 +521,28 @@ def read_bundle_dir(path: Path) -> dict[str, str] | None:
 
 
 def read_other_project(state_dir: Path, project: str) -> dict[str, Any] | None:
-    """`.state/managed.json`이 다른 프로젝트의 것이면 {"project": 이름, "objects": 객체 수}. 아니면 None.
+    """`.state/managed.json`(없으면 `.state/embed.json`)이 다른 프로젝트의 것이면 {"project": 이름, "objects": 객체 수 | None}.
 
-    프로젝트를 바꿔 적용하면 sync가 이 목록의 객체를 Superset에서 지운다(contracts/state-and-uuid.md). 읽기만 한다.
+    프로젝트를 바꿔 적용하면 sync가 이전 프로젝트의 객체를 Superset에서 지운다(contracts/state-and-uuid.md). 읽기만 한다.
     """
+    base = Path(state_dir)
     try:
-        doc = json.loads((Path(state_dir) / "managed.json").read_text(encoding="utf-8"))
+        doc = json.loads((base / "managed.json").read_text(encoding="utf-8"))
         other = doc.get("project")
-        if not isinstance(other, str) or other == project:
-            return None
-        return {"project": other, "objects": sum(len(v or []) for v in (doc.get("objects") or {}).values())}
+        if isinstance(other, str) and other:
+            if other == project:
+                return None
+            return {"project": other, "objects": sum(len(v or []) for v in (doc.get("objects") or {}).values())}
     except (OSError, ValueError, AttributeError, TypeError):
-        return None
+        pass
+    try:
+        doc = json.loads((base / "embed.json").read_text(encoding="utf-8"))
+        other = doc.get("project")
+        if isinstance(other, str) and other and other != project:
+            return {"project": other, "objects": None}
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return None
 
 
 def read_pending_prune(state_dir: Path, project: Any) -> int:
@@ -803,6 +813,8 @@ def make_plan(
     # 다른 프로젝트가 적용되어 있으면 그 프로젝트의 Superset 객체는 이번 적용에서 지워지고, 이 프로젝트의 객체는
     # 전부 새로 생긴다. 이 프로젝트의 지난 번들 폴더가 남아 있어도 Superset에는 없는 것이므로 비교하지 않는다
     replaces = read_other_project(Path(state_dir or os.environ.get("STATE_DIR") or "/app/.state"), project.name)
+    if replaces is None and other_load is not None:
+        replaces = {"project": other_load, "objects": None}
     # 비교 기준은 마지막으로 import에 성공한 번들이다. sync가 import 전에 쓰는 bundle/은 실패한 실행의 것일 수 있다
     old_files = None if replaces else read_bundle_dir(build_root / project.name / APPLIED_ROOT)
     superset = diff_bundles(new_files, old_files, unknown_files)
@@ -950,7 +962,11 @@ def format_plan(plan: Mapping[str, Any]) -> str:
     if b.get("pending_prune"):
         rows.append(f"지난 적용에서 지우지 못한 객체 {b['pending_prune']}개 삭제 재시도")
     if b.get("replaces"):
-        rows.append(f"지금 적용된 프로젝트 '{b['replaces']['project']}'의 객체 {b['replaces']['objects']}개 삭제")
+        rep = b["replaces"]
+        if rep.get("objects") is None:
+            rows.append(f"지금 적용된 프로젝트 '{rep['project']}'의 관리 객체 삭제(상태 파일 없어 개수는 적용 시 확인)")
+        else:
+            rows.append(f"지금 적용된 프로젝트 '{rep['project']}'의 객체 {rep['objects']}개 삭제")
     if b["other"]:
         rows.append(f"그 밖의 파일 변경: {', '.join(b['other'])}")
     if b.get("assumed_columns"):

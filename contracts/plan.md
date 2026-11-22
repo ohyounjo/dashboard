@@ -79,6 +79,7 @@ CREATE TABLE dashkit_meta.batch (                 -- 원본 데이터 파일마�
 ```
 
 - `tables.<이름>.columns`: 적재 뒤 raw 테이블의 열(이름, `information_schema`의 `data_type`), schema.yaml 순서. `enum`은 `text`다.
+- `replaced_projects`: (선택) 직전 스냅샷이 다른 프로젝트였을 때 `load`가 누적해 남기는 이전 프로젝트 이름 목록(최초 적재 등 비어 있으면 생략). 상태 파일 없이 프로젝트 전환 `sync`를 실행할 때 이전 프로젝트 범위를 식별하는 데 쓰며, 프로젝트 이름 문자열 외에 `raw` 값은 넣지 않는다.
 - `data_revision`: 데이터 설정 지문(DB의 내용을 정하는 설정만으로 구한 해시. [ingest.md](ingest.md) "배치 기록과 데이터 설정 지문"). 추가 적재가 "설정이 DB에 적용됐는지" 확인하는 데 쓴다.
 - `tables.<이름>.mode`: `replace` | `append`. `rows`는 적재 뒤 테이블의 행 수다. `append` 테이블은 `rules`(정규화한 테이블 정의의 SHA-256)도 남긴다.
 - `batch`: **프로젝트의 모든 원본 데이터 파일**(replace 테이블의 CSV, append 테이블의 배치마다)이 한 줄씩. 이름·해시·행 수뿐이다. 누적(append) 테이블은 행 지문을 남기지 않는다(배치 단위로 비교한다).
@@ -167,7 +168,7 @@ CREATE TABLE dashkit_meta.batch (                 -- 원본 데이터 파일마�
 - 한 줄 설명: 대시보드는 `제목 변경`·`배치 변경`·`필터 변경`·`교차 필터 변경`, 차트는 `제목 변경`·`유형 변경`·`데이터셋 변경`·`옵션 변경`·`설명 변경`, 데이터셋은 `열 추가: …`·`열 삭제: …`·`열 속성 변경`·`지표 변경`. 공통으로 `화면 편집 잠금 변경`(`SYNC_LOCK_UI`), 그 밖은 `그 밖의 설정 변경`.
 - 비교 대상은 Superset에 있는 객체가 아니라 **지난 sync가 만든 번들**이다. 관리 객체는 Superset 화면에서 고칠 수 없으므로(7절 D3, [state-and-uuid.md](state-and-uuid.md) "표식") 둘은 같다. `SYNC_LOCK_UI=0`으로 화면에서 고친 내용은 plan에 나오지 않고 다음 적용에서 덮어써진다.
 - `−`로 나온 차트·대시보드·데이터셋은 다음 sync의 prune 대상이다.
-- `.state/managed.json`이 다른 프로젝트의 것이면(프로젝트 전환) 그 프로젝트의 객체 수를 `replaces`에 싣고 "지금 적용된 프로젝트 '<이름>'의 객체 N개 삭제"로 알린다. 이때는 이 프로젝트의 지난 번들 폴더가 남아 있어도 비교하지 않고 전부 추가로 본다(Superset에는 이 프로젝트의 객체가 없다. `first: true`). 상태 파일은 읽기만 한다.
+- `.state/managed.json`이 다른 프로젝트의 것이거나(없을 때는 `.state/embed.json` 또는 적재 기록 `dashkit_meta.load_snapshot.project`가 다른 프로젝트인 경우) 그 프로젝트 이름을 `replaces`에 싣고 알린다(`managed.json`이 있으면 객체 수를 싣고, 없으면 `objects: null`로 "상태 파일 없어 개수는 적용 시 확인"을 알린다). 이때는 이 프로젝트의 지난 번들 폴더가 남아 있어도 비교하지 않고 전부 추가로 본다(Superset에는 이 프로젝트의 객체가 없다. `first: true`). 상태 파일은 읽기만 한다.
 
 ## 결과 형식 (`plan.make_plan(project) -> dict`, `--json`)
 
@@ -217,7 +218,7 @@ CREATE TABLE dashkit_meta.batch (                 -- 원본 데이터 파일마�
 | `superset.<종류>.unknown` | `{key, reason}`. 적용해야 내용을 알 수 있는 파일 |
 | `superset.assumed_columns` | 열을 몰라 지금 뷰의 열로 번들을 만든 데이터셋 |
 | `superset.pending_prune` | 같은 프로젝트의 `.state/managed.json`에 남아 있지만 이번 설정이 관리하지 않는 객체 수. 지난 sync가 삭제에 실패했거나 prune 전에 끊긴 것이고 다음 sync가 다시 지운다. 0보다 크면 `changed`는 참이고 "지난 적용에서 지우지 못한 객체 N개 삭제 재시도"로 알린다 |
-| `superset.replaces` | `null`, 또는 `{project, objects}`: 상태 파일에 남은 다른 프로젝트와 그 Superset 객체 수(이번 적용에서 지워진다) |
+| `superset.replaces` | `null`, 또는 `{project, objects}`: 상태 파일이나 적재 기록에 남은 다른 프로젝트와 그 Superset 객체 수(상태 파일이 없으면 `null`). 이번 적용에서 지워진다 |
 
 ## 함수 (Studio가 그대로 쓴다, 보강설계서 6-3 "데이터" 화면)
 

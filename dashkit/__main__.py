@@ -73,6 +73,22 @@ def cmd_sync(_args) -> int:
     return 0
 
 
+def cmd_prune_project(args) -> int:
+    """지정한 이전 프로젝트의 Superset 관리 객체를 정리한다(활성 프로젝트는 거부)."""
+    from .sync import SyncError, prune_project
+
+    try:
+        res = prune_project(args.name, dry_run=args.dry_run)
+    except SyncError as exc:
+        return _fail("prune-project 실패", [str(exc)])
+    if args.dry_run:
+        total = sum(len(v) for v in res["planned"].values())
+        print(f"✔ prune-project --dry-run: {args.name} 삭제 예정 {total}개, 보존 {len(res['preserved'])}개")
+        return 0
+    print(f"✔ prune-project: {args.name} {res['deleted']}개 삭제 (보존 {len(res['preserved'])}개)")
+    return 0
+
+
 def cmd_gen(args) -> int:
     from . import generated
 
@@ -228,6 +244,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check", help="설정 검사(DB 불필요)").set_defaults(fn=cmd_check)
     sub.add_parser("load", help="CSV 검증 후 raw·dash 스키마 재생성").set_defaults(fn=cmd_load)
     sub.add_parser("sync", help="asset 번들 생성·가져오기, 임베드, prune").set_defaults(fn=cmd_sync)
+    prune = sub.add_parser("prune-project", help="지정한 이전 프로젝트의 Superset 관리 객체를 정리한다(활성 프로젝트는 거부)")
+    prune.add_argument("name", help="정리할 이전 프로젝트 이름(소문자, 숫자, _, -)")
+    prune.add_argument("--dry-run", action="store_true", help="삭제하지 않고 대상과 보존 목록만 확인")
+    prune.set_defaults(fn=cmd_prune_project)
     gen = sub.add_parser("gen", help="레지스트리에서 계약 파일의 생성 구간을 다시 쓴다")
     gen.add_argument("--check", action="store_true", help="쓰지 않고 최신인지만 확인")
     gen.set_defaults(fn=cmd_gen)

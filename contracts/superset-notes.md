@@ -394,3 +394,41 @@ metadata:
 - Superset 6.1.0은 행을 줄바꿈하지 않고 차트 폭도 격자 값으로 따로 계산한다. 단순히 iframe 내부 CSS로 행을 세로로 바꾸는 것만으로 차트 렌더링 폭이 바뀌지는 않는다. 최소 너비 방식은 한 번에 전체 대시보드가 보이지 않으며 표와 긴 텍스트는 추가 스크롤이나 줄바꿈이 필요하다. 900px은 실측한 대안이며 모든 차트와 데이터의 가독성을 보장하는 값은 아니다. Superset 또는 SDK 업그레이드 시 다시 검증한다.
 - 격리된 Superset 6.1.0의 실제 guest 임베드에서 390px 기준 기존 iframe 356px의 4열 숫자 카드·3열 차트·2열 표는 각각 약 69·97·154px이었다. 900px iframe에서는 각각 약 205·279·426px이었다. 필터 적용, 내부 탭, 터치·키보드 가로 스크롤 및 390→1280→390 크기 전환 후 필터 값 유지를 확인했다. 증거와 조건은 `reference/issue-54/`에 있다.
 - **필터 막대와 자동 높이:** Superset 6.1.0에서는 열린 필터 막대 때문에 SDK `getScrollSize()` 폴링마다 높이가 늘고, 문서의 기본 높이 때문에 콘텐츠가 짧아져도 높이가 줄지 않을 수 있었다. 번들의 대시보드 `css`는 임베드 문서의 높이를 콘텐츠에 맞추고 필터 패널을 콘텐츠와 iframe 높이 안에 제한하며 내부 스크롤을 허용한다. 임베드 bootstrap, `data-test` DOM 구조와 CSS `:has()` 지원에 의존하므로 Superset 또는 브라우저 지원 범위를 바꿀 때 실제 guest 화면과 필터·고정 높이를 재검증해야 한다. 기존 Superset 객체에는 `make sync`로 새 번들을 반영해야 한다. 390px·1280px의 실제 guest 화면에서 필터 적용과 내부 탭 전환 후 높이 증가·축소, 열린 패널의 높이 안정성을 확인했다. 모든 차트 구성에 대한 높이 동작을 보장하지는 않는다.
+
+## 16. 상태 파일 없는 프로젝트 전환 prune 실측 (이슈 #52)
+
+- 확인일: 2026-11-22. 환경: 격리 테스트 스택(`dashkit-test-<식별자>`, `origin/main` `fec2406`, Superset 6.1.0).
+- 목적: 현행 `origin/main`의 상태 파일 없는 동작 재현, REST 목록·단건 응답 필드 확인, 수동 객체 의존성 존재 시 Superset 삭제 동작(차단 vs 고아화 vs 연쇄) 확인, 삭제 전·후 guest 접근 경계 확인.
+
+### 16-1. REST API 응답 필드
+
+| 엔드포인트 | HTTP | 반환 필드 / 특이 사항 |
+|---|---|---|
+| `GET /api/v1/database/` (`columns:!(id,uuid,database_name,sqlalchemy_uri,is_managed_externally)`) | 200 | `sqlalchemy_uri`, `is_managed_externally`는 무시되고 `id`, `uuid`, `database_name`만 반환 |
+| `GET /api/v1/database/<id>` | 200 | `id`, `uuid`, `database_name`, `is_managed_externally` 반환. **`sqlalchemy_uri`·`parameters`는 없음** |
+| `GET /api/v1/database/<id>/connection` | 200 | `uuid`, `is_managed_externally`, `sqlalchemy_uri`(비밀번호 마스킹 `XXXXXXXXXX`), `parameters`(`host`, `port`, `database`, `username`, `password: "XXXXXXXXXX"`) 모두 반환 |
+| `GET /api/v1/dataset/` (`columns:!(id,uuid,table_name,schema,database.id,is_managed_externally)`) | 200 | `is_managed_externally`만 무시되고 `id`, `uuid`, `table_name`, `schema`, `database.id` 모두 반환(`GET /api/v1/dataset/<id>`에 `is_managed_externally` 포함) |
+| `GET /api/v1/chart/` (`columns:!(id,uuid,slice_name,is_managed_externally,datasource_id,datasource_type,dashboards.id)`) | 200 | 요청한 열 전부 반환 |
+| `GET /api/v1/dashboard/` (`columns:!(id,uuid,slug,dashboard_title,is_managed_externally)`) | 200 | 요청한 열 전부 반환 |
+
+### 16-2. 현행 `origin/main` 상태 파일 없는 동작 재현
+
+| 시나리오 | `prune` 결과 | 관측 |
+|---|---|---|
+| 동일 프로젝트 동기화(`zz-sameprobe`, 차트 1개 제거 후 `managed.json` 삭제) | `1개 삭제` | 빠진 차트 삭제, 같은 데이터셋 위 수동 차트(UUID v4)와 `devtracker` 객체 무손상 |
+| 전환 Case A (`managed.json`만 삭제 후 `devtracker → sales-sample`) | `0개 삭제` | `sales-sample`(DB 1, 데이터셋 3, 차트 9, 대시보드 2) 추가 뒤 `devtracker`(DB 1, 데이터셋 5, 차트 11, 대시보드 3) 전부 잔존. `embed.json`과 `dashkit_meta.load_snapshot.project`는 `sales-sample`로 교체됨 |
+| 전환 Case B (`.state/` 전체 삭제 후 `sales-sample → devtracker`) | `0개 삭제` | `sales-sample` 객체 15개(DB 1, 데이터셋 3, 차트 9, 대시보드 2) 전부 잔존 |
+
+### 16-3. 수동 객체 의존성 및 삭제 제약
+
+| 사례 | 실행한 동작 | HTTP 응답 | 삭제 후 상태 |
+|---|---|---|---|
+| **3a. 수동 차트 → 관리 데이터셋** | 관리 데이터셋(id=14)에 수동 차트(id=43, UUID v4, `is_managed_externally=False`) 연결 후 `DELETE /api/v1/dataset/14` | **200** `{"message":"OK"}` | 데이터셋 삭제됨. 수동 차트는 남지만 **`datasource_id=None`으로 고아화** |
+| **3b. 수동 대시보드 → 관리 차트** | 수동 대시보드(id=11, UUID v4, `is_managed_externally=False`)에 관리 차트(id=40) 연결 후 `DELETE /api/v1/chart/40` | **200** `{"message":"OK"}` | 차트 삭제됨. 수동 대시보드는 남지만 **`charts` 목록이 `[]`로 비워짐** |
+| **3c. 수동 데이터셋 → 관리 DB** | 관리 데이터셋을 비운 뒤 관리 DB(id=4) 아래 수동 데이터셋(id=18, UUID v4, `is_managed_externally=False`) 생성 후 `DELETE /api/v1/database/4` | **422** `{"message":"Cannot delete a database that has datasets attached"}` | DB·수동 데이터셋 모두 생존 |
+| **3d. 이름 충돌 수동 DB** | `POST /api/v1/database/`로 `database_name="dashkit-manual-test"` 생성 | **201** | `uuid`는 버전 4(`object_uuid` v5와 불일치), `is_managed_externally=False` |
+
+### 16-4. 대시보드 삭제 및 잔존 객체에 대한 Guest 권한 경계
+
+- **전환 후 이전 프로젝트(`devtracker`) 잔존 상태에서 `sales-sample` guest token 요청:** `GET /api/v1/dashboard/<이전 id>` 404, `GET /api/v1/dashboard/<이전 uuid>` 403, `POST /api/v1/chart/data`(이전 차트·데이터셋 조합, `sales-sample` 차트+이전 데이터셋, `slice_id` 없는 이전 데이터셋 모두) **403** (`DATASOURCE_SECURITY_ACCESS_ERROR`). 단, 이전 대시보드가 남아 있는 동안 이전 `embed_uuid` 토큰의 `GET /embedded/<이전 embed_uuid>`는 **200**.
+- **대시보드 삭제(`DELETE /api/v1/dashboard/<id>` 200) 후:** `GET /api/v1/dashboard/<id>/embedded` **404**, `GET /embedded/<embed_uuid>` **404**, guest `GET /api/v1/dashboard/<id>` **404**, `POST /api/v1/chart/data` **403**.
