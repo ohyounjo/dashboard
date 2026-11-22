@@ -265,6 +265,52 @@ PARSERS: dict[str, Callable[..., Parser]] = {
 }
 
 
+_SENSITIVE_COL_PATTERNS = (
+    re.compile(r"^(?P<prefix>rows\[\d+\]\.(?P<col>[^:\s]+): )(?P<reason>.+)$"),
+    re.compile(r"^(?P<prefix>.+?:(?P<col>[^:\s]+): )(?P<reason>.+)$"),
+)
+_REASON_SUFFIX_RE = re.compile(r"(?:\s\((?:pattern |허용: ).*\)|가 없음)$")
+
+
+def _mask_quoted_reason(reason: str) -> str:
+    start_q = reason.find("'")
+    if start_q < 0:
+        return reason
+    m_suf = _REASON_SUFFIX_RE.search(reason)
+    limit = m_suf.start() if m_suf else len(reason)
+    end_q = reason.rfind("'", start_q + 1, limit)
+    if end_q <= start_q:
+        return reason
+    return reason[:start_q] + "'***'" + reason[end_q + 1:]
+
+
+def redact_sensitive_errors(table: Mapping[str, Any], errors: Sequence[str]) -> list[str]:
+    """schema.yaml에서 sensitive: true가 설정된 열의 오류 메시지에서 원문 값을 '***'로 마스킹한다."""
+    cols = table.get("columns") or {}
+    sensitive = {c for c, spec in cols.items() if isinstance(spec, Mapping) and spec.get("sensitive")}
+    if not sensitive:
+        return list(errors)
+    pk_sensitive = any(k in sensitive for k in (table.get("primary_key") or []))
+    out: list[str] = []
+    for err in errors:
+        text = str(err)
+        if "원래 칸:" in text:
+            head, _, _tail = text.partition("원래 칸:")
+            text = f"{head}원래 칸: ***"
+        if pk_sensitive and "기본 키 중복 (" in text:
+            text = re.sub(r"기본 키 중복 \(.*?(, 처음 나온 )", r"기본 키 중복 (***\1", text)
+        if pk_sensitive and ": 이미 있는 키 " in text:
+            head, _, _tail = text.partition(": 이미 있는 키 ")
+            text = f"{head}: 이미 있는 키 ***"
+        for pat in _SENSITIVE_COL_PATTERNS:
+            m = pat.match(text)
+            if m and any(c in sensitive for c in m.group("col").split(",")):
+                text = m.group("prefix") + _mask_quoted_reason(m.group("reason"))
+                break
+        out.append(text)
+    return out
+
+
 class RowError:
     """행 하나의 형식 오류(파서가 값 대신 내놓는다). fatal이면 그 뒤를 읽을 수 없다(CSV 문법 오류).
     raw는 읽을 수 있었던 원래 칸들(빠진 행 파일에 남겨 고쳐 다시 올릴 수 있게)."""
@@ -435,18 +481,21 @@ class Intake:
         self.strict = strict
         self.report = Report()
         raw_header = parser.header()
+        header_row = getattr(parser, "header_row", 1)
+        is_file_like = parser.kind in ("csv", "xlsx", "cursor")
         if strict:
             dup = [h for i, h in enumerate(raw_header) if h in raw_header[:i]]
-            errs = [parser.where(1, h) + ": 머리글에 같은 열이 두 번 있음" for h in dup] if parser.kind == "csv" else []
+            errs = [parser.where(header_row, h) + ": 머리글에 같은 열이 두 번 있음" for h in dup] if is_file_like else []
         else:
             errs = []
         self.match = match_header(table, raw_header, labels=labels, overrides=overrides, strict=strict,
-                                  where=lambda h: parser.where(1, h) if parser.kind == "csv" else f"rows.{h}")
+                                  where=lambda h: parser.where(header_row, h) if is_file_like else f"rows.{h}")
         if strict and self.match.unknown:
-            errs += [parser.where(1, u["header"] or "(빈 이름)") + ": schema.yaml에 없는 열" for u in self.match.unknown]
+            errs += [parser.where(header_row, u["header"] or "(빈 이름)") + ": schema.yaml에 없는 열" for u in self.match.unknown]
         errs += self.match.errors
         if errs:
-            raise IntakeError("invalid_csv" if parser.kind == "csv" else "invalid_rows", "머리글이 올바르지 않습니다", errs)
+            detail = "invalid_csv" if parser.kind in ("csv", "xlsx") else "invalid_rows"
+            raise IntakeError(detail, "머리글이 올바르지 않습니다", errs)
         if self.match.unknown:
             raise IntakeError("unknown_columns", "스키마의 열에 맞지 않는 머리글이 있습니다",
                               columns=self.match.unknown, table=table_name)
@@ -466,12 +515,14 @@ class Intake:
         """(위치, 정규형 값, 파이썬 값). 검증 오류가 있는 행은 파이썬 값이 None이고 오류는 report에 쌓인다."""
         where = self.parser.where
         report = self.report
+        sensitive = {c for c, s in self.table["columns"].items() if isinstance(s, Mapping) and s.get("sensitive")}
         try:
             for at, record in self.parser.rows():
                 report.total += 1
                 if isinstance(record, RowError):
                     report.invalid += 1
-                    report.error(f"{record.where}: {record.reason}")
+                    redacted = redact_sensitive_errors(self.table, [f"{record.where}: {record.reason}"])[0]
+                    report.error(redacted)
                     self.last_problems = [record.reason]
                     if record.fatal:
                         report.fatal = True
@@ -480,7 +531,10 @@ class Intake:
                     if record.raw is not None:
                         # 칸을 정규형 머리글 자리에 놓고, 개수가 달라 놓지 못한 칸은 원래 줄 그대로 이유에 덧붙인다
                         values = [record.raw[i] if i < len(record.raw) else "" for i in self._take]
-                        self.last_problems = [record.reason, "원래 칸: " + " | ".join(record.raw)]
+                        if sensitive:
+                            self.last_problems = [record.reason, "원래 칸: ***"]
+                        else:
+                            self.last_problems = [record.reason, "원래 칸: " + " | ".join(record.raw)]
                     yield at, values, None
                     continue
                 values = [record[i] for i in self._take]
@@ -497,9 +551,11 @@ class Intake:
                 typed, problems = self.checker.check(values)
                 if problems:
                     report.invalid += 1
-                    self.last_problems = [f"{col}: {reason}" for col, reason in problems]
+                    self.last_problems = []
                     for col, reason in problems:
-                        report.error(f"{where(at, col)}: {reason}")
+                        shown_reason = _mask_quoted_reason(reason) if col in sensitive else reason
+                        self.last_problems.append(f"{col}: {shown_reason}")
+                        report.error(f"{where(at, col)}: {shown_reason}")
                     yield at, values, None
                     continue
                 yield at, values, typed
@@ -509,4 +565,11 @@ class Intake:
 
     def close(self) -> None:
         self.parser.close()
+
+
+from .db_import import CursorParser  # noqa: E402
+from .xlsx import XlsxParser  # noqa: E402
+
+PARSERS["xlsx"] = XlsxParser
+PARSERS["cursor"] = CursorParser
 

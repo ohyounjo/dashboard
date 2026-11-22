@@ -63,6 +63,19 @@ export async function apiForm(path, form) {
   return answer("POST", res);
 }
 
+/** 이어 올리기 조각 전송(application/octet-stream). 응답 처리는 api()와 같다. */
+export async function apiPatchBytes(path, body, headers = {}) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method: "PATCH", cache: "no-store", credentials: "same-origin",
+      headers: { "Content-Type": "application/octet-stream", Accept: "application/json", ...headers },
+      body,
+    });
+  } catch (e) { throw new ApiFail(0, "network"); }
+  return answer("PATCH", res);
+}
+
 /** 관리 서비스의 작업(GET /api/manage/jobs/{id})을 1초 간격으로 본다. 끝나면 결과, 실패하면 ApiFail(작업의 error).
  *  alive()가 false가 되면(화면을 떠났다) 멈추고 null을 돌려준다. 작업은 서버에서 끝까지 간다. onTick(job)은 볼 때마다 부른다. */
 export async function waitJob(id, { alive = () => true, onTick } = {}) {

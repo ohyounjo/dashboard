@@ -53,17 +53,28 @@ def max_request_bytes() -> int:
     return max(_mb("STUDIO_MAX_REQUEST_MB", DEFAULT_MAX_REQUEST_MB), max_file_bytes() + 1024 * 1024)
 
 
-def check_filename(name: str | None) -> str:
-    """`<이름>.csv`만 받는다. 경로 문자(/, \\, .., NUL)와 제어 문자는 거절한다."""
+def _validate_name(name: str | None, extensions: tuple[str, ...], hint: str) -> str:
     if not name:
         raise UploadError(400, "invalid_filename", "파일 이름이 없습니다")
     bad = (len(name) > MAX_NAME_LENGTH or "/" in name or "\\" in name or ".." in name
            or any(ord(ch) < 32 or ord(ch) == 127 for ch in name) or name.startswith(".")
            or name != name.strip())
-    if bad or not name.lower().endswith(".csv") or len(name) <= 4:
+    low = name.lower()
+    matched = next((ext for ext in extensions if low.endswith(ext) and len(name) > len(ext)), None)
+    if bad or matched is None:
         shown = "".join(ch if ch.isprintable() else "?" for ch in name[:60])
-        raise UploadError(400, "invalid_filename", f"파일 이름은 <이름>.csv여야 하고 경로 문자를 쓸 수 없습니다: '{shown}'")
+        raise UploadError(400, "invalid_filename", f"파일 이름은 {hint}여야 하고 경로 문자를 쓸 수 없습니다: '{shown}'")
     return name
+
+
+def check_filename(name: str | None) -> str:
+    """`<이름>.csv`만 받는다(Studio 원본 CSV 업로드용). 경로 문자(/, \\, .., NUL)와 제어 문자는 거절한다."""
+    return _validate_name(name, (".csv",), "<이름>.csv")
+
+
+def check_ingest_filename(name: str | None) -> str:
+    """`<이름>.csv` 또는 `<이름>.xlsx`를 받는다(관리 서비스·접수용). 경로 문자(/, \\, .., NUL)와 제어 문자는 거절한다."""
+    return _validate_name(name, (".csv", ".xlsx"), "<이름>.csv 또는 <이름>.xlsx")
 
 
 async def read_body(stream: AsyncIterator[bytes], content_length: str | None, limit: int) -> bytes:

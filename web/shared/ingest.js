@@ -3,9 +3,17 @@
 
 const loose = (s) => String(s).toLowerCase().replace(/[\s_-]+/g, "");
 
-/** 파일 이름에서 확장자(.csv)와 끝의 " (1)"(같은 이름을 내려받을 때 브라우저가 붙인다)를 뺀다. */
+export const RESUMABLE_THRESHOLD_BYTES = 5 * 1024 * 1024;
+export const RESUMABLE_CHUNK_BYTES = 4 * 1024 * 1024;
+
+/** 접수 가능한 파일 확장자(.csv 또는 .xlsx)인지. */
+export function isSupportedIngestFile(name) {
+  return /\.(csv|xlsx)$/i.test(String(name || ""));
+}
+
+/** 파일 이름에서 확장자(.csv, .xlsx)와 끝의 " (1)"(같은 이름을 내려받을 때 브라우저가 붙인다)를 뺀다. */
 export function fileStem(name) {
-  return String(name).replace(/\.csv$/i, "").replace(/\s*\(\d+\)$/, "").trim();
+  return String(name).replace(/\.(csv|xlsx)$/i, "").replace(/\s*\(\d+\)$/, "").trim();
 }
 
 /** 파일 이름 → 테이블 짝짓기. tables: 고를 수 있는 테이블 이름(누적 테이블).
@@ -15,7 +23,7 @@ export function fileStem(name) {
 export function pairFiles(names, tables) {
   const list = (tables || []).map(String);
   return (names || []).map((name) => {
-    const raw = String(name).replace(/\.csv$/i, "");
+    const raw = String(name).replace(/\.(csv|xlsx)$/i, "");
     if (list.includes(raw)) return { name, table: raw, how: "exact" };
     const stem = fileStem(name);
     const hits = list.filter((t) => loose(t) === loose(stem));
@@ -74,4 +82,27 @@ export function previewInsertRows(batches) {
 /** 넣을 행 수 합계가 기준(기본 50만 행) 이상인지. */
 export function isLargeBatchPreview(batches, threshold = LARGE_BATCH_ROWS) {
   return previewInsertRows(batches) >= threshold;
+}
+
+/** 이어 올리기를 사용할 파일 크기인지. */
+export function shouldUseResumable(size, threshold = RESUMABLE_THRESHOLD_BYTES) {
+  return Number(size) >= threshold;
+}
+
+/** 현재 오프셋에서 다음에 보낼 조각 범위({start, end, isLast}). 끝났으면 null. */
+export function nextChunkRange(offset, totalSize, chunkSize = RESUMABLE_CHUNK_BYTES) {
+  const off = Math.max(0, Number(offset) || 0);
+  const total = Math.max(0, Number(totalSize) || 0);
+  const step = Math.max(1, Number(chunkSize) || RESUMABLE_CHUNK_BYTES);
+  if (total <= 0 || off >= total) return null;
+  const end = Math.min(total, off + step);
+  return { start: off, end, isLast: end >= total };
+}
+
+/** 이어 올리기 진행 비율(0~1). */
+export function uploadProgressRatio(offset, totalSize) {
+  const total = Number(totalSize);
+  const off = Number(offset);
+  if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(off)) return 0;
+  return Math.min(1, Math.max(0, off / total));
 }

@@ -248,7 +248,7 @@
 | `group.delete` | 그룹 삭제 | `{"members": <구성원 수>}` |
 | `group.tabs` | 허용 탭 변경(바뀐 것이 있을 때) | `{project, added: [...], removed: [...]}` |
 | `group.members` | 구성원 변경(바뀐 것이 있을 때. 일괄 그룹 지정은 그룹마다 한 줄, `bulk: true`) | `{added: [이메일], removed: [이메일]}` |
-| `data.batch.create` · `data.batch.failed` | 관리 서비스·CLI의 데이터 더하기(미리보기는 남기지 않는다) · 그 실패. 대상은 테이블 | `{project, table, file, sha256, rows, method, source_name}` · `{project, table, method, detail_code}`. API 토큰 적재 시 `actor_id=NULL`, `actor_email="token:<이름>"`, `detail`에 `{auth_type: "api_token", api_key_id, api_key_name}` 포함. 데이터 값은 싣지 않는다([manage.md](manage.md)) |
+| `data.batch.create` · `data.batch.failed` | 관리 서비스·CLI·외부 DB(`ingest-db`)·감시 폴더(`ingest-watch`)의 데이터 더하기(미리보기는 남기지 않는다) · 그 실패. 대상은 테이블 | `{project, table, file, sha256, rows, method, source_name}` · `{project, table, method, detail_code}`(`method`: `form`·`paste`·`upload`·`api`·`cli`·`db`·`watch`). API 토큰 적재 시 `actor_id=NULL`, `actor_email="token:<이름>"`, `detail`에 `{auth_type: "api_token", api_key_id, api_key_name}` 포함. 데이터 값과 외부 DB 자격 증명(DSN·비밀번호·SQL 리터럴)은 싣지 않는다([manage.md](manage.md), [ingest.md](ingest.md)) |
 | `data.batch.remove` · `data.batch.restore` | 배치 되돌리기(방금 추가 취소 포함) · 되살리기 | `{project, table, file, fast}` · `{project, table, file}` |
 | `data.batch.compact` | 배치 합치기. 대상은 테이블 | `{project, table, file, merged, rows}` |
 | `data.table.create` · `data.table.alter` · `data.table.drop` | 관리 서비스의 테이블 추가(첫 파일 포함) · 테이블·열 변경(`aliases` 저장 포함) · 테이블 삭제. 대상은 테이블 | `{project, mode, source_name, dataset, dashboard, history}` · `{project, op, column, history}`(`aliases` 저장은 `{project, table, aliases}`) · `{project, op, history}` |

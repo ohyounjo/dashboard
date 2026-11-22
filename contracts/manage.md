@@ -29,7 +29,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 
 ## 요청 보호
 
-- `dashkit/auth/guard.py`를 그대로 쓴다: 상태를 바꾸는 요청은 `Origin`이 웹앱 출처여야 하고(`Sec-Fetch-Site: cross-site` 거절), 본문은 `application/json`이다. 업로드 경로(`POST /tables/{t}/batches`, `POST /batches`, `POST /tables/infer`)만 `multipart/form-data`도 받는다(출처 검사는 같다). 업로드 규칙(파일 이름 `<이름>.csv`, 경로 문자 금지)은 [studio.md](studio.md)와 같고, 올린 파일의 이름은 경로로 쓰지 않는다.
+- `dashkit/auth/guard.py`를 그대로 쓴다: 상태를 바꾸는 요청은 `Origin`이 웹앱 출처여야 하고(`Sec-Fetch-Site: cross-site` 거절), 본문은 `application/json`이다. 업로드 경로(`POST /tables/{t}/batches`, `POST /batches`, `POST /tables/infer`)만 `multipart/form-data`도 받고, 이어 올리기 조각 전송 경로(`PATCH /uploads/{id}`)는 `application/octet-stream`을 받는다(출처 검사는 같다). 접수용 업로드 파일 이름은 `<이름>.csv` 또는 `<이름>.xlsx`(경로 문자·제어 문자·앞뒤 공백·`.` 시작 금지)이며, 올린 파일의 이름은 경로로 쓰지 않는다.
 - `Authorization` 헤더가 2개 이상이면 400 `bad_request`다. 모든 메서드·경로에서 `Authorization` 헤더와 `dashkit_session` 쿠키가 함께 오면 400 `ambiguous_auth`로 거절한다. 쿠키가 없고 `Bearer ` 헤더로 호출한 `POST /tables/{t}/batches` 요청만 `Origin`·`Sec-Fetch-Site` 검사를 건너뛴다(`Content-Type` 검사는 유지).
 - 응답은 모두 `Cache-Control: no-store`, 오류는 `{"detail", "message"}`(+ `errors` 등)로 [api.md](api.md)와 같다.
 - 경로 값(`{table}`·`{dataset}`·`{file}`·이력 `{id}`)은 현재 프로젝트의 설정과 폴더 목록에 대조한 뒤에만 쓴다. 사용자 입력이 들어가는 SQL은 전부 매개변수 바인딩이고 식별자는 목록과 대조한 뒤 `psycopg.sql.Identifier`로만 넣는다.
@@ -44,6 +44,10 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `GET /tables` | 운용자 | `{"items", "total", "project"}`. 항목 `{name, mode, on_conflict, description, rows, batches, compact_hint, used_by, last_batch: {file, added_at, actor_email} \| null}` (+ `MANAGE_FEATURES=freshness`일 때 `freshness`, `stale`). `rows`는 배치 기록의 `inserted` 합(적용한 적이 없으면 `null`), `batches`는 배치 폴더의 파일 수, `compact_hint`는 그 수가 `INGEST_COMPACT_HINT`를 넘는지, `used_by`는 그 테이블을 읽는 데이터셋의 수(계보) |
 | `GET /tables/{t}` | 운용자 | 입력 폼을 만드는 정의: `{name, mode, on_conflict, description, primary_key, revision, freshness?, columns: [{name, type, required, primary_key, label, values?, ref?, min?, max?, pattern?, description?, default?, aliases?}], checks: [이름], datasets: [그 테이블을 그대로 보는 데이터셋]}`. `label`은 그 테이블을 보는 `table:` 데이터셋의 `labels` |
 | `POST /tables/{t}/batches` | 운용자 또는 API 토큰 | **데이터 더하기**([ingest.md](ingest.md) "더하기"). 아래 "데이터 더하기". API 토큰은 `MANAGE_FEATURES=tokens`일 때 `token.project == 현재 프로젝트`이고 `t in token.tables`인 `append` 테이블만 허용(아니면 403 `forbidden`, 비활성 시 401 `unauthenticated`, 무효·만료·폐기 시 401 `invalid_token`) |
+| `POST /uploads` | 운용자 또는 API 토큰 | 이어 올리기 세션 시작: `{"table", "filename", "total_size", "sha256"?}` → `201 Created` (`upload_id`, `offset: 0`, `total_size`, `chunk_max_bytes`, `status: "receiving"`, `expires_at`). 단일 테이블이면 `append` 여부를 즉시 검증하고(여러 파일·추론용 `"*"` 허용, API 토큰은 `"*"` 불가), 한도 초과는 413 `upload_too_large` |
+| `GET /uploads/{id}` | 운용자 또는 API 토큰(본인 세션만) | 이어 올리기 현재 오프셋·상태 조회(owner 미사용). 헤더 `Upload-Offset`, `Upload-Length` 포함. 타인·만료 시 410 `upload_expired` |
+| `PATCH /uploads/{id}` | 운용자 또는 API 토큰(본인 세션만) | 조각 이어 쓰기(`Content-Type: application/octet-stream`, `Upload-Offset` 필수, `Content-Sha256` 선택). 동시 PATCH는 409 `upload_in_progress`, 오프셋 불일치/앞선 바이트 다름은 409 `offset_mismatch`, 중복 조각 일치는 200 멱등 응답, 완료 시 `sha256`·`.xlsx` 매직 바이트 검사 후 `status: "ready"`(불일치 시 파일 폐기 + 422 `checksum_mismatch`) |
+| `DELETE /uploads/{id}` | 운용자 또는 API 토큰(본인 세션만) | 이어 올리기·보관 세션 취소 및 디스크 임시 파일 즉시 삭제 → `200 {"ok": true, "upload_id"}` |
 | `GET /tables/{t}/batches?removed=1` | 운용자 | 배치 이력, 최근 것부터: `{"items", "total"}`. 항목 `{file, removed, first, merged, added_at, recorded, rows, inserted, updated, skipped, unchanged, actor_email, method, source_name, mine}`. 누가·방법·원래 파일 이름은 감사 로그(`data.batch.create`)에서 온다. `mine`은 요청한 사람이 더한 배치인지. `removed=1`이면 `_removed/`의 배치도 싣는다 |
 | `GET /tables/{t}/batches/{file}` | 운용자 | 배치 파일 내려받기(정규형 그대로, `.csv.gz`는 `application/gzip`) |
 | `DELETE /tables/{t}/batches/{file}` | admin, 또는 그 배치를 더한 operator | 되돌리기. 빠른 길(방금 추가 취소)이면 200 `{"ok", "fast": true, "table", "file", "rows"}`, 아니면 202 작업(다시 만들기) |
@@ -59,7 +63,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `GET /lineage` | 운용자 | 계보(아래 "구조 변경") |
 | `GET /tables/{t}/used_by` | 운용자 | 그 테이블의 쓰이는 곳: `{table, datasets, charts: [{key, title, dashboard, dataset, tabs}], sections: [{tab, index, type, dataset}], tabs, unknown_datasets}` |
 | `PATCH /config` | admin | 구조 변경: `{"ops": [연산…], "revision"}` → 202 작업(아래 "구조 변경") |
-| `POST /tables/infer` | admin | 새 테이블 추론: multipart `file`(CSV 하나) → 200 `{upload_id, source_name, table, mode, on_conflict, dataset, suggest}`. 파일은 쓰지 않고 1시간 잡아 둔다 |
+| `POST /tables/infer` | admin | 새 테이블 추론: multipart `file`(CSV 또는 xlsx 하나) 또는 `{"upload_id"}` → 200 `{upload_id, source_name, table, mode, on_conflict, dataset, suggest}`. 파일은 쓰지 않고 1시간 잡아 둔다 |
 | `POST /tables` | admin | 새 테이블 만들기: `{upload_id, table, mode?, on_conflict?, dataset?, suggest?, revision}` → 202 작업 |
 | `POST /tables/{t}/compact` | admin | 합치기 → 202 작업. `append` 테이블만(아니면 409 `not_append`) |
 | `GET /history` | admin | 설정 변경 이력, 최근 것부터: `{"items": [{id, action, at, files: [{path, before, after}]}], "total", "revision"}` |
@@ -79,10 +83,10 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | 본문 | 응답 |
 |---|---|
 | JSON `{"rows": [{…}], "method"?: "form" \| "paste", "dry_run"?, "columns"?, "force"?, "skip_invalid"?}` | 200 결과([ingest.md](ingest.md) "결과"). 행은 `INGEST_INLINE_MAX_ROWS`까지(넘으면 413 `too_many_rows`: 파일로 안내) |
-| multipart `file`(`<이름>.csv`) + 글 부분 `dry_run`·`force`·`skip_invalid`·`strict`(`1`/`true`)·`columns`(JSON 글) | 202 `{"job"}`. 파일은 디스크의 임시 파일로 받는다(파일 하나 `INGEST_MAX_UPLOAD_MB`, 요청 하나 `INGEST_MAX_REQUEST_MB`, 넘으면 413 `upload_too_large`, 행이 `INGEST_MAX_ROWS`를 넘으면 작업이 413 `too_many_rows`). 미리보기(`dry_run`)면 작업 결과에 `upload_id`가 있다 |
-| JSON `{"upload_id", "columns"?, "force"?, "skip_invalid"?}` | 202 `{"job"}`. 미리보기한 파일을 다시 올리지 않고 넣는다. 같은 테이블·같은 사람의 1시간 안의 미리보기만(아니면 410 `upload_expired`). 넣기에 성공하면 그 업로드는 풀리고, 실패하면 1시간 안에는 같은 `upload_id`로 다시 넣을 수 있다. 실패한 미리보기의 파일은 잡아 두지 않는다 |
+| multipart `file`(`<이름>.csv` 또는 `<이름>.xlsx`) + 글 부분 `dry_run`·`force`·`skip_invalid`·`strict`(`1`/`true`)·`columns`(JSON 글) | 202 `{"job"}`. 파일은 디스크의 임시 파일로 받는다(파일 하나 `INGEST_MAX_UPLOAD_MB`, 요청 하나 `INGEST_MAX_REQUEST_MB`, 넘으면 413 `upload_too_large`, 행이 `INGEST_MAX_ROWS`를 넘으면 작업이 413 `too_many_rows`). 미리보기(`dry_run`)면 작업 결과에 `upload_id`가 있다 |
+| JSON `{"upload_id", "dry_run"?, "columns"?, "force"?, "skip_invalid"?, "strict"?}` | 202 `{"job"}`. 미리보기·이어 올리기가 끝난(`status: "ready"`) 파일을 다시 올리지 않고 미리보기(`dry_run: true`)하거나 넣는다. 미완료 세션은 409 `upload_incomplete`, 같은 테이블·같은 사람의 유효 세션이 아니면 410 `upload_expired`. 확정(`dry_run: false`)에 성공하면 그 업로드는 풀리고, 실패하거나 미리보기(`dry_run: true`)면 유효 시간(1시간) 동안 같은 `upload_id`로 다시 시도·확정할 수 있다 |
 
-- 대상이 `replace` 테이블이면 409 `not_append`. 그 밖의 오류 코드는 [ingest.md](ingest.md)와 같다(422 `invalid_rows`·`unknown_columns`·`key_conflict`·`check_failed`, 409 `duplicate_file`·`rebuild_required`·`project_mismatch`·`stale_config`·`apply_running`).
+- 대상이 `replace` 테이블이면 409 `not_append`. 그 밖의 오류 코드는 [ingest.md](ingest.md)와 같다(422 `invalid_rows`·`invalid_csv`·`invalid_xlsx`·`unknown_columns`·`key_conflict`·`check_failed`·`checksum_mismatch`, 409 `duplicate_file`·`rebuild_required`·`project_mismatch`·`stale_config`·`apply_running`·`offset_mismatch`·`upload_in_progress`·`upload_incomplete`, 410 `upload_expired`, 413 `upload_too_large`).
 - 감사 로그: 넣으면 `data.batch.create`(`detail`: `project`, `table`, `file`, `sha256`, `rows`, `method`(`form`·`paste`·`upload`), `source_name`(올린 파일 이름)), 실패하면 `data.batch.failed`(`detail_code`). 미리보기는 남기지 않는다. 데이터 값은 싣지 않는다.
 
 - **오류 행 빼고 넣기**(`skip_invalid`): 행 단위 검증 오류, 참조 오류, `default`가 없는 필수 열이 빠진 새 행을 빼고 나머지를 넣는다. 배치 파일에는 들어간 행만 쓴다. 결과의 batch에 `skip_invalid`, `rejected`(뺀 행 수)가 있고 작업 결과에 `rejects: true`면 `GET /jobs/{id}/rejects`로 빠진 행을 내려받는다. 키 충돌(`error` 정책), `checks` 위반, 배치 안의 기본 키 중복은 빼고 넣는 대상이 아니라 전체 거절이다.
@@ -93,8 +97,8 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 
 | 본문 | 응답 |
 |---|---|
-| multipart `files`(여러 개, `<이름>.csv`) + 글 부분 `map`(JSON `{"<파일 이름>": "<테이블>"}`), `dry_run`·`force`·`skip_invalid`·`strict`, `columns`(JSON `{"<파일 이름>": {"<머리글>": "<열>" \| null}}`) | 202 `{"job"}`. 결과의 `batches`는 파일마다 하나(보낸 순서) |
-| JSON `{"upload_id", "map"?, "columns"?, "force"?, "skip_invalid"?}` | 202. 미리보기한 파일들을 다시 올리지 않고 넣는다 |
+| multipart `files`(여러 개, `<이름>.csv` 또는 `<이름>.xlsx`) + 글 부분 `map`(JSON `{"<파일 이름>": "<테이블>"}`), `dry_run`·`force`·`skip_invalid`·`strict`, `columns`(JSON `{"<파일 이름>": {"<머리글>": "<열>" \| null}}`) | 202 `{"job"}`. 결과의 `batches`는 파일마다 하나(보낸 순서) |
+| JSON `{"upload_id", "map"?, "columns"?, "dry_run"?, "force"?, "skip_invalid"?, "strict"?}` | 202. 미리보기·이어 올리기가 끝난 파일들을 다시 올리지 않고 미리보기하거나 넣는다 |
 
 - **한 트랜잭션이다**(설계서 D12): 참조 순서(`config.table_order`)대로 넣고, 하나라도 실패하면 어느 파일도 들어가지 않는다. 확정 도중에 끊겨도 묶음 단위로 복구한다([ingest.md](ingest.md) "묶음 기록과 끊김 복구").
 - `map`을 빼면 파일 이름(확장자 제외)이 테이블 이름이어야 한다. 짝지을 수 없으면 422 `unknown_table`(`errors`에 파일별 이유). 같은 테이블에 파일 여럿도 된다(번호를 이어 매긴다).
@@ -153,7 +157,8 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 |---|---|---|
 | `INGEST_INLINE_MAX_ROWS` | `500` | 직접 입력·붙여넣기 한 번의 행 수 |
 | `INGEST_MAX_UPLOAD_MB` / `INGEST_MAX_ROWS` | `200` / `2000000` | 파일 하나의 한도 |
-| `INGEST_MAX_REQUEST_MB` | `500` | 여러 파일을 한 번에 올릴 때의 합계 |
+| `INGEST_CHUNK_MAX_MB` | `16` | 이어 올리기 조각 하나의 상한 |
+| `INGEST_MAX_REQUEST_MB` | `500` | 여러 파일을 한 번에 올릴 때의 합계(임시 업로드 폴더 총합 상한은 `× 2`) |
 | `INGEST_COMPACT_HINT` | `200` | 이 수를 넘으면 합치기를 권한다 |
 | `MANAGE_STATEMENT_TIMEOUT_MS` | `15000` | 조회 시간 제한 |
 | `MANAGE_LOCK_WAIT_MS` | `5000` | 즉시 응답 요청(직접 입력·붙여넣기, 빠른 취소 후보)이 쓰기 잠금을 기다리는 시간. 넘으면 409 `apply_running` |
