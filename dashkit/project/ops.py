@@ -12,9 +12,11 @@
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Callable, Mapping, MutableMapping, MutableSequence
 
 from ..config import DASHBOARD_FILE, SCHEMA_FILE
+from ..reserved_words import is_reserved
 
 __all__ = ["OPS", "OpError", "apply_ops", "op"]
 
@@ -716,9 +718,24 @@ def filter_remove(doc: MutableMapping, item: Mapping[str, Any]) -> None:
 COLUMN_UPDATE_KEYS = ("aliases", "description", "type", "values", "min", "max", "pattern", "default", "required", "sensitive")
 _WIDER = {("integer", "number"), ("integer", "text"), ("number", "text"), ("boolean", "text"), ("date", "text"),
           ("timestamp", "text"), ("enum", "text")}
-TABLE_KEYS = ("description", "mode", "on_conflict", "primary_key", "columns", "checks", "freshness")
-TABLE_UPDATE_KEYS = ("description", "mode", "on_conflict", "freshness")
+_NARROWER = {
+    ("text", "integer"), ("text", "number"), ("text", "boolean"), ("text", "date"), ("text", "timestamp"), ("text", "enum"),
+    ("enum", "integer"), ("enum", "number"), ("enum", "boolean"), ("enum", "date"), ("enum", "timestamp"),
+    ("number", "integer"),
+    ("timestamp", "date"),
+}
+_IDENT_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
+TABLE_KEYS = ("description", "mode", "on_conflict", "primary_key", "columns", "checks", "indexes", "freshness")
+TABLE_UPDATE_KEYS = ("description", "mode", "on_conflict", "indexes", "freshness")
 COLUMN_KEYS = ("type", "required", "values", "ref", "min", "max", "pattern", "description", "default", "aliases", "sensitive")
+
+
+def _check_indexes_op(indexes: Any) -> None:
+    if not isinstance(indexes, list) or not all(
+        isinstance(idx, list) and idx and all(isinstance(c, str) and c for c in idx)
+        for idx in indexes
+    ):
+        raise OpError("`indexes`는 비어 있지 않은 열 이름 목록의 목록이어야 함")
 
 
 def _schema_tables(doc: MutableMapping) -> MutableMapping:
@@ -766,17 +783,23 @@ def table_add(doc: MutableMapping, item: Mapping[str, Any]) -> None:
     new["columns"] = {str(c): _column_spec(_object({"c": spec}, "c")) for c, spec in value["columns"].items()}
     if value.get("checks"):
         new["checks"] = copy.deepcopy(value["checks"])
+    if value.get("indexes") is not None:
+        _check_indexes_op(value["indexes"])
+        if value["indexes"]:
+            new["indexes"] = copy.deepcopy(value["indexes"])
     tables[name] = new
 
 
 @op("table.update", SCHEMA_FILE)
 def table_update(doc: MutableMapping, item: Mapping[str, Any]) -> None:
-    """{op, table, set: {description?, mode?, on_conflict?}}. null은 그 키를 지운다(방식 변경 포함)."""
+    """{op, table, set: {description?, mode?, on_conflict?, indexes?, freshness?}}. null은 그 키를 지운다(방식 변경 포함)."""
     _fields(item, ("table", "set"))
     values = _object(item, "set")
     bad = sorted(set(values) - set(TABLE_UPDATE_KEYS))
     if bad:
         raise OpError(f"바꿀 수 없는 키: {', '.join(bad)}")
+    if "indexes" in values and values["indexes"] is not None:
+        _check_indexes_op(values["indexes"])
     tables = _schema_tables(doc)
     name = _text(item, "table")
     if not isinstance(tables.get(name), dict):
@@ -813,21 +836,112 @@ def column_add(doc: MutableMapping, item: Mapping[str, Any]) -> None:
 
 @op("column.update", SCHEMA_FILE)
 def column_update(doc: MutableMapping, item: Mapping[str, Any]) -> None:
-    """{op, table, column, set: {aliases?, description?, type?, values?, min?, max?, pattern?, default?, required?}}.
-    null은 그 키를 지운다. 유형은 넓히기만 받는다."""
+    """{op, table, column, set: {aliases?, description?, type?, values?, min?, max?, pattern?, default?, required?, sensitive?}}.
+    null은 그 키를 지운다. 유형은 _WIDER와 _NARROWER 변환을 지원한다."""
     _fields(item, ("table", "column", "set"))
     values = _object(item, "set")
     bad = sorted(set(values) - set(COLUMN_UPDATE_KEYS))
     if bad:
         raise OpError(f"바꿀 수 없는 키: {', '.join(bad)}")
-    current = _schema_column(doc, _text(item, "table"), _text(item, "column"))
-    if "type" in values and values["type"] != current.get("type") and \
-            (current.get("type"), values["type"]) not in _WIDER:
-        raise OpError(f"유형은 넓히기만 할 수 있음({current.get('type')} → {values['type']}는 안 됨)")
+    tname, cname = _text(item, "table"), _text(item, "column")
+    current = _schema_column(doc, tname, cname)
+    table_spec = _schema_tables(doc)[tname]
+    if "type" in values and values["type"] != current.get("type"):
+        pk = table_spec.get("primary_key")
+        pk_list = [pk] if isinstance(pk, str) else list(pk or [])
+        if cname in pk_list:
+            raise OpError("기본 키 열의 유형은 바꿀 수 없음")
+        if "ref" in current:
+            raise OpError("참조 열(ref)의 유형은 바꿀 수 없음")
+        old_type, new_type = current.get("type"), values["type"]
+        if (old_type, new_type) not in _WIDER and (old_type, new_type) not in _NARROWER:
+            raise OpError(f"지원하지 않는 유형 변경입니다({old_type} → {new_type})")
+        if new_type == "enum":
+            final_vals = values.get("values") if "values" in values else current.get("values")
+            if not isinstance(final_vals, list) or not final_vals:
+                raise OpError("enum 유형으로 바꾸려면 비어 있지 않은 values 목록이 필요함")
+        if new_type != "enum" and "values" not in values:
+            current.pop("values", None)
+        if new_type not in ("integer", "number", "date"):
+            if "min" not in values:
+                current.pop("min", None)
+            if "max" not in values:
+                current.pop("max", None)
+        if new_type not in ("text", "enum") and "pattern" not in values:
+            current.pop("pattern", None)
     if "aliases" in values and values["aliases"] is not None and (
             not isinstance(values["aliases"], list) or not all(isinstance(a, str) and a for a in values["aliases"])):
         raise OpError("`aliases`는 비어 있지 않은 문자열의 목록이어야 함")
-    _set_values(_schema_column(doc, _text(item, "table"), _text(item, "column")), values, allow_remove=True)
+    _set_values(current, values, allow_remove=True)
+
+
+@op("column.rename", SCHEMA_FILE)
+def column_rename(doc: MutableMapping, item: Mapping[str, Any]) -> None:
+    """{op, table, column, to}. 열 순서를 유지한 채 이름만 바꾼다(기본 키는 불가)."""
+    _fields(item, ("table", "column", "to"))
+    tname, cname, to = _text(item, "table"), _text(item, "column"), _text(item, "to")
+    _schema_column(doc, tname, cname)
+    table_spec = _schema_tables(doc)[tname]
+    pk = table_spec.get("primary_key")
+    pk_list = [pk] if isinstance(pk, str) else list(pk or [])
+    if cname in pk_list:
+        raise OpError("기본 키 열은 이름을 바꿀 수 없음")
+    if not _IDENT_RE.fullmatch(to):
+        raise OpError(f"새 열 이름 '{to}'가 식별자 형식(^[a-z][a-z0-9_]{{0,62}}$)에 맞지 않음")
+    if is_reserved(to):
+        raise OpError(f"새 열 이름 '{to}'는 SQL 예약어임")
+    cols = table_spec["columns"]
+    if to in cols:
+        raise OpError(f"열 '{to}'가 이미 있음")
+    items = list(cols.items())
+    cols.clear()
+    for k, v in items:
+        cols[to if k == cname else k] = v
+    if isinstance(table_spec.get("indexes"), list):
+        for idx in table_spec["indexes"]:
+            if isinstance(idx, list):
+                for i, c in enumerate(idx):
+                    if c == cname:
+                        idx[i] = to
+    for k, spec in cols.items():
+        if k != to and isinstance(spec, dict) and isinstance(spec.get("aliases"), list) and to in spec["aliases"]:
+            spec["aliases"] = [a for a in spec["aliases"] if a != to]
+            if not spec["aliases"]:
+                del spec["aliases"]
+
+
+@op("column.remove", SCHEMA_FILE)
+def column_remove(doc: MutableMapping, item: Mapping[str, Any]) -> None:
+    """{op, table, column}. 열을 지우고 indexes를 정리한다(기본 키·마지막 열은 불가)."""
+    _fields(item, ("table", "column"))
+    tname, cname = _text(item, "table"), _text(item, "column")
+    _schema_column(doc, tname, cname)
+    table_spec = _schema_tables(doc)[tname]
+    pk = table_spec.get("primary_key")
+    pk_list = [pk] if isinstance(pk, str) else list(pk or [])
+    if cname in pk_list:
+        raise OpError("기본 키 열은 지울 수 없음")
+    cols = table_spec["columns"]
+    if len(cols) <= 1:
+        raise OpError("마지막 남은 열은 지울 수 없음")
+    del cols[cname]
+    if isinstance(table_spec.get("indexes"), list):
+        new_indexes = []
+        seen: set[tuple[str, ...]] = set()
+        for idx in table_spec["indexes"]:
+            if not isinstance(idx, list):
+                continue
+            cleaned = [c for c in idx if c != cname]
+            if not cleaned or cleaned == pk_list:
+                continue
+            key = tuple(cleaned)
+            if key not in seen:
+                seen.add(key)
+                new_indexes.append(cleaned)
+        if new_indexes:
+            table_spec["indexes"] = new_indexes
+        else:
+            table_spec.pop("indexes", None)
 
 
 

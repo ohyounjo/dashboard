@@ -220,6 +220,7 @@ def _normalize_schema(schema: dict) -> dict:
         pk = table["primary_key"]
         table["primary_key"] = [pk] if isinstance(pk, str) else list(pk)
         table.setdefault("checks", [])
+        table["indexes"] = [list(idx) for idx in table.get("indexes", [])]
         for col_name, col in table["columns"].items():
             col.setdefault("required", False)
             if col_name in table["primary_key"]:
@@ -277,6 +278,7 @@ def _check_schema_refs(project: Project) -> list[str]:
                 errors.append(f"{f}:{fmt_path(base + ['freshness'])}: {exc}")
         cols = table["columns"]
         errors += _check_aliases(f, base, cols)
+        errors += _check_indexes(f, base, table)
         for pk in table["primary_key"]:
             if pk not in cols:
                 errors.append(f"{f}:{fmt_path(base + ['primary_key'])}: 열 '{pk}'가 columns에 없음")
@@ -309,6 +311,34 @@ def _check_schema_refs(project: Project) -> list[str]:
             table_order(project)
         except ConfigError as exc:
             errors += exc.errors
+    return errors
+
+
+def _check_indexes(f: str, base: list, table: dict) -> list[str]:
+    """테이블의 indexes 선언을 검사한다(없는 열, 색인 내 중복 열, PK와 동일한 색인, 중복 색인 선언)."""
+    errors: list[str] = []
+    cols = table["columns"]
+    pk = list(table["primary_key"])
+    seen_indexes: set[tuple[str, ...]] = set()
+    for i, idx in enumerate(table.get("indexes") or []):
+        ip = base + ["indexes", i]
+        for j, col in enumerate(idx):
+            if col not in cols:
+                errors.append(f"{f}:{fmt_path(ip + [j])}: 열 '{col}'가 columns에 없음")
+        if len(set(idx)) != len(idx):
+            seen_cols: set[str] = set()
+            for col in idx:
+                if col in seen_cols:
+                    errors.append(f"{f}:{fmt_path(ip)}: 같은 열 '{col}'가 두 번 있음")
+                    break
+                seen_cols.add(col)
+        if list(idx) == pk:
+            errors.append(f"{f}:{fmt_path(ip)}: primary_key와 같은 색인 ([{', '.join(idx)}])")
+        key = tuple(idx)
+        if key in seen_indexes:
+            errors.append(f"{f}:{fmt_path(ip)}: 중복된 색인 선언 ([{', '.join(idx)}])")
+        else:
+            seen_indexes.add(key)
     return errors
 
 

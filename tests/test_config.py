@@ -382,3 +382,34 @@ def test_table_page_size_exceeds_row_limit_rejected(tmp_path):
         d["dashboards"]["main"]["charts"][2].update({"page_size": 20, "row_limit": 10})
     errs = errors_of(tmp_path, mutate_dash=m)
     assert any("charts[2].page_size" in e and "row_limit" in e for e in errs), errs
+
+
+def test_schema_indexes_valid_and_data_revision(tmp_path):
+    from dashkit.loader.record import data_revision, table_rules_hash
+
+    base_dir = make_project(tmp_path / "base")
+    base_proj = load_project("basic", base_dir)
+    assert base_proj.schema["tables"]["things"]["indexes"] == []
+
+    # 단일·복합 색인 및 순서가 다른 색인([begins, phase]와 [phase, begins]) 허용
+    idx_dir = make_project(
+        tmp_path / "with_idx",
+        mutate_schema=lambda s: s["tables"]["things"].__setitem__("indexes", [["begins"], ["begins", "phase"], ["phase", "begins"]]),
+    )
+    idx_proj = load_project("basic", idx_dir)
+    assert idx_proj.schema["tables"]["things"]["indexes"] == [["begins"], ["begins", "phase"], ["phase", "begins"]]
+    assert data_revision(base_proj.schema, base_proj.dashboard) != data_revision(idx_proj.schema, idx_proj.dashboard)
+    assert table_rules_hash(base_proj.schema["tables"]["things"]) != table_rules_hash(idx_proj.schema["tables"]["things"])
+
+
+@pytest.mark.parametrize("bad_indexes, substr", [
+    ([["nope"]], "열 'nope'가 columns에 없음"),
+    ([["id"]], "primary_key와 같은 색인"),
+    ([["begins"], ["begins"]], "중복된 색인 선언"),
+    ([["begins", "begins"]], "uniqueItems"),
+    ([[]], "minItems"),
+    ("begins", "is not of type 'array'"),
+])
+def test_schema_indexes_errors(tmp_path, bad_indexes, substr):
+    errs = errors_of(tmp_path, mutate_schema=lambda s: s["tables"]["things"].__setitem__("indexes", bad_indexes))
+    assert any(substr in e or "indexes" in e for e in errs), errs

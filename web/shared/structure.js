@@ -8,13 +8,31 @@ export const NAME_RE = /^[a-z][a-z0-9_]{0,62}$/;
 export const TYPES = ["text", "integer", "number", "boolean", "date", "timestamp", "enum"];
 
 /** 이 화면이 만드는 구조 변경 연산(PATCH /config가 받는 것 가운데) */
-export const OPS = { columnAdd: "column.add", columnUpdate: "column.update", datasetAdd: "dataset.add" };
+export const OPS = {
+  columnAdd: "column.add",
+  columnUpdate: "column.update",
+  columnRename: "column.rename",
+  columnRemove: "column.remove",
+  datasetAdd: "dataset.add",
+};
 
-// 유형은 넓히기만 받는다(서버 dashkit/project/ops.py의 _WIDER)
+// 유형 넓히기·좁히기(서버 dashkit/project/ops.py의 _WIDER, _NARROWER)
 const WIDER = { integer: ["number", "text"], number: ["text"], boolean: ["text"], date: ["text"], timestamp: ["text"], enum: ["text"], text: [] };
+const NARROWER = {
+  text: ["integer", "number", "boolean", "date", "timestamp", "enum"],
+  enum: ["integer", "number", "boolean", "date", "timestamp"],
+  number: ["integer"],
+  timestamp: ["date"],
+};
 
 /** 그 유형에서 바꿀 수 있는 유형들(넓히기). */
 export const widenTargets = (type) => WIDER[type] || [];
+
+/** 그 유형에서 바꿀 수 있는 유형들(좁히기). */
+export const narrowTargets = (type) => NARROWER[type] || [];
+
+/** 그 유형에서 바꿀 수 있는 모든 유형들(넓히기 + 좁히기). */
+export const typeTargets = (type) => [...new Set([...widenTargets(type), ...narrowTargets(type)])];
 
 /** 쉼표·줄바꿈으로 나눈 enum 값 목록(앞뒤 공백 제거, 빈 것·겹친 것 빼기) */
 export function splitValues(text) {
@@ -112,6 +130,101 @@ export function columnUpdateOp(table, before, form) {
   if (problems.length) return { op: null, problems, typeChanged };
   if (!Object.keys(set).length) return { op: null, problems: [], typeChanged };
   return { op: { op: OPS.columnUpdate, table, column: before.name, set }, problems, typeChanged };
+}
+
+/** 열 이름 변경 + 규칙·유형 고치기 폼 → 연산 목록.
+ *  form: {name?, description, values, min, max, pattern, type}; existing: 테이블의 현재 열 이름 목록.
+ *  돌려주는 것: {ops, problems, typeChanged, typeNarrowed, renamed, needsCompact} */
+export function columnEditOps(table, before, form, existing = []) {
+  const ops = [];
+  const problems = [];
+  const norm = (v) => (v == null ? "" : String(v).trim());
+  const newName = form.name !== undefined ? norm(form.name) : before.name;
+  const renamed = newName !== before.name;
+  if (renamed) {
+    if (before.primary_key) problems.push({ field: "name", code: "primaryKey" });
+    else if (!NAME_RE.test(newName)) problems.push({ field: "name", code: "name" });
+    else if (existing.includes(newName)) problems.push({ field: "name", code: "exists" });
+    else ops.push({ op: OPS.columnRename, table, column: before.name, to: newName });
+  }
+
+  const targetType = form.type || before.type;
+  const typeChanged = targetType !== before.type;
+  const typeNarrowed = typeChanged && narrowTargets(before.type).includes(targetType);
+  const typeWidened = typeChanged && widenTargets(before.type).includes(targetType);
+  if (typeChanged && !typeWidened && !typeNarrowed) problems.push({ field: "type", code: "type" });
+
+  const set = {};
+  const desc = norm(form.description);
+  if (desc !== norm(before.description)) set.description = desc || null;
+  if (targetType === "enum") {
+    if (form.values !== undefined || before.type !== "enum") {
+      const values = splitValues(form.values);
+      if (!values.length) problems.push({ field: "values", code: "values" });
+      else if (before.type !== "enum" || values.join("\n") !== (before.values || []).map(String).join("\n")) set.values = values;
+    }
+  } else if (before.type === "enum") {
+    set.values = null;
+  }
+
+  if (["integer", "number", "date"].includes(targetType)) {
+    if (form.min !== undefined || form.max !== undefined) {
+      for (const k of ["min", "max"]) {
+        const v = norm(form[k]);
+        if (v === norm(before[k])) continue;
+        if (!v) { set[k] = null; continue; }
+        const kind = targetType === "date" ? "date" : targetType === "integer" ? "integer" : "number";
+        const bad = checkValue({ name: k, type: kind }, v);
+        if (bad) problems.push({ field: k, code: bad.code, arg: bad.arg });
+        else if (kind !== "date" && !exactNumber(tidy({ type: kind }, v))) problems.push({ field: k, code: "precision" });
+        else set[k] = kind === "date" ? tidy({ type: "date" }, v) : Number(tidy({ type: kind }, v));
+      }
+    }
+  } else {
+    for (const k of ["min", "max"]) if (before[k] != null) set[k] = null;
+  }
+
+  if (["text", "enum"].includes(targetType)) {
+    if (form.pattern !== undefined) {
+      const pat = norm(form.pattern);
+      if (pat !== norm(before.pattern)) set.pattern = pat || null;
+    }
+  } else if (before.pattern != null) {
+    set.pattern = null;
+  }
+
+  if (typeChanged) set.type = targetType;
+  if (Object.keys(set).length) ops.push({ op: OPS.columnUpdate, table, column: renamed ? newName : before.name, set });
+  const needsCompact = renamed || typeNarrowed;
+  if (problems.length) return { ops: [], problems, typeChanged, typeNarrowed, renamed, needsCompact };
+  return { ops, problems: [], typeChanged, typeNarrowed, renamed, needsCompact };
+}
+
+/** 열 삭제 연산 */
+export function columnRemoveOp(table, column) {
+  return { op: OPS.columnRemove, table, column };
+}
+
+/** used_by 응답에서 특정 열의 영향·차단 참조 추출 */
+export function columnImpact(used, column) {
+  const info = (used && used.columns && used.columns[column]) || null;
+  if (!info) return { datasets: [], charts: [], filters: [], sections: [], labels: [], blocking: [] };
+  const charts = info.charts || [];
+  const filters = info.filters || [];
+  const sections = info.sections || [];
+  const blocking = [
+    ...charts.filter((c) => c.direct).map((c) => ({ kind: "chart", ...c })),
+    ...filters.map((f) => ({ kind: "filter", ...f })),
+    ...sections.filter((s) => s.direct).map((s) => ({ kind: "section", ...s })),
+  ];
+  return {
+    datasets: info.datasets || [],
+    charts,
+    filters,
+    sections,
+    labels: info.labels || [],
+    blocking,
+  };
 }
 
 /** 데이터셋 만들기 폼 → dataset.add. form: {key, kind: "table"|"sql", table, sql, description}; existing: 있는 키 */

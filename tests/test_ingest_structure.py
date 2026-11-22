@@ -120,7 +120,7 @@ def test_required_column_without_default_and_type_narrowing_are_rejected(root, s
         {"op": "column.add", "table": "entries", "column": "x", "value": {"type": "text", "required": True}}]).value
     assert (err.status, err.detail) == (400, "invalid_op")
     err = pytest.raises(IngestError, change, root, scratch_db, [
-        {"op": "column.update", "table": "entries", "column": "amount", "set": {"type": "integer"}}]).value
+        {"op": "column.update", "table": "entries", "column": "amount", "set": {"type": "date"}}]).value
     assert (err.status, err.detail) == (400, "invalid_op")
     assert files(root) == before and structure.list_history("ledger") == []
 
@@ -397,3 +397,116 @@ def test_plan_does_not_recover_an_unfinished_structure_change(root, monkeypatch,
     assert cli.main(["plan"]) == 0
     assert "끝나지 않은 구조 변경이 1개" in capsys.readouterr().err
     assert files(root) == before and len(pending.list_records(record_dir)) == 1
+
+
+# ---------------------------------------------------------------- 스키마 진화(#43)
+
+def test_schema_evolution_rename_remove_and_narrow_on_append_and_replace(root, scratch_db):
+    load(load_project("ledger", root), dbname=scratch_db)
+    # append 테이블(entries)에 배치 추가 후 memo -> details 이름 변경, flag 삭제, amount(number -> integer) 좁히기
+    add(root, scratch_db, "entries", [{"id": "E801", "group_id": "g1", "state": "open", "qty": "2", "amount": "10.00", "memo": "n1"}])
+    # replace 테이블(groups)에 label 열 이름 변경(label -> title)
+    res = change(root, scratch_db, [
+        {"op": "column.rename", "table": "entries", "column": "memo", "to": "details"},
+        {"op": "column.remove", "table": "entries", "column": "flag"},
+        {"op": "column.update", "table": "entries", "column": "amount", "set": {"type": "integer"}},
+        {"op": "column.rename", "table": "groups", "column": "label", "to": "title"},
+    ])
+    assert res["changed"] and res["counts"]["entries"] >= 1
+    proj = load_project("ledger", root)
+    assert "details" in proj.schema["tables"]["entries"]["columns"]
+    assert "flag" not in proj.schema["tables"]["entries"]["columns"]
+    assert proj.schema["tables"]["entries"]["columns"]["amount"]["type"] == "integer"
+    assert list(proj.schema["tables"]["groups"]["columns"]) == ["id", "title"]
+    # append 배치는 -merged.csv.gz 하나로 합쳐졌다
+    entries_files = folder(root, "entries")
+    assert len(entries_files) == 1 and entries_files[0].endswith("-merged.csv.gz")
+    assert not (root / "ledger/data/entries.csv").exists()
+    assert not (root / "ledger/data/entries/_merged").exists()
+    rebuilt_equals_current(root, scratch_db)
+
+
+def test_schema_evolution_narrow_text_to_integer_date_boolean(root, scratch_db):
+    # 새 append 테이블을 text 열로 만든 뒤 다듬기 가능한 값들을 넣고 유형 좁히기
+    load(load_project("ledger", root), dbname=scratch_db)
+    csv_bytes = b"id,cnt,dt,flag\nR1,\"1,000\",2026/11/01,Y\nR2,20,2026-11-02,N\n"
+    proj = load_project("ledger", root)
+    inferred = newtable.infer_one(proj, "raw_items.csv", csv_bytes)
+    for c in inferred["columns"]:
+        c["type"] = "text"
+    op_list, first = newtable.build(proj, inferred, csv_bytes, "raw_items.csv", mode="append", dataset=False, suggest=False)
+    change(root, scratch_db, op_list, extra=first, action="table-create")
+
+    change(root, scratch_db, [
+        {"op": "column.update", "table": "raw_items", "column": "cnt", "set": {"type": "integer"}},
+        {"op": "column.update", "table": "raw_items", "column": "dt", "set": {"type": "date"}},
+        {"op": "column.update", "table": "raw_items", "column": "flag", "set": {"type": "boolean"}},
+    ])
+    got = sorted(rows(scratch_db, "raw_items"))
+    assert got == [
+        ("R1", 1000, __import__("datetime").date(2026, 11, 1), True),
+        ("R2", 20, __import__("datetime").date(2026, 11, 2), False),
+    ]
+    rebuilt_equals_current(root, scratch_db)
+
+
+def test_schema_evolution_invalid_values_report_exact_location_and_keep_everything_unchanged(root, scratch_db):
+    load(load_project("ledger", root), dbname=scratch_db)
+    # 1) append 테이블: number(10.5) -> integer 변환 불가
+    add(root, scratch_db, "entries", [{"id": "E901", "group_id": "g1", "state": "open", "amount": "10.5", "memo": "bad"}])
+    before = files(root)
+    before_rows = all_rows(scratch_db)
+    err = pytest.raises(IngestError, change, root, scratch_db, [
+        {"op": "column.update", "table": "entries", "column": "amount", "set": {"type": "integer"}},
+    ]).value
+    assert (err.status, err.detail) == (422, "invalid_rows")
+    assert any("E901" in e and "amount" in e and "0000" in e for e in err.errors), err.errors
+    assert files(root) == before and all_rows(scratch_db) == before_rows and leftovers(root) == []
+
+    # 2) replace 테이블: text("abc") -> integer 변환 불가
+    p = root / "ledger/data/groups.csv"
+    p.write_text("id,label\ng1,abc\ng2,20\n", encoding="utf-8")
+    load(load_project("ledger", root), dbname=scratch_db)
+    before2 = files(root)
+    err2 = pytest.raises(IngestError, change, root, scratch_db, [
+        {"op": "column.update", "table": "groups", "column": "label", "set": {"type": "integer"}},
+    ]).value
+    assert (err2.status, err2.detail) == (422, "invalid_rows")
+    assert any("data/groups.csv:2:label" in e for e in err2.errors), err2.errors
+    assert files(root) == before2
+
+
+def test_schema_evolution_load_failure_rolls_back_compacted_batches(root, scratch_db):
+    """sql: 뷰(summary)가 참조하는 amount 열을 삭제하면 load_failed와 함께 YAML·옛 배치가 원상 복구된다."""
+    load(load_project("ledger", root), dbname=scratch_db)
+    before = files(root)
+    before_rows = all_rows(scratch_db)
+    err = pytest.raises(IngestError, change, root, scratch_db, [
+        {"op": "column.remove", "table": "entries", "column": "amount"},
+    ]).value
+    assert (err.status, err.detail) == (422, "load_failed")
+    assert files(root) == before and all_rows(scratch_db) == before_rows and leftovers(root) == []
+
+
+@pytest.mark.parametrize("where, kept", [("after_move", False), ("before_commit", False), ("after_commit", True)])
+def test_schema_evolution_crash_recovery(root, scratch_db, fault, where, kept):
+    load(load_project("ledger", root), dbname=scratch_db)
+    add(root, scratch_db, "entries", [{"id": "E920", "group_id": "g1", "state": "open", "memo": "n"}])
+    before = files(root)
+    before_rows = all_rows(scratch_db)
+    fault(where, SimulatedCrash())
+    with pytest.raises(SimulatedCrash):
+        change(root, scratch_db, [{"op": "column.rename", "table": "entries", "column": "memo", "to": "details"}],
+               action="column-rename")
+    from dashkit.ingest import operation
+
+    operation.FAULTS.clear()
+    structure.recover_before_read("ledger", root, dbname=scratch_db)
+    load(load_project("ledger", root), dbname=scratch_db)
+    assert leftovers(root) == []
+    if kept:
+        assert "details" in load_project("ledger", root).schema["tables"]["entries"]["columns"]
+        assert len(folder(root, "entries")) == 1
+    else:
+        assert files(root) == before and all_rows(scratch_db) == before_rows
+    rebuilt_equals_current(root, scratch_db)

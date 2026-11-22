@@ -48,10 +48,13 @@ function historyView(my) {
     },
     columns: [
       { key: "at", label: D.historyAt, render: (m) => h("span", { class: "num", text: T.fmtDateTime(m.at) }) },
-      { key: "action", label: D.historyActionLabel, render: (m) => h("span", { title: m.action, text: D.historyAction[m.action] || m.action }) },
+      { key: "action", label: D.historyActionLabel, render: (m) => h("span", { class: "d-stack" },
+        h("span", { title: m.action, text: D.historyAction[m.action] || m.action }),
+        m.irreversible ? h("small", { class: "a-key", text: D.irreversibleBadge }) : null) },
       { key: "files", label: D.historyFiles, wrap: true, render: (m) => h("span", { class: "d-stack" },
         (m.files || []).map((f) => h("span", { class: "mono", text: f.before == null ? `${f.path} ${D.fileCreated}` : f.after == null ? `${f.path} ${D.fileDeleted}` : f.path }))) },
       { key: "act", label: D.actions, render: (m) => {
+        if (m.irreversible) return null;
         const b = btn(D.restoreThis, () => restore(m, b), "small");
         b.setAttribute("aria-label", D.restoreThisAt(T.fmtDateTime(m.at)));
         return b;

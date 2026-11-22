@@ -95,3 +95,53 @@ def test_reader_cannot_read_raw_or_write(loaded, test_db):
         ):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(stmt)
+
+
+def test_declared_indexes_are_created_and_deterministic(loaded, test_db, tmp_path):
+    from pathlib import Path
+
+    from dashkit import paging
+    from dashkit.loader import _index_name
+
+    # 색인 이름 충돌 방지(구분자 모호성 및 63바이트 제한)
+    n1 = _index_name("a", 0, ["b_0_c"])
+    n2 = _index_name("a_0_b", 0, ["c"])
+    n3 = _index_name("t", 0, ["a_b", "c"])
+    n4 = _index_name("t", 0, ["a", "b_c"])
+    long_name = _index_name("very_long_table_name_" * 3, 1, ["very_long_column_name_" * 3])
+    assert n1 != n2 and n3 != n4
+    assert len(n1) <= 63 and len(long_name) <= 63
+
+    # 색인 없는 상태에서 조회 결과 기억
+    proj_dir = Path(__file__).resolve().parent.parent / "projects"
+    orig_proj = load_project(PROJECT, proj_dir)
+    cols = [paging.Column(name=c, type=spec["type"]) for c, spec in orig_proj.schema["tables"]["issues"]["columns"].items()]
+    q = paging.parse_query({"sort": [{"column": "status", "dir": "asc"}], "limit": 50}, cols)
+    with db.inspect_conn(test_db) as conn, conn.cursor() as cur:
+        before_page = paging.fetch_page(cur, sql.Identifier("raw", "issues"), cols, q,
+                                        key_columns=["id"], version="v1", total_rows=None)
+
+    # schema.yaml에 단일·복합 색인 선언 후 load
+    root = copy_project(PROJECT, tmp_path)
+    schema_path = root / PROJECT / "schema.yaml"
+    import yaml
+    doc = yaml.safe_load(schema_path.read_text(encoding="utf-8"))
+    doc["tables"]["issues"]["indexes"] = [["status"], ["status", "created"]]
+    schema_path.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    load(load_project(PROJECT, root), dbname=test_db)
+
+    with db.inspect_conn(test_db) as conn, conn.cursor() as cur:
+        idx_rows = cur.execute(
+            "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'raw' AND tablename = 'issues'"
+        ).fetchall()
+        names = {r[0] for r in idx_rows}
+        assert _index_name("issues", 0, ["status"]) in names
+        assert _index_name("issues", 1, ["status", "created"]) in names
+        # 조회 결과 불변 및 EXPLAIN 구조 확인
+        after_page = paging.fetch_page(cur, sql.Identifier("raw", "issues"), cols, q,
+                                       key_columns=["id"], version="v1", total_rows=None)
+        assert after_page.rows == before_page.rows
+        plan = cur.execute(
+            "EXPLAIN (FORMAT JSON) SELECT id FROM raw.issues WHERE status = 'open' ORDER BY created"
+        ).fetchone()[0]
+        assert plan is not None

@@ -42,7 +42,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `GET /health` | 불필요 | `{"status": "ok"}` |
 | `GET /config` | 운용자 | `{"project", "role", "limits", "features"}`. 운용 화면이 데이터 메뉴와 선택 기능 UI를 그리는 데 쓴다 |
 | `GET /tables` | 운용자 | `{"items", "total", "project"}`. 항목 `{name, mode, on_conflict, description, rows, batches, compact_hint, used_by, last_batch: {file, added_at, actor_email} \| null}` (+ `MANAGE_FEATURES=freshness`일 때 `freshness`, `stale`). `rows`는 배치 기록의 `inserted` 합(적용한 적이 없으면 `null`), `batches`는 배치 폴더의 파일 수, `compact_hint`는 그 수가 `INGEST_COMPACT_HINT`를 넘는지, `used_by`는 그 테이블을 읽는 데이터셋의 수(계보) |
-| `GET /tables/{t}` | 운용자 | 입력 폼을 만드는 정의: `{name, mode, on_conflict, description, primary_key, revision, freshness?, columns: [{name, type, required, primary_key, label, values?, ref?, min?, max?, pattern?, description?, default?, aliases?}], checks: [이름], datasets: [그 테이블을 그대로 보는 데이터셋]}`. `label`은 그 테이블을 보는 `table:` 데이터셋의 `labels` |
+| `GET /tables/{t}` | 운용자 | 입력 폼을 만드는 정의: `{name, mode, on_conflict, description, primary_key, revision, freshness?, indexes, columns: [{name, type, required, primary_key, label, values?, ref?, min?, max?, pattern?, description?, default?, aliases?}], checks: [이름], datasets: [그 테이블을 그대로 보는 데이터셋]}`. `label`은 그 테이블을 보는 `table:` 데이터셋의 `labels` |
 | `POST /tables/{t}/batches` | 운용자 또는 API 토큰 | **데이터 더하기**([ingest.md](ingest.md) "더하기"). 아래 "데이터 더하기". API 토큰은 `MANAGE_FEATURES=tokens`일 때 `token.project == 현재 프로젝트`이고 `t in token.tables`인 `append` 테이블만 허용(아니면 403 `forbidden`, 비활성 시 401 `unauthenticated`, 무효·만료·폐기 시 401 `invalid_token`) |
 | `GET /tables/{t}/batches?removed=1` | 운용자 | 배치 이력, 최근 것부터: `{"items", "total"}`. 항목 `{file, removed, first, merged, added_at, recorded, rows, inserted, updated, skipped, unchanged, actor_email, method, source_name, mine}`. 누가·방법·원래 파일 이름은 감사 로그(`data.batch.create`)에서 온다. `mine`은 요청한 사람이 더한 배치인지. `removed=1`이면 `_removed/`의 배치도 싣는다 |
 | `GET /tables/{t}/batches/{file}` | 운용자 | 배치 파일 내려받기(정규형 그대로, `.csv.gz`는 `application/gzip`) |
@@ -57,13 +57,13 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `POST /datasets/{d}/rows/query` | 운용자 | 그래프가 실제로 보는 뷰(`dash.<d>`)의 행 조회 |
 | `GET /datasets` | 운용자 | 데이터셋 목록 `{"items", "total"}`: `{key, kind: "table" \| "sql", table, sources, description, used_by, labels}`. `sources`는 그 뷰가 읽는 테이블과 열(계보. `sql:`이고 적용 전이면 `null`), `used_by`는 그 데이터셋을 쓰는 차트·위젯 섹션의 수(설정에서 센다) |
 | `GET /lineage` | 운용자 | 계보(아래 "구조 변경") |
-| `GET /tables/{t}/used_by` | 운용자 | 그 테이블의 쓰이는 곳: `{table, datasets, charts: [{key, title, dashboard, dataset, tabs}], sections: [{tab, index, type, dataset}], tabs, unknown_datasets}` |
+| `GET /tables/{t}/used_by` | 운용자 | 그 테이블의 쓰이는 곳: `{table, datasets, charts: [{key, title, dashboard, dataset, tabs}], sections: [{tab, index, type, dataset}], tabs, unknown_datasets, columns: {<열>: {datasets, charts, filters, sections, labels}}}` |
 | `PATCH /config` | admin | 구조 변경: `{"ops": [연산…], "revision"}` → 202 작업(아래 "구조 변경") |
 | `POST /tables/infer` | admin | 새 테이블 추론: multipart `file`(CSV 하나) → 200 `{upload_id, source_name, table, mode, on_conflict, dataset, suggest}`. 파일은 쓰지 않고 1시간 잡아 둔다 |
 | `POST /tables` | admin | 새 테이블 만들기: `{upload_id, table, mode?, on_conflict?, dataset?, suggest?, revision}` → 202 작업 |
 | `POST /tables/{t}/compact` | admin | 합치기 → 202 작업. `append` 테이블만(아니면 409 `not_append`) |
-| `GET /history` | admin | 설정 변경 이력, 최근 것부터: `{"items": [{id, action, at, files: [{path, before, after}]}], "total", "revision"}` |
-| `POST /history/{id}/restore` | admin | 그 판으로 되돌리기: `{"revision"}` → 202 작업. 없는 이력은 404 `unknown_history` |
+| `GET /history` | admin | 설정 변경 이력, 최근 것부터: `{"items": [{id, action, at, irreversible?, files: [{path, before, after}]}], "total", "revision"}` |
+| `POST /history/{id}/restore` | admin | 그 판으로 되돌리기: `{"revision"}` → 202 작업. 없는 이력은 404 `unknown_history`, 배치 합치기를 동반한 이력(`irreversible: true`)은 409 `irreversible_history` |
 | `GET /tokens` | admin | 현재 프로젝트의 API 토큰 목록(`MANAGE_FEATURES=tokens`, 비활성 시 404 `not_found`): `{"items", "total"}` |
 | `POST /tokens` | admin | API 토큰 발급(`MANAGE_FEATURES=tokens`, 비활성 시 404 `not_found`): `{"name", "tables", "expires_at"}` → 201 `token` 원문 1회 반환(`append` 테이블, 미래~365일 이내 만료일 검증). 감사 로그 `data.token.create` |
 | `DELETE /tokens/{id}` | admin | API 토큰 소프트 폐기(`MANAGE_FEATURES=tokens`, 비활성 시 404 `not_found`): 204(멱등, 없는 토큰 404 `unknown_token`). 감사 로그 `data.token.revoke` |
@@ -133,10 +133,10 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 
 형식과 동작(바뀌는 파일, 순서, 설정 변경 이력, 끊김 복구, 합치기, 계보)은 [ingest.md](ingest.md) "구조 변경"·"합치기"·"계보", 연산은 [studio.md](studio.md) "변경 연산"이다.
 
-- `PATCH /config`가 받는 연산은 `table.add`, `table.update`, `table.remove`, `column.add`, `column.update`, `dataset.add`, `dataset.update`, `dataset.remove`뿐이다(그 밖은 422 `invalid_op`. 탭·섹션·차트 연산은 Studio에서 한다). `revision`이 없으면 400 `invalid_request`.
-- 요청을 받을 때 연산 형식(400 `invalid_op`)·새 설정 검사(422 `invalid_config`)·쓰는 곳(409 `in_use`: 데이터셋이 읽는 테이블이나 다른 테이블이 `ref`로 가리키는 테이블의 삭제, 그래프가 쓰는 데이터셋의 삭제. `errors`에 `데이터셋 <키>`·`참조 <테이블.열>`·`차트 <키>`·`섹션 <탭>#<번호>`)을 먼저 보고, 통과하면 202 작업이다. 배치 파일이 있는 `append` 테이블이 새 설정에서 `replace`가 되는 변경(연산이든 설정 이력 되돌리기든)은 422 `invalid_op`(배치를 읽지 않게 된다. 작업도 잠금 안에서 파일을 바꾸기 전에 지금 설정과 새 설정을 견주어 다시 본다).
-- 작업이 잠금 안에서 다시 검사한다. 작업의 실패는 `error`에 담긴다: 409 `stale_config`(그 사이 설정이 바뀜), 422 `load_failed`(+`errors`, 모든 파일을 되돌렸다), 409 `apply_running`·`project_mismatch`.
-- 작업의 결과: `{changed: [경로], history: <이력 id>, revision, counts: {테이블: 행 수}, sync: {ok, errors}, affected?, datasets_without_column?}`. `affected`는 유형을 바꾸는 열 연산이 닿는 데이터셋·차트(`[{table, column, datasets, charts}]`), `datasets_without_column`은 더한 열이 나오지 않는 `sql:` 데이터셋(`[{table, column, datasets}]`)이다. 새 테이블은 `table`, `dataset`, `dashboard`, `tab`도 싣는다. 되돌리기는 `restored`(이력 id)를 싣는다.
+- `PATCH /config`가 받는 연산은 `table.add`, `table.update`, `table.remove`, `column.add`, `column.update`, `column.rename`, `column.remove`, `dataset.add`, `dataset.update`, `dataset.remove`뿐이다(그 밖은 422 `invalid_op`. 탭·섹션·차트 연산은 Studio에서 한다). `revision`이 없으면 400 `invalid_request`.
+- 요청을 받을 때 연산 형식(400 `invalid_op`)·새 설정 검사(422 `invalid_config`)·쓰는 곳(409 `in_use`: 데이터셋이 읽는 테이블이나 다른 테이블이 `ref`로 가리키는 테이블의 삭제, 그래프가 쓰는 데이터셋의 삭제, 차트·필터·위젯·`ref`가 직접 참조하는 열의 `column.rename`·`column.remove`. `errors`에 `데이터셋 <키>`·`참조 <테이블.열>`·`차트 <키>`·`필터 <대시보드>.<키>`·`섹션 <탭>#<번호>`)을 먼저 보고, 통과하면 202 작업이다. 배치 파일이 있는 `append` 테이블이 새 설정에서 `replace`가 되는 변경(연산이든 설정 이력 되돌리기든)은 422 `invalid_op`(배치를 읽지 않게 된다. 작업도 잠금 안에서 파일을 바꾸기 전에 지금 설정과 새 설정을 견주어 다시 본다).
+- 작업이 잠금 안에서 다시 검사한다. 작업의 실패는 `error`에 담긴다: 409 `stale_config`(그 사이 설정이 바뀜), 422 `invalid_rows`(변환 불가 값의 파일·줄·열·기본 키·이유), 422 `load_failed`(+`errors`, 모든 파일을 되돌렸다), 409 `rebuild_required`·`apply_running`·`project_mismatch`.
+- 작업의 결과: `{changed: [경로], history: <이력 id>, revision, counts: {테이블: 행 수}, sync: {ok, errors}, affected?, datasets_without_column?}`. `affected`는 유형 변경·이름 변경·삭제 연산이 닿는 데이터셋·차트·섹션(`[{table, column, op, to?, datasets, charts, sections}]`), `datasets_without_column`은 더한 열이 나오지 않는 `sql:` 데이터셋(`[{table, column, datasets}]`)이다. 새 테이블은 `table`, `dataset`, `dashboard`, `tab`도 싣는다. 되돌리기는 `restored`(이력 id)를 싣는다.
 - 새 테이블: `POST /tables/infer`의 `table`을 사람이 고쳐 그대로 보낸다(`name`, `primary_key`, `columns: [{name, type, source?, required?, values?, ref?, description?, min?, max?, pattern?}]`). 추론 규칙과 원래 머리글의 `aliases`는 [scaffold.md](scaffold.md) "운용 화면의 새 테이블". 이름이 이미 있거나 그 이름의 데이터 파일이 남아 있으면(지운 테이블. 남은 파일을 새 테이블에 섞지 않는다. 작업도 잠금 안에서 다시 본다) 409 `table_exists`, 이름·열 형식이 틀리면 422 `invalid_request`, 첫 파일이 규칙을 통과하지 못하면 422 `invalid_rows`(+`errors`). `upload_id`가 없거나 지났으면 410 `upload_expired`.
 - 감사 로그: `data.table.create`·`data.table.alter`·`data.table.drop`, `data.dataset.create`·`data.dataset.alter`·`data.dataset.drop`, `data.config.restore`, `data.batch.compact`([auth.md](auth.md) "감사 로그"). 데이터 값은 싣지 않는다.
 - 설정 파일은 서버에서 바뀐다. `GET /export`로 내려받아 사람이 저장소에 커밋한다(설계서 D4). 관리 서비스와 Studio가 같은 프로젝트를 동시에 고치면 `revision`이 어긋난 쪽이 409 `stale_config`다.
