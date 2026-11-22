@@ -58,7 +58,8 @@ def _recorded(*, lock_timeout_ms: int | None = None, raise_on_lock: bool = False
         with db.inspect_conn() as conn:
             with conn.cursor() as cur:
                 if lock_timeout_ms is not None:
-                    cur.execute("SELECT set_config('lock_timeout', %s, true)", (f"{int(lock_timeout_ms)}ms",))
+                    # PostgreSQL에서 lock_timeout=0은 무제한 대기이므로 최소 1ms로 제한한다
+                    cur.execute("SELECT set_config('lock_timeout', %s, true)", (f"{max(int(lock_timeout_ms), 1)}ms",))
                 return ledger.read(cur)
     except psycopg.errors.LockNotAvailable:
         if raise_on_lock:
@@ -428,7 +429,7 @@ async def delete_batch(table: str, file: str, request: Request, principal: Princ
 
     def fast() -> dict[str, Any] | None:
         if not _is_fast_remove_candidate(project, name, file,
-                                         lock_timeout_ms=min(limits.lock_wait_ms, FAST_CHECK_LOCK_TIMEOUT_MS)):
+                                         lock_timeout_ms=max(1, min(limits.lock_wait_ms, FAST_CHECK_LOCK_TIMEOUT_MS))):
             return None
         try:
             result = remove_batch(project.name, name, file, fast_only=True, wait_ms=limits.lock_wait_ms)

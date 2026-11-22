@@ -404,3 +404,7 @@ def test_is_fast_remove_candidate_returns_false_on_lock_timeout(tmp_path, monkey
     # 000010-20261121T0102Z.csv 는 ledger 픽스처의 가장 최근 배치
     assert not tables_route._is_fast_remove_candidate(project, "entries", "000010-20261121T0102Z.csv", lock_timeout_ms=150)
     assert seen_sql and "lock_timeout" in seen_sql[0][0] and seen_sql[0][1] == ("150ms",)
+
+    seen_sql.clear()
+    assert not tables_route._is_fast_remove_candidate(project, "entries", "000010-20261121T0102Z.csv", lock_timeout_ms=0)
+    assert seen_sql and seen_sql[0][1] == ("1ms",)
