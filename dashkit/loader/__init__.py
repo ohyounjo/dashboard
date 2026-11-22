@@ -275,7 +275,8 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
         "CREATE FUNCTION {}.as_of() RETURNS date LANGUAGE sql STABLE AS {}"
     ).format(dash, sql.Literal(as_of_sql)))
 
-    # 데이터셋 뷰(설정 순서. 뒤 뷰가 앞 뷰를 쓸 수 있다)
+    # 데이터셋 뷰(설정 순서. 뒤 뷰가 앞 뷰를 쓸 수 있다. SQL 콘솔과 동일한 search_path 적용)
+    _step(cur, "search_path 설정", sql.SQL("SET LOCAL search_path = {}, {}, public").format(raw, dash))
     for key, ds in project.dashboard["datasets"].items():
         if "table" in ds:
             body = sql.SQL("SELECT * FROM {}.{}").format(raw, sql.Identifier(ds["table"]))
@@ -287,6 +288,7 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
                 cur.execute(stmt)
         except psycopg.Error as exc:
             errors.append(f"dashboard.yaml:datasets.{key}: 뷰 생성 실패: {_pg_message(exc)}")
+    _step(cur, "search_path 복원", sql.SQL("RESET search_path"))
     if errors:
         raise _StepError(errors)
 

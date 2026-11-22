@@ -335,6 +335,12 @@ def test_sql_console_blocks_sensitive_columns_and_views(sql_clients, monkeypatch
                     cols = _view_columns(cur, mix_v)
             assert [c.name for c in cols] == ["id", "secret"]
             assert [c.type for c in cols] == ["integer", "text"]
+
+            # loader/current._read_schema_columns(pg_attribute)도 권한 제한된 뷰의 전체 열을 반환하는지 검증
+            from dashkit.loader.current import read_view_columns
+            with db.inspect_conn() as ic:
+                vcols = read_view_columns(ic, [mix_v])
+            assert vcols[mix_v] == [("id", "integer"), ("secret", "text")]
         finally:
             with db.owner_conn() as conn:
                 conn.execute(f"DROP VIEW IF EXISTS dash.{mix_v}")
