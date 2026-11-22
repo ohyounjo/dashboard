@@ -137,7 +137,7 @@ export default {
   planColsRetyped: (names) => `타입 변경: ${names}`,
   planColsReordered: "열 순서 변경",
   planFirst: "처음 적용: 전부 새로 만듭니다",
-  planReplaces: (count) => `지금 적용된 프로젝트의 객체 ${n(count)}개 삭제`,
+  planReplaces: (count) => (count == null ? "지금 적용된 프로젝트의 관리 객체 삭제(상태 파일 없음)" : `지금 적용된 프로젝트의 객체 ${n(count)}개 삭제`),
   planPrune: (count) => `지난 적용에서 지우지 못한 객체 ${n(count)}개 삭제 재시도`,
   planAdded: (count) => `추가 ${n(count)}`,
   planChanged: (count) => `변경 ${n(count)}`,

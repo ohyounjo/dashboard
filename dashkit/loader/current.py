@@ -43,6 +43,11 @@ class LoadRecord:
     def project(self) -> str | None:
         return self.snapshot.get("project")
 
+    @property
+    def replaced_projects(self) -> list[str]:
+        raw = self.snapshot.get("replaced_projects")
+        return [p for p in raw if isinstance(p, str) and p] if isinstance(raw, list) else []
+
 
 def pg_message(exc: BaseException) -> str:
     diag = getattr(exc, "diag", None)
@@ -195,6 +200,25 @@ def reader_view_columns(dbname: str | None = None) -> dict[str, list[tuple[str, 
         return read_view_columns(conn)
 
 
+def _query_snapshot(cur: psycopg.Cursor) -> dict[str, Any] | None:
+    cur.execute(sql.SQL("SELECT snapshot FROM {}.{} WHERE id = 1").format(
+        sql.Identifier(record.META), sql.Identifier(record.SNAPSHOT_TABLE)))
+    row = cur.fetchone()
+    return row[0] if row is not None and isinstance(row[0], dict) else None
+
+
+def read_load_snapshot(conn: psycopg.Connection) -> dict[str, Any] | None:
+    """지난 적재 스냅샷만 읽는다(dash_reader 전용). 없으면 None."""
+    try:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                return _query_snapshot(cur)
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InvalidSchemaName, psycopg.errors.InsufficientPrivilege):
+        return None
+    except psycopg.Error as exc:
+        raise CurrentError(f"적재 기록을 읽지 못함: {pg_message(exc)}") from None
+
+
 def read_load_record(conn: psycopg.Connection, tables: Sequence[str] | None = None,
                      *, include_fingerprints: bool = True) -> LoadRecord | None:
     """지난 적재 기록. 없으면 None(아직 적재한 적이 없거나, 기록을 남기기 전의 dashkit으로 적재한 DB).
@@ -207,12 +231,10 @@ def read_load_record(conn: psycopg.Connection, tables: Sequence[str] | None = No
     try:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute(sql.SQL("SELECT snapshot FROM {}.{} WHERE id = 1").format(
-                    meta, sql.Identifier(record.SNAPSHOT_TABLE)))
-                row = cur.fetchone()
-                if row is None or not isinstance(row[0], dict):
+                snap = _query_snapshot(cur)
+                if snap is None:
                     return None
-                out = LoadRecord(row[0], fingerprints_readable=bool(include_fingerprints))
+                out = LoadRecord(snap, fingerprints_readable=bool(include_fingerprints))
             if include_fingerprints and (tables is None or len(tables) > 0):
                 try:
                     with conn.transaction():

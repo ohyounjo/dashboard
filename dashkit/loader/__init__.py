@@ -192,6 +192,18 @@ def _step(cur: psycopg.Cursor, label: str, query) -> None:
         raise _StepError([f"{label}: {_pg_message(exc)}"]) from None
 
 
+def _read_prev_snapshot(cur: psycopg.Cursor) -> dict | None:
+    """같은 적재 트랜잭션 안에서 기존 dashkit_meta.load_snapshot을 savepoint로 읽는다."""
+    try:
+        with cur.connection.transaction():
+            cur.execute(sql.SQL("SELECT snapshot FROM {}.{} WHERE id = 1").format(
+                sql.Identifier(record.META), sql.Identifier(record.SNAPSHOT_TABLE)))
+            row = cur.fetchone()
+            return row[0] if row is not None and isinstance(row[0], dict) else None
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InvalidSchemaName):
+        return None
+
+
 def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
              data: dict[str, TableData], sources: dict[str, list], as_of_sql: str) -> dict[str, int]:
     from ..ingest import apply as ingest_apply
@@ -324,8 +336,10 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
         raise _StepError([str(exc)]) from None
     prints = {t: record.fingerprints(tables[t], data[t].rows, table_name=t, key=fkey)
               for t in order if t in data}
+    replaced = record.next_replaced_projects(_read_prev_snapshot(cur), project.name)
     snap = record.snapshot(project.name, project.schema, project.dashboard, counts,
-                           sources=sources, fingerprint_key_id=record.key_id(fkey))
+                           sources=sources, replaced_projects=replaced,
+                           fingerprint_key_id=record.key_id(fkey))
     try:
         record.write(cur, snap, prints, os.environ.get("DATA_DB_READER_USER") or "dash_reader", batch_rows, readers)
     except psycopg.Error as exc:

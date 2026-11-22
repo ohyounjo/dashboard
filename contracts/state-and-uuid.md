@@ -48,17 +48,26 @@ sync(tools 컨테이너)가 읽는 환경변수다. 기본은 `1`(화면 편집 
 
 `external_url`은 두 경우 모두 같다. 값을 바꾼 뒤 `make sync`(또는 `make apply`)를 다시 돌리면 이번 목록의 객체가 모두 새 값으로 바뀐다.
 
-### sync가 만든 객체를 Superset에서 찾는 규칙 (`dashkit/sync/__init__.py`의 `find_marked`)
+### sync가 만든 객체를 Superset에서 찾는 규칙 (`dashkit/sync/__init__.py`의 `discover_project_objects` · `find_marked`)
 
-`.state/managed.json` 없이 prune 대상을 구할 때 쓴다. 목록 API는 표식으로 거를 수 없고 `external_url`을 읽을 수 없어서, 프로젝트는 데이터베이스에서 따라간다.
+`.state/managed.json` 없이 prune 대상을 구할 때 쓴다. 목록 API는 표식으로 거를 수 없고 `external_url`을 읽을 수 없어서, 프로젝트는 데이터베이스에서 따라간다(`superset-notes.md` 11·16절).
 
 1. 데이터베이스: 이름이 `dashkit-<프로젝트>`이고 UUID가 `uuid5(<프로젝트>/database/main)`인 것. 없으면 찾은 것이 없는 것으로 한다.
-2. 데이터셋: 그 데이터베이스에 속한 것.
-3. 차트: 2의 데이터셋을 쓰는 것(`datasource_type: table`).
-4. 대시보드: 3의 차트가 놓인 것.
-5. 2~4 가운데 **`is_managed_externally`가 true이거나 UUID가 버전 5인 것**만 "sync가 만든 객체"다. Superset 화면이나 REST로 만든 객체는 표식이 없고 UUID가 버전 4라서 들어가지 않는다. 다른 데이터베이스의 객체(다른 프로젝트, 사람이 만든 것)는 1에서 걸러진다.
+2. 데이터셋: 1의 데이터베이스에 속하고 `schema == "dash"`이며 UUID가 `uuid5(<프로젝트>/dataset/<table_name>)`인 것(`SYNC_LOCK_UI=0` 포함). 같은 DB에 사람이 추가한 데이터셋은 UUID가 버전 4라서 들어가지 않는다.
+3. 차트: 2의 데이터셋을 쓰는 것(`datasource_type: table`) 중 `_made_by_sync`(`is_managed_externally`가 true이거나 UUID가 버전 5)인 것.
+4. 대시보드: 3의 차트가 놓인 것 중 `_made_by_sync`인 것.
 
-UUID 버전 조건은 `SYNC_LOCK_UI=0`으로 만든 객체와, 잠금 값을 바꾸는 사이에 설정에서 빠진 객체를 놓치지 않기 위한 것이다.
+Superset 화면이나 REST로 만든 객체는 UUID가 버전 4라서 1~4에 들어가지 않는다. 다른 프로젝트의 객체는 1에서 구분된다.
+
+### 수동 의존성 보존과 역방향 실패 전파 차단 (`plan_prune`)
+
+Superset 6.1.0에서는 수동 차트가 붙은 데이터셋이나 수동 대시보드가 포함하는 차트를 지우면 `DELETE`가 HTTP 200으로 성공하며 수동 객체가 고아화(`datasource_id=None`)되거나 차트 목록이 비워진다. 수동 데이터셋이 붙은 DB 삭제는 HTTP 422로 거절된다(`superset-notes.md` 16-3절). 따라서 `plan_prune()`은 삭제 실행 전에 아래 순서를 거꾸로 검사해 보존한다.
+
+1. 삭제 대상이 아닌 대시보드(수동 또는 유지 대시보드)가 참조하는 관리 차트는 **보존**한다.
+2. 삭제 대상이 아닌 차트(수동 차트, 1에서 보존된 차트, 현재 차트)가 참조하는 관리 데이터셋은 **보존**한다.
+3. 삭제 대상이 아닌 데이터셋(수동 데이터셋, 2에서 보존된 데이터셋, 현재 데이터셋)이 소속된 관리 DB는 **보존**한다.
+
+수동 의존성으로 보존한 객체는 오류가 아니므로 `managed.json`의 `leftovers`에 남기지 않고 로그로 알린다. 반대로 삭제 시도 중 실패가 나면 그 객체의 부모(대시보드 실패 → 차트 → 데이터셋 → DB) 삭제를 건너뛰고 `managed.json`에 남겨, 중단 뒤 상태 파일이 사라지더라도 `DB → 데이터셋 → 차트 → 대시보드` 계보가 끊어지지 않게 한다.
 
 ## `.state/embed.json`
 
@@ -81,7 +90,15 @@ sync가 쓰고 backend가 읽는다(읽기 전용 마운트). 쓰기는 임시 �
 
 ## `.state/managed.json`
 
-sync만 읽고 쓴다. 지난 sync가 만든 Superset 객체 목록이다. 다음 sync에서 이번 설정에 없는 UUID를 지운다(prune). 표식으로 찾는 방법(위 "표식")이 생긴 뒤로는 보조 수단이다. 이 파일만 할 수 있는 일은 **다른 프로젝트로 바꿨을 때 이전 프로젝트의 객체를 지우는 것**과 prune에 실패한 객체를 다음 실행에 다시 시도하는 것이다.
+sync만 읽고 쓴다. 지난 sync가 만든 Superset 객체 목록이다. 다음 sync에서 이번 설정에 없는 UUID를 지운다(prune). 상태 파일이 없을 때는 아래 순서로 이전 프로젝트를 식별한다.
+
+1. **같은 프로젝트의 빠진 객체:** `discover_project_objects`로 현재 프로젝트의 관리 객체를 찾아 이번 설정에 없는 것을 지운다.
+2. **프로젝트 전환 (`A → B`):**
+   - `managed.json`이 없으면, 5단계에서 `embed.json`을 덮어쓰기 전에 읽은 `embed.json`의 이전 `project`와 `data-db`의 적재 기록(`dashkit_meta.load_snapshot.replaced_projects`, 현재 프로젝트 `B`로 적재된 스냅샷일 때만 신뢰, `dash_reader`로만 조회)에서 교체된 이전 프로젝트 목록을 구한다.
+   - 각 이전 프로젝트 DB(`dashkit-<이전>`)는 `uuid5` 일치에 더해 `GET /api/v1/database/<id>/connection`의 대상 `(host, port, dbname)`이 현재 `DATA_DB_*`와 일치할 때만 자동 정리 대상으로 삼는다(불일치·조회 실패 시 비삭제 및 경고).
+3. **자동 정리하지 않는 경계 (안전 우선):**
+   - `.state/`와 `data-db` 전환 계보가 **모두** 없으면(`make reset` 직후 또는 `load` 없이 실행한 공존 프로젝트 등) Superset의 다른 `dashkit-*` DB를 자동 삭제하지 않고 비파괴 경고 로그만 남긴다.
+   - `SYNC_LOCK_UI=0`으로 관리 차트를 수동으로 모두 뺀 뒤 빈 상태가 된 대시보드나, 외부·타 스택 DB를 가리키는 관리 DB는 `slug` 추측 등으로 지우지 않는다.
 
 ```json
 {
@@ -99,13 +116,13 @@ sync만 읽고 쓴다. 지난 sync가 만든 Superset 객체 목록이다. 다�
 
 ## sync 순서 (plan 6-2절 3번)
 
-1. 설정을 읽고 뷰의 열 정보를 `information_schema`에서 읽는다(dash_reader).
+1. 설정을 읽고 뷰의 열 정보를 `information_schema`에서 읽고(`dash_reader`), `dashkit_meta.load_snapshot`이 현재 프로젝트의 것이면 `replaced_projects`를 함께 읽는다.
 2. 번들을 `.build/<프로젝트>/bundle.zip`에 만든다. 같은 내용을 풀어 둔 `.build/<프로젝트>/bundle/`도 남겨 diff로 볼 수 있게 한다. import에 성공하면 같은 내용을 `.build/<프로젝트>/applied/`에도 남긴다. `dashkit plan`이 새 번들과 비교하는 "지난 번들"은 이 `applied/`다([plan.md](plan.md). plan은 이 폴더와 상태 파일을 읽기만 한다). `bundle/`은 import 전에 쓰므로 실패한 sync의 것일 수 있다. 파일 내용은 결정적(키 정렬, 타임스탬프는 metadata.yaml 하나만)이어야 한다.
 3. 관리자 계정으로 로그인(`/api/v1/security/login`, CSRF 토큰)한다.
 4. `POST /api/v1/assets/import/`(overwrite). 실패하면 응답 앞부분과 함께 "Superset 로그를 확인하세요(`make logs`)"를 출력하고 종료 코드 1로 끝낸다.
-5. 대시보드마다 `POST /api/v1/dashboard/<id>/embedded {"allowed_domains": WEB_ORIGINS}`를 부른다.
-6. prune: **(`managed.json`의 이전 목록 ∪ Superset에서 찾은 이 프로젝트의 sync 객체) − 이번 목록**을 대시보드 → 차트 → 데이터셋 → DB 순으로 UUID로 찾아 지운다. 이미 없으면 넘어간다. 뒤쪽 집합은 위 "sync가 만든 객체를 Superset에서 찾는 규칙"으로 구하고 `managed.json`이 없어도 된다. 표식이 없는 객체와 다른 데이터베이스의 객체는 대상이 아니다.
-7. `embed.json`과 `managed.json`을 원자적으로 쓴다.
+5. 대시보드마다 `POST /api/v1/dashboard/<id>/embedded {"allowed_domains": WEB_ORIGINS}`를 부른다. 그 직전에 `embed.json`에 남아 있던 이전 `project`를 읽어 둔 뒤, 새 `embed.json`을 원자적으로 쓴다.
+6. prune: **(`managed.json`의 이전 목록 ∪ 현재 프로젝트의 관리 객체 ∪ 검증된 이전 프로젝트의 관리 객체) − 이번 목록 − 수동 의존 보존**을 대시보드 → 차트 → 데이터셋 → DB 순으로 UUID로 찾아 지운다. 이미 없으면 넘어간다. 하위 삭제에 실패하면 상위 부모 삭제는 건너뛴다.
+7. `managed.json`을 `(이번 목록 ∪ prune 실패 목록)`으로 원자적으로 쓴다.
 
 보강(구현 반영):
 - 4단계 직전에 `managed.json`을 (이전 목록 ∪ 이번 목록)으로 한 번 먼저 쓴다. import가 중간에 실패해 일부 객체만 생겨도 다음 실행이 prune 대상으로 알 수 있다.
@@ -114,4 +131,13 @@ sync만 읽고 쓴다. 지난 sync가 만든 Superset 객체 목록이다. 다�
 
 멱등성: 같은 설정으로 두 번 실행하면 Superset 객체 집합, UUID, 임베드 UUID가 같다.
 
-`managed.json`이 없을 때(`.state/`를 지웠거나 다른 곳에서 체크아웃한 경우): 이 프로젝트의 이전 객체는 표식으로 찾아 지운다. **다른 프로젝트**가 남긴 객체는 찾지 않으므로 남는다(그 프로젝트로 한 번 sync한 뒤 돌아오거나, `make reset`으로 Superset 메타데이터를 처음부터 다시 만든다).
+### 운영 복구 방법 (상태 파일과 적재 계보가 모두 없을 때)
+
+- **권장 — 명시적 이전 프로젝트 정리 CLI (`tools` 전용):**
+  ```bash
+  docker compose --env-file .env.example --env-file .env run --rm tools python -m dashkit prune-project <이전_프로젝트> --dry-run
+  docker compose --env-file .env.example --env-file .env run --rm tools python -m dashkit prune-project <이전_프로젝트>
+  ```
+  `prune-project`는 현재 활성 프로젝트(`.state/embed.json`, `dashkit_meta.load_snapshot.project`, 둘 다 없으면 `PROJECT` 환경변수)는 거부하고, 동일한 `uuid5`·`_made_by_sync`·수동 의존성 보존 규칙으로 지정한 이전 프로젝트의 관리 객체만 정리한다.
+- **수동 객체 때문에 부모가 보존된 경우:** Superset 화면에서 해당 수동 차트·대시보드·데이터셋을 정리한 뒤 `make sync`(또는 `prune-project`)를 다시 실행하면 남아 있던 이전 부모 객체가 정리된다.
+- **전체 초기화(최후 수단):** 인증 DB·적재 데이터·수동 Superset 객체를 모두 지워도 되는 개발 환경에서만 `make reset CONFIRM=1`을 사용한다(운영 볼륨이 있는 환경에서는 사용하지 않는다).

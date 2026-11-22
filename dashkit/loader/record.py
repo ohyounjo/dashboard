@@ -224,15 +224,33 @@ def data_revision(schema: Mapping[str, Any], dashboard: Mapping[str, Any]) -> st
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def next_replaced_projects(prev_snapshot: Mapping[str, Any] | None, current_project: str) -> list[str]:
+    """지난 적재 스냅샷에서 현재 프로젝트를 제외한 전환 이력(순서 유지·중복 제거)을 계산한다."""
+    if not isinstance(prev_snapshot, Mapping):
+        return []
+    out: list[str] = []
+    raw_list = prev_snapshot.get("replaced_projects")
+    if isinstance(raw_list, Sequence) and not isinstance(raw_list, (str, bytes)):
+        for p in raw_list:
+            if isinstance(p, str) and p and p != current_project and p not in out:
+                out.append(p)
+    prev_proj = prev_snapshot.get("project")
+    if isinstance(prev_proj, str) and prev_proj and prev_proj != current_project and prev_proj not in out:
+        out.append(prev_proj)
+    return out
+
+
 def snapshot(project_name: str, schema: Mapping[str, Any], dashboard: Mapping[str, Any],
              row_counts: Mapping[str, int], revision: str | None = None,
              sources: Mapping[str, Mapping[str, list[str]]] | None = None,
+             replaced_projects: Sequence[str] | None = None,
              *, fingerprint_key_id: str | None = None) -> dict[str, Any]:
     """적재 스냅샷(JSON으로 저장). plan이 "구조가 바뀌었는지", 추가 적재가 "설정이 DB에 적용됐는지" 판단하는 데 쓴다."""
     doc: dict[str, Any] = {
         "version": SNAPSHOT_VERSION,
         "project": project_name,
         "data_revision": revision if revision is not None else data_revision(schema, dashboard),
+        **({"replaced_projects": list(replaced_projects)} if replaced_projects else {}),
         "tables": {
             name: {
                 "columns": [list(c) for c in table_columns(table)],

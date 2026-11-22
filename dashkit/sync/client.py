@@ -143,6 +143,13 @@ class SupersetClient:
             return None
         return (self.expect(resp, f"{kind} {obj_id} 조회", ok=(200,)) or {}).get("result") or {}
 
+    def get_database_connection(self, db_id: int) -> dict | None:
+        """데이터베이스 연결 정보(parameters, sqlalchemy_uri 포함). 없으면 None."""
+        resp = self.get(f"/api/v1/database/{db_id}/connection")
+        if resp.status_code == 404:
+            return None
+        return (self.expect(resp, f"database {db_id} 연결 조회", ok=(200,)) or {}).get("result") or {}
+
     def delete_object(self, kind: str, obj_id: int) -> bool:
         """객체를 지운다. 이미 없으면(404) False."""
         resp = self.delete(f"/api/v1/{KIND_PATHS[kind]}/{obj_id}")
