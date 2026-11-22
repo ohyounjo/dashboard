@@ -94,7 +94,7 @@ sync만 읽고 쓴다. 지난 sync가 만든 Superset 객체 목록이다. 다�
 
 1. **같은 프로젝트의 빠진 객체:** `discover_project_objects`로 현재 프로젝트의 관리 객체를 찾아 이번 설정에 없는 것을 지운다.
 2. **프로젝트 전환 (`A → B`):**
-   - `managed.json`이 없으면, 5단계에서 `embed.json`을 덮어쓰기 전에 읽은 `embed.json`의 이전 `project`와 `data-db`의 적재 기록(`dashkit_meta.load_snapshot.replaced_projects`, 현재 프로젝트 `B`로 적재된 스냅샷일 때만 신뢰, `dash_reader`로만 조회)에서 교체된 이전 프로젝트 목록을 구한다. 이 목록은 `embed.json`을 덮어쓰기 전에 `.state/managed.json`의 선택 키 `pending_projects`에도 함께 기록해, `fetch_snapshot`이나 DB 연결 확인이 일시 실패해도 다음 실행에서 재탐색할 수 있게 하고 완료 후 비운다.
+   - `managed.json`이 없으면, 5단계에서 `embed.json`을 덮어쓰기 전에 읽은 `embed.json`의 이전 `project`와 `data-db`의 적재 기록(`dashkit_meta.load_snapshot.replaced_projects`, 현재 프로젝트 `B`로 적재된 스냅샷일 때만 신뢰, `dash_reader`로만 조회)에서 교체된 이전 프로젝트 목록을 구한다. 이 목록은 `embed.json`을 덮어쓰기 전에 `.state/managed.json`의 선택 키 `pending_projects`에도 함께 기록해, `fetch_snapshot`·DB 연결 확인이 일시 실패하거나 수동 참조로 이전 객체가 보존된 경우 다음 실행에서 재탐색할 수 있게 하고 모두 정리되면 비운다.
    - 각 이전 프로젝트 DB(`dashkit-<이전>`)는 `uuid5` 일치에 더해 `GET /api/v1/database/<id>/connection`의 대상 `(host, port, dbname)`이 현재 `DATA_DB_*`와 일치할 때만 자동 정리 대상으로 삼는다(불일치·조회 실패 시 비삭제 및 경고).
 3. **자동 정리하지 않는 경계 (안전 우선):**
    - `.state/`와 `data-db` 전환 계보가 **모두** 없으면(`make reset` 직후 또는 `load` 없이 실행한 공존 프로젝트 등) Superset의 다른 `dashkit-*` DB를 자동 삭제하지 않고 비파괴 경고 로그만 남긴다.

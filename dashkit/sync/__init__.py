@@ -550,9 +550,10 @@ def _collect_previous_candidates(
     candidates: dict[str, list[str]],
     *,
     log: Callable[[str], None],
-) -> tuple[dict[str, list[str]], set[str], list[str]]:
+) -> tuple[dict[str, list[str]], set[str], list[str], dict[str, set[str]]]:
     skipped: set[str] = set()
     retry_projects: list[str] = []
+    prev_by_project: dict[str, set[str]] = {}
     for prev_name in prev_projects:
         db_row = _find_project_database(snap, prev_name)
         if db_row is None or db_row.get("id") is None:
@@ -572,8 +573,10 @@ def _collect_previous_candidates(
             )
             skipped.add(prev_name)
             continue
-        candidates = _union(candidates, discover_project_objects(snap, prev_name, include_database=True))
-    return candidates, skipped, retry_projects
+        discovered = discover_project_objects(snap, prev_name, include_database=True)
+        prev_by_project[prev_name] = {u for uuids in discovered.values() for u in uuids}
+        candidates = _union(candidates, discovered)
+    return candidates, skipped, retry_projects, prev_by_project
 
 
 def sync(
@@ -664,7 +667,7 @@ def sync(
     # 6. prune. 대상 = (managed.json의 이전 목록 ∪ 현재·검증된 이전 프로젝트 객체) − 이번 목록 − 수동 보존
     snap = fetch_snapshot(client)
     candidates = _union(previous, discover_project_objects(snap, project.name, include_database=False))
-    candidates, skipped, retry_projects = _collect_previous_candidates(
+    candidates, skipped, retry_projects, prev_by_project = _collect_previous_candidates(
         client, snap, prev_projects, _db_target_from_env(os.environ), candidates, log=log
     )
     prune_plan = plan_prune(snap, current, candidates, current_project=project.name)
@@ -678,10 +681,13 @@ def sync(
             f"필요하면 `python -m dashkit prune-project <이름> --dry-run`으로 확인하세요"
         )
 
-    # 7. managed.json (prune 실패 객체와 일시적 DB 연결 조회 실패 이전 프로젝트는 남겨 다음 실행에서 재시도)
+    # 7. managed.json (prune 실패 객체와 일시적 DB 연결 조회 실패·수동 보존 이전 프로젝트는 남겨 다음 실행에서 재시도)
+    preserved_uuids = {p.uuid for p in prune_plan.preserved}
+    preserved_projects = [p for p, uuids in prev_by_project.items() if uuids & preserved_uuids]
+    next_pending = _valid_project_names([*retry_projects, *preserved_projects], exclude=project.name)
     _write_json_atomic(
         managed_path,
-        _managed_doc(project, _union(current, leftovers), pending_projects=retry_projects),
+        _managed_doc(project, _union(current, leftovers), pending_projects=next_pending),
     )
     if failed:
         raise SyncError("import·임베드는 끝났지만 prune 일부 실패(다시 실행하면 재시도):\n  " + "\n  ".join(failed))

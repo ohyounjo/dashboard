@@ -481,6 +481,35 @@ def test_sync_retains_embed_prev_project_across_snapshot_failure(tmp_path, monke
     assert "pending_projects" not in json.loads((state / "managed.json").read_text())
 
 
+def test_sync_retains_embed_prev_project_when_preserved_by_manual_ref(tmp_path, monkeypatch):
+    """적재 이력 없이 embed.json만으로 전환 시 수동 참조로 이전 객체가 보존돼도 다음 sync에서 남은 부모를 정리한다."""
+    monkeypatch.setenv("DATA_DB_READER_PASSWORD", "test-pw")
+    beta = _make_project(tmp_path, "beta")
+    state = tmp_path / "state"
+    build = tmp_path / "build"
+    state.mkdir()
+    (state / "embed.json").write_text(json.dumps({"version": 1, "project": "alpha", "dashboards": {}}), encoding="utf-8")
+
+    snap = _snap_with_two_projects()
+    u4_chart = "33333333-3333-4333-8333-333333333333"
+    manual_chart = _chart_row("alpha", 109, "manual_c", 10, [], locked=False, row_uuid=u4_chart)
+    snap.charts.append(manual_chart)
+    client = _FakePruneClient(snap, conn_targets={1: ("data-db", 5432, "dash")})
+
+    # 1) 첫 전환 sync: 수동 차트 때문에 alpha의 things 데이터셋·DB는 보존되고 pending_projects=["alpha"]가 유지된다
+    sync(beta, state_dir=state, build_dir=build, client=client, view_columns=_columns_for(beta),
+         replaced_projects=[], log=lambda _m: None)
+    assert [r["database_name"] for r in snap.databases] == ["dashkit-alpha", "dashkit-beta"]
+    assert json.loads((state / "managed.json").read_text())["pending_projects"] == ["alpha"]
+
+    # 2) 수동 차트 제거 후 beta 재-sync → 보존됐던 alpha 데이터셋·DB 자동 정리 및 pending_projects 제거
+    snap.charts.remove(manual_chart)
+    sync(beta, state_dir=state, build_dir=build, client=client, view_columns=_columns_for(beta),
+         replaced_projects=[], log=lambda _m: None)
+    assert [r["database_name"] for r in snap.databases] == ["dashkit-beta"]
+    assert "pending_projects" not in json.loads((state / "managed.json").read_text())
+
+
 # ---------------------------------------------------------------- prune_project + CLI + plan
 
 def test_prune_project_safety_and_cli(tmp_path, monkeypatch, capsys):
