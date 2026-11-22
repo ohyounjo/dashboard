@@ -46,6 +46,26 @@ position:
       height: 90
 metadata:
   native_filter_configuration:
+  - id: NATIVE_FILTER-f_issue_period
+    name: 기간
+    filterType: filter_time
+    type: NATIVE_FILTER
+    targets:
+    - {}
+    controlValues:
+      enableEmptyFilter: false
+    defaultDataMask:
+      extraFormData:
+        time_range: '2026-10-01 : 2026-12-01'
+      filterState:
+        value: '2026-10-01 : 2026-12-01'
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded: []
+    description: ''
   - id: NATIVE_FILTER-f_severity
     name: 심각도
     filterType: filter_select

@@ -177,7 +177,7 @@ filters:
 
 - 필터는 대상 열과 **이름이 같은 열**을 가진 차트(데이터셋)에 적용된다.
 - `time_range` 필터가 있는 대시보드에서는, 그 필터의 적용 범위에 든 **축약 차트**의 `adhoc_filters`에 시간 조건 `{expressionType: SIMPLE, clause: WHERE, subject: <시간 열>, operator: TEMPORAL_RANGE, comparator: "No filter"}`를 더한다(`where` 조건이 있으면 그 뒤). Superset의 시간 범위 필터는 이 조건이 있는 차트에만 적용되기 때문이다. `<시간 열>`은 차트가 참조한 열 중 첫 date/timestamp 열, 없으면 데이터셋 뷰의 첫 date/timestamp 열이다(둘 다 없으면 붙이지 않는다). 원본(`viz_type`) 차트에는 붙이지 않으므로 필요하면 `params.adhoc_filters`에 직접 쓴다. 차트의 `params`에 `adhoc_filters`를 쓰면 생성한 값을 통째로 덮어쓴다(생성 순서 3번).
-- 임베드(guest) 화면에서는 `time_range` 필터의 값을 바꿀 수 없고 `default`만 적용된다(`superset-notes.md` 12-3절).
+- 임베드(guest) 화면에서는 `EmbedGuest`의 `can_time_range on Api` 권한으로 기간 선택 창에서 값을 바꾸고 차트를 다시 조회할 수 있다(`superset-notes.md` 12-3절·13절).
 
 ### 표식
 

@@ -178,7 +178,11 @@ def test_counts_after_editing_a_copy(applied, tmp_path, monkeypatch):
     added: dict[str, str] = {}
 
     def add_chart(doc):
-        dkey, d = next(iter(doc["dashboards"].items()))
+        # charts 범위를 지정한 필터가 없는 대시보드여야 차트 추가 시 배치만 바뀐다
+        dkey, d = next(
+            (k, v) for k, v in doc["dashboards"].items()
+            if not any("charts" in f for f in v.get("filters", []))
+        )
         d["charts"].append({**d["charts"][0], "key": "zz_plan_extra", "title": "plan 검사용 차트"})
         d["layout"].append(["zz_plan_extra"])
         added["dashboard"] = dkey

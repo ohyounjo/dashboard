@@ -21,6 +21,12 @@ params:
   row_limit: 1000
   table_timestamp_format: '%Y-%m-%d'
   include_search: true
+  adhoc_filters:
+  - expressionType: SIMPLE
+    clause: WHERE
+    subject: updated
+    operator: TEMPORAL_RANGE
+    comparator: No filter
 query_context: null
 cache_timeout: null
 uuid: 71fb44a7-44cb-5376-a537-e1e52a96d921

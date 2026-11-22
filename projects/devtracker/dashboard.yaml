@@ -122,10 +122,23 @@ dashboards:                     # Superset 대시보드
         dataset: issues
         groupby: [severity]
         metric: open_issues        # issues 데이터셋의 지표(is_open인 이슈 수)
+        params:
+          adhoc_filters:
+            - expressionType: SIMPLE
+              clause: WHERE
+              subject: updated
+              operator: TEMPORAL_RANGE
+              comparator: "No filter"
     layout:                      # 행 단위. 12칸 격자를 균등 분할, 필요하면 { chart, width }
       - [kpi_progress, kpi_dday, kpi_open, kpi_critical]
       - [trend_open, ms_bar, issues_by_severity]
       - [ms_remaining, issues_recent]
+    filters:
+      - key: f_overview_period
+        label: 기간
+        type: time_range
+        default: "2026-10-01 : 2026-12-01"
+        charts: [trend_open, issues_recent, issues_by_severity]
 
   issues:
     title: 이슈
@@ -141,6 +154,7 @@ dashboards:                     # Superset 대시보드
     layout:
       - [{ chart: issue_table, height: 90 }]
     filters:                     # 열 이름이 같은 차트에 적용된다
+      - { key: f_issue_period, label: 기간, type: time_range, default: "2026-10-01 : 2026-12-01" }
       - { key: f_severity, label: 심각도, type: select, multi: true, dataset: issues, column: severity }
       - { key: f_issue_status, label: 상태, type: select, multi: true, dataset: issues, column: status }
       - { key: f_assignee, label: 담당자, type: select, multi: true, dataset: issues, column: assignee_name }
@@ -157,6 +171,7 @@ dashboards:                     # Superset 대시보드
     layout:
       - [{ chart: doc_table, height: 60 }]
     filters:
+      - { key: f_doc_period, label: 기간, type: time_range, default: "2026-10-01 : 2026-12-01" }
       - { key: f_doc_type, label: 유형, type: select, multi: true, dataset: docs, column: type }
 
 tabs:                           # 웹앱 Rail. 순서대로 표시
