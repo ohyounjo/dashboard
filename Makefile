@@ -324,7 +324,7 @@ gen: unit-image
 # 3) chart-gallery로 apply → 차트 유형별 데이터 조회(tests/test_gallery.py)와 스냅샷 열 정보 대조
 # 4) make new로 예시 CSV 폴더에서 초안(projects/zz-newtest, 끝나면 지움)을 만들어 apply → tests/test_new_project.py
 # 5) 누적 테이블 프로젝트(tests/fixtures/ledger 사본 projects/zz-ingest, 끝나면 지움)를 apply → 관리 서비스의 데이터 경로(tests/test_manage_data.py)
-# 끝나면 테스트 스택과 그 볼륨, .test/를 지운다(KEEP=1이면 남긴다). 실패가 하나라도 있으면 종료 코드 1.
+# 끝나면 테스트 스택과 그 볼륨, .test/를 지운다(KEEP=1이면 devtracker를 다시 적용해 남긴다). 실패가 하나라도 있으면 종료 코드 1.
 test:
 	@before=$$(cat .state/*.json 2>/dev/null | cksum); \
 	$(TEST_ENV) $(MAKE) --no-print-directory _test; rc=$$?; \
@@ -343,6 +343,8 @@ _test:
 	@mkdir -p .test/state .test/build
 	@rc=0; $(MAKE) --no-print-directory _test_run || rc=1; \
 	if [ "$(KEEP)" = 1 ]; then \
+	  echo "• KEEP=1: 테스트 스택에 devtracker 다시 적용"; \
+	  PROJECT=devtracker $(MAKE) --no-print-directory apply || { echo "✖ KEEP=1: devtracker 복원 실패"; rc=1; }; \
 	  echo "• KEEP=1: 테스트 스택 $(TEST_NAME)을 남김(웹앱 :$(TEST_WEB_PORT), Superset :$(TEST_SUPERSET_PORT), Studio :$(TEST_STUDIO_PORT)). 내리기: make test-down"; \
 	else \
 	  $(MAKE) --no-print-directory test-down; \
