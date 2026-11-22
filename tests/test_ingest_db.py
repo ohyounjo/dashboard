@@ -986,17 +986,52 @@ def test_watch_processing_recovery_transient_retry_and_sensitive_redaction(tmp_p
             '</sheetData></worksheet>',
         )
     (inbox / "01_bad_row_num.xlsx").write_bytes(long_row_buf.getvalue())
+    zipenc_buf = bytearray(_make_xlsx([{"name": "S1", "rows": [["id"], ["E995"]]}]))
+    with _zipfile.ZipFile(_io.BytesIO(zipenc_buf), "r") as _zf_enc:
+        _rels_off = _zf_enc.getinfo("xl/_rels/workbook.xml.rels").header_offset
+    zipenc_buf[_rels_off + 6] |= 0x01
+    _cd = zipenc_buf.find(b"PK\x01\x02")
+    while _cd != -1:
+        zipenc_buf[_cd + 8] |= 0x01
+        _cd = zipenc_buf.find(b"PK\x01\x02", _cd + 4)
+    (inbox / "01_bad_zipenc.xlsx").write_bytes(bytes(zipenc_buf))
     (inbox / "02_ok.csv").write_text("id,group_id,state\nE962,g1,open\n", encoding="utf-8")
     st_corrupt = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db)
-    assert st_corrupt["failed"] == 4 and st_corrupt["succeeded"] == 1
+    assert st_corrupt["failed"] == 5 and st_corrupt["succeeded"] == 1
     assert not list(proc.iterdir())
     assert any(p.name.endswith("-01_bad.csv.gz.error.json") for p in (inbox / "_failed").iterdir())
     assert any(p.name.endswith("-01_bad_crc.xlsx.error.json") for p in (inbox / "_failed").iterdir())
     assert any(p.name.endswith("-01_bad_date.xlsx.error.json") for p in (inbox / "_failed").iterdir())
     assert any(p.name.endswith("-01_bad_row_num.xlsx.error.json") for p in (inbox / "_failed").iterdir())
+    assert any(p.name.endswith("-01_bad_zipenc.xlsx.error.json") for p in (inbox / "_failed").iterdir())
     assert any(p.name.endswith("-02_ok.csv") for p in (inbox / "_done").iterdir())
 
     rebuilt_equals_current(root, scratch_db)
+
+    # 6) 여러 줄을 포함한 민감 기본 키 중복 → _failed/*.error.json에 원문 미노출
+    def make_sensitive_pk(doc):
+        doc["tables"]["secrets"] = {
+            "mode": "append",
+            "primary_key": ["secret_id"],
+            "columns": {"secret_id": {"type": "text", "sensitive": True}},
+        }
+
+    root_pk = make_project(tmp_path / "pk_proj", edit=make_sensitive_pk)
+    load(load_project("ledger", root_pk), dbname=scratch_db)
+    pk_inbox = root_pk / "ledger" / "data" / "_inbox" / "secrets"
+    pk_inbox.mkdir(parents=True)
+    (pk_inbox / "dup_multiline.csv").write_text(
+        'secret_id\n"line1-secret\nline2-secret"\n"line1-secret\nline2-secret"\n',
+        encoding="utf-8",
+    )
+    st_pk = watch_once("ledger", settle_ms=0, projects_dir=root_pk, dbname=scratch_db)
+    assert st_pk["failed"] == 1
+    pk_err_files = list((pk_inbox / "_failed").glob("*.error.json"))
+    assert len(pk_err_files) == 1
+    pk_err_txt = pk_err_files[0].read_text(encoding="utf-8")
+    assert "line1-secret" not in pk_err_txt and "line2-secret" not in pk_err_txt
+
+    rebuilt_equals_current(root_pk, scratch_db)
 
 
 def test_ingest_from_db_recreates_cursor_on_stale_config_retry(tmp_path, scratch_db, monkeypatch):

@@ -289,10 +289,10 @@ PARSERS: dict[str, Callable[..., Parser]] = {
 
 
 _SENSITIVE_COL_PATTERNS = (
-    re.compile(r"^(?P<prefix>rows\[\d+\]\.(?P<col>[^:\s]+): )(?P<reason>.+)$"),
-    re.compile(r"^(?P<prefix>.+?:(?P<col>[^:\s]+): )(?P<reason>.+)$"),
+    re.compile(r"^(?P<prefix>rows\[\d+\]\.(?P<col>[^:\s]+): )(?P<reason>.+)$", re.DOTALL),
+    re.compile(r"^(?P<prefix>.+?:(?P<col>[^:\s]+): )(?P<reason>.+)$", re.DOTALL),
 )
-_REASON_SUFFIX_RE = re.compile(r"(?:\s\((?:pattern |허용: ).*\)|가 없음)$")
+_REASON_SUFFIX_RE = re.compile(r"(?:\s\((?:pattern |허용: ).*\)|가 없음)$", re.DOTALL)
 
 
 def _mask_quoted_reason(reason: str) -> str:
@@ -321,7 +321,7 @@ def redact_sensitive_errors(table: Mapping[str, Any], errors: Sequence[str]) -> 
             head, _, _tail = text.partition("원래 칸:")
             text = f"{head}원래 칸: ***"
         if pk_sensitive and "기본 키 중복 (" in text:
-            text = re.sub(r"기본 키 중복 \(.*?(, 처음 나온 )", r"기본 키 중복 (***\1", text)
+            text = re.sub(r"기본 키 중복 \(.*?(, 처음 나온 )", r"기본 키 중복 (***\1", text, flags=re.DOTALL)
         if pk_sensitive and ": 이미 있는 키 " in text:
             head, _, _tail = text.partition(": 이미 있는 키 ")
             text = f"{head}: 이미 있는 키 ***"

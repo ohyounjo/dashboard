@@ -179,7 +179,11 @@ def _check_duplicates(cur: psycopg.Cursor, staged: StagedBatch, intake: Intake) 
     first_word = "줄" if intake.parser.kind in ("csv", "xlsx") else "위치"
     for r in cur.fetchall():
         values, ats = list(r[:-1]), r[-1]
-        shown = ", ".join(str(v) for v in values)
+        shown = ", ".join(
+            "***" if isinstance(intake.table["columns"].get(k), Mapping) and intake.table["columns"][k].get("sensitive")
+            else str(v)
+            for k, v in zip(pk, values)
+        )
         first = ats[0] if intake.parser.kind in ("csv", "xlsx") else intake.parser.where(ats[0], "-")
         for at in ats[1:]:
             staged.error_count += 1

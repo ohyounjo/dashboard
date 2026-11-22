@@ -579,6 +579,21 @@ def test_xlsx_security_defenses_and_filename_checks(tmp_path):
     orp.close()
     assert len(orows) == 1 and isinstance(orows[0][1], RowError) and orows[0][1].fatal is True
 
+    # 5-i) ZIP 엔트리 암호화 플래그(flag_bits & 0x1) 사전 차단 → RuntimeError 대신 invalid_xlsx
+    zipenc_bytes = bytearray(make_xlsx_bytes([{"name": "S1", "rows": [["id"], ["1"]]}]))
+    with zipfile.ZipFile(io.BytesIO(zipenc_bytes), "r") as zf_enc:
+        rels_off = zf_enc.getinfo("xl/_rels/workbook.xml.rels").header_offset
+    zipenc_bytes[rels_off + 6] |= 0x01
+    cd_pos = zipenc_bytes.find(b"PK\x01\x02")
+    while cd_pos != -1:
+        zipenc_bytes[cd_pos + 8] |= 0x01
+        cd_pos = zipenc_bytes.find(b"PK\x01\x02", cd_pos + 4)
+    zipenc_xlsx = tmp_path / "zipenc.xlsx"
+    zipenc_xlsx.write_bytes(bytes(zipenc_bytes))
+    with pytest.raises(IntakeError) as zenc_exc:
+        XlsxParser(zipenc_xlsx, "zipenc.xlsx").header()
+    assert zenc_exc.value.detail == "invalid_xlsx"
+
     # 6) 파일 이름 검증 분리: Studio(check_filename)는 .csv만, 관리 서비스(check_ingest_filename)는 .csv·.xlsx 허용
     assert upload.check_ingest_filename("orders.xlsx") == "orders.xlsx"
     assert upload.check_ingest_filename("orders.CSV") == "orders.CSV"
@@ -760,6 +775,23 @@ def test_redact_sensitive_errors_masks_values_and_raw_rows():
     assert "bad.csv:2:phone: 형식 불일치 '***' (pattern ^\\d+$)" == masked[0]
     assert "bad.csv:3:phone: 정수가 아님 '***'" == masked[1]
     assert masked[3] == "원래 칸: ***"
+
+    # 여러 줄을 포함한 민감 기본 키 중복 및 여러 줄 검증 오류도 누출 없이 마스킹
+    pk_spec = {
+        "primary_key": ["secret_pk"],
+        "columns": {
+            "secret_pk": {"type": "text", "sensitive": True, "pattern": r"^[a-z]+$"},
+        },
+    }
+    multiline_errs = [
+        "dup.csv:3:secret_pk: 기본 키 중복 (line1-secret\nline2-secret, 처음 나온 줄 dup.csv:2)",
+        "dup.csv:4:secret_pk: 형식 불일치 'line1-secret\nline2-secret' (pattern ^[a-z]+$)",
+    ]
+    masked_ml = redact_sensitive_errors(pk_spec, multiline_errs)
+    joined_ml = "\n".join(masked_ml)
+    assert "line1-secret" not in joined_ml and "line2-secret" not in joined_ml
+    assert masked_ml[0] == "dup.csv:3:secret_pk: 기본 키 중복 (***, 처음 나온 줄 dup.csv:2)"
+    assert masked_ml[1] == "dup.csv:4:secret_pk: 형식 불일치 '***' (pattern ^[a-z]+$)"
 
 
 # ---------------------------------------------------------------- 5. 이어 올리기(Uploads) 수명주기 단위 테스트

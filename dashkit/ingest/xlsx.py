@@ -318,9 +318,11 @@ class XlsxParser(Parser):
         assert self._zf is not None
         try:
             zinfo = self._zf.getinfo(entry)
+            if zinfo.flag_bits & 0x1 or zinfo.compress_type == 99:
+                raise self._reject_xlsx("암호화된 ZIP 엔트리가 포함된 .xlsx 파일은 지원하지 않습니다")
             raw = self._zf.open(zinfo, "r")
-        except _ZIP_CORRUPT_ERRORS as exc:
-            raise self._reject_xlsx(f"손상되었거나 읽을 수 없는 xlsx 엔트리({entry})입니다: {exc}") from None
+        except (*_ZIP_CORRUPT_ERRORS, RuntimeError, NotImplementedError) as exc:
+            raise self._reject_xlsx(f"손상되었거나 지원하지 않는 xlsx 엔트리({entry})입니다: {exc}") from None
         return _BoundedStream(raw, self.name, zinfo.compress_size, self._total_read, self.limits)
 
     def _check_archive(self) -> None:
@@ -345,6 +347,9 @@ class XlsxParser(Parser):
 
         total_declared = 0
         for zinfo in self._zf.infolist():
+            if zinfo.flag_bits & 0x1 or zinfo.compress_type == 99:
+                self.close()
+                raise self._reject_xlsx("암호화된 ZIP 엔트리가 포함된 .xlsx 파일은 지원하지 않습니다")
             total_declared += zinfo.file_size
             if total_declared > self.limits.max_uncompressed_bytes:
                 self.close()
