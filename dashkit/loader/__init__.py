@@ -325,7 +325,47 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
         readers.append(inspect_role())
         for schema in (raw, dash):
             _step(cur, label, sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(schema, inspect))
-            _step(cur, label, sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}").format(schema, inspect))
+        for tname, tspec in tables.items():
+            sens = {cname for cname, cspec in tspec["columns"].items() if cspec.get("sensitive")}
+            if not sens:
+                _step(cur, label, sql.SQL("GRANT SELECT ON TABLE {}.{} TO {}").format(
+                    raw, sql.Identifier(tname), inspect,
+                ))
+            else:
+                non_sens = [sql.Identifier(cname) for cname in tspec["columns"] if cname not in sens]
+                if non_sens:
+                    _step(cur, label, sql.SQL("GRANT SELECT ({}) ON TABLE {}.{} TO {}").format(
+                        sql.SQL(", ").join(non_sens), raw, sql.Identifier(tname), inspect,
+                    ))
+        for ds_key, ds in project.dashboard["datasets"].items():
+            if "table" in ds:
+                tname = ds["table"]
+                sens = {cname for cname, cspec in tables[tname]["columns"].items() if cspec.get("sensitive")}
+                if not sens:
+                    _step(cur, label, sql.SQL("GRANT SELECT ON TABLE {}.{} TO {}").format(
+                        dash, sql.Identifier(ds_key), inspect,
+                    ))
+                else:
+                    non_sens = [
+                        sql.Identifier(c)
+                        for c in sorted(view_columns.get(ds_key, ()))
+                        if c not in sens
+                    ]
+                    if non_sens:
+                        _step(cur, label, sql.SQL("GRANT SELECT ({}) ON TABLE {}.{} TO {}").format(
+                            sql.SQL(", ").join(non_sens), dash, sql.Identifier(ds_key), inspect,
+                        ))
+            else:
+                ds_sources = sources.get(ds_key, {})
+                reads_sensitive = any(
+                    tables.get(src_tbl, {}).get("columns", {}).get(cname, {}).get("sensitive")
+                    for src_tbl, src_cols in ds_sources.items()
+                    for cname in src_cols
+                )
+                if not reads_sensitive:
+                    _step(cur, label, sql.SQL("GRANT SELECT ON TABLE {}.{} TO {}").format(
+                        dash, sql.Identifier(ds_key), inspect,
+                    ))
         _step(cur, label, sql.SQL("GRANT EXECUTE ON FUNCTION {}.as_of() TO {}").format(dash, inspect))
 
     # 적재 기록(dash_inspect가 row_fingerprint를 읽고, dash_reader는 load_snapshot·batch만 읽는다).

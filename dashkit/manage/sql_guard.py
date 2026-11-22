@@ -70,6 +70,9 @@ def _tokenize(sql: str) -> list[_Token]:
             if depth > 0:
                 raise _invalid("블록 주석(/* ... */)이 닫히지 않았습니다")
             continue
+        # 유니코드 이스케이프 식별자 U&"..." 차단(함수명 우회 방지)
+        if ch in ("U", "u") and i + 2 < n and sql[i + 1] == "&" and sql[i + 2] == '"':
+            raise _invalid('유니코드 이스케이프 식별자(U&"...")는 사용할 수 없습니다')
         # E'...' 확장 문자열
         if ch in ("E", "e") and i + 1 < n and sql[i + 1] == "'":
             start = i

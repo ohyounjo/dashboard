@@ -63,6 +63,8 @@ def test_sql_guard_allows_valid_read_queries():
         "SELECT $tag$unclosed",
         "SELECT pg_sleep(10)",
         "SELECT pg_catalog.pg_sleep(1)",
+        'SELECT U&"pg_sl\\0065ep"(1)',
+        'SELECT u&"pg_sleep"(1)',
         "SELECT pg_terminate_backend(123)",
         "SELECT pg_read_file('/etc/passwd')",
         "SELECT dblink_connect('host=127.0.0.1')",
@@ -228,3 +230,57 @@ def test_sql_console_execution_security_and_audit(sql_clients, monkeypatch):
     assert len(aud[2]["sql"]) == 2000
     assert aud[2]["rows"] == 1
     assert "900150983cd24fb0d6963f7d28e17f72" not in json.dumps(aud[2])
+
+
+@pytest.mark.integration
+def test_sql_console_blocks_sensitive_columns_and_views(sql_clients, monkeypatch):
+    from dashkit import db
+    from dashkit.loader import inspect_role
+
+    (_au, _ac, _ah), (_ou, op_c, op_h), _usr, _anon = sql_clients
+    monkeypatch.setenv("MANAGE_FEATURES", "sql")
+
+    tbl = f"_test_sens_{secrets.token_hex(4)}"
+    view_name = f"_test_sens_v_{secrets.token_hex(4)}"
+    role = inspect_role()
+    with db.owner_conn() as conn:
+        conn.execute(f"CREATE TABLE raw.{tbl} (id int, secret text)")
+        conn.execute(f"INSERT INTO raw.{tbl} VALUES (1, 'top-secret')")
+        conn.execute(f"REVOKE ALL ON raw.{tbl} FROM PUBLIC, {role}")
+        conn.execute(f"GRANT SELECT (id) ON raw.{tbl} TO {role}")
+        conn.execute(f"CREATE VIEW dash.{view_name} AS SELECT id, secret FROM raw.{tbl}")
+        conn.execute(f"REVOKE ALL ON dash.{view_name} FROM PUBLIC, {role}")
+    try:
+        r_col = op_c.post(
+            "/api/manage/sql",
+            headers=op_h,
+            body=json.dumps({"sql": f"SELECT secret FROM raw.{tbl}"}).encode(),
+        )
+        assert r_col.status == 403
+        assert json.loads(r_col.body)["detail"] == "forbidden"
+
+        r_star = op_c.post(
+            "/api/manage/sql",
+            headers=op_h,
+            body=json.dumps({"sql": f"SELECT * FROM raw.{tbl}"}).encode(),
+        )
+        assert r_star.status == 403
+
+        r_view = op_c.post(
+            "/api/manage/sql",
+            headers=op_h,
+            body=json.dumps({"sql": f"SELECT * FROM dash.{view_name}"}).encode(),
+        )
+        assert r_view.status == 403
+
+        r_ok = op_c.post(
+            "/api/manage/sql",
+            headers=op_h,
+            body=json.dumps({"sql": f"SELECT id FROM raw.{tbl}"}).encode(),
+        )
+        assert r_ok.status == 200
+        assert json.loads(r_ok.body)["rows"] == [[1]]
+    finally:
+        with db.owner_conn() as conn:
+            conn.execute(f"DROP VIEW IF EXISTS dash.{view_name}")
+            conn.execute(f"DROP TABLE IF EXISTS raw.{tbl}")
