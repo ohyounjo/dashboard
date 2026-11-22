@@ -530,6 +530,18 @@ function renderApp(cfg) {
     postJson("/api/views", { tab: cur.tab.key }).catch(() => {});
     if (!cur.rendered) {
       cur.rendered = true;
+      if (typeof cur.tab.data_as_of === "string" && cur.tab.data_as_of) {
+        const parsed = new Date(cur.tab.data_as_of);
+        const localText = Number.isNaN(parsed.getTime())
+          ? cur.tab.data_as_of
+          : parsed.toLocaleString(S.locale, { dateStyle: "medium", timeStyle: "short" });
+        cur.view.append(h("div", {
+          class: "tab-freshness",
+          role: "status",
+          title: cur.tab.data_as_of,
+          text: S.dataAsOf(localText),
+        }));
+      }
       (cur.tab.sections || []).forEach((sec) => renderSection(cur.view, sec, cur.ctx));
     } else {
       cur.showHandlers.forEach((fn) => fn());

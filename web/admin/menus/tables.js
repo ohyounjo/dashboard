@@ -24,6 +24,7 @@ let flash = null;            // 구조 변경을 마치고 상세를 다시 그�
 
 const isAdmin = () => ((session.manage && session.manage.role) || (session.me && session.me.role)) === "admin";
 const limits = () => (session.manage && session.manage.limits) || {};
+const hasFeature = (name) => Array.isArray(session.manage && session.manage.features) && session.manage.features.includes(name);
 const inlineMax = () => limits().inline_max_rows || 500;
 
 /* ---------------- 공통 조각 ---------------- */
@@ -166,7 +167,8 @@ function listView(my) {
       { key: "last", label: D.lastBatch, render: (t) => (t.last_batch
         ? h("span", { class: "d-stack" },
           h("span", { class: "num", title: t.last_batch.file, text: t.last_batch.added_at ? T.fmtDateTime(t.last_batch.added_at) : t.last_batch.file }),
-          t.last_batch.actor_email ? h("small", { class: "a-key", text: t.last_batch.actor_email }) : null)
+          t.last_batch.actor_email ? h("small", { class: "a-key", text: t.last_batch.actor_email }) : null,
+          hasFeature("freshness") && t.stale ? pill(D.staleHint(t.freshness), "warn") : null)
         : "—") },
       { key: "batches", label: D.batchCount, num: true, render: (t) => (t.mode !== "append" ? "—"
         : h("span", { class: "pills" }, D.num(t.batches), t.compact_hint ? pill(D.compactHint, "warn") : null)) },
@@ -472,8 +474,10 @@ async function detailView(name, my) {
   const reload = (resultBox) => { flash = resultBox; gen += 1; detailView(name, gen); };
   const openAction = (made) => { actionBox.replaceChildren(made.el); made.focus(); };
   const closeAction = () => actionBox.replaceChildren();
+  const showProfile = hasFeature("profile");
+  if (!showProfile && detailTab === "profile") detailTab = "preview";
   const panel = h("div", { class: "d-panel", role: "tabpanel", id: uid("panel"), tabindex: "0" });
-  const ids = { preview: uid("tab"), columns: uid("tab"), batches: uid("tab"), usage: uid("tab") };
+  const ids = { preview: uid("tab"), columns: uid("tab"), batches: uid("tab"), usage: uid("tab"), profile: uid("tab") };
   const draw = (key) => {
     detailTab = key;
     panel.setAttribute("aria-labelledby", ids[key]);
@@ -481,14 +485,17 @@ async function detailView(name, my) {
     else if (key === "columns") {
       panel.replaceChildren(columnsPanel(t, isAdmin() ? (col) => openAction(columnRuleCard(t, col, { alive, onClose: closeAction, onDone: reload })) : null));
     } else if (key === "usage") panel.replaceChildren(usagePanel(t, alive));
+    else if (key === "profile" && showProfile) panel.replaceChildren(profilePanel(t, alive));
     else panel.replaceChildren(batchesPanel(t, alive));
   };
-  const strip = tabStrip(D.detailTabs, [
+  const tabItems = [
     { key: "preview", label: D.tabPreview, tabId: ids.preview, panelId: panel.id },
     { key: "columns", label: D.tabColumns, tabId: ids.columns, panelId: panel.id },
     { key: "batches", label: D.tabBatches, tabId: ids.batches, panelId: panel.id },
     { key: "usage", label: D.tabUsage, tabId: ids.usage, panelId: panel.id },
-  ], detailTab, draw);
+  ];
+  if (showProfile) tabItems.push({ key: "profile", label: D.tabProfile, tabId: ids.profile, panelId: panel.id });
+  const strip = tabStrip(D.detailTabs, tabItems, detailTab, draw);
   tabsBox.append(strip.el, panel);
 
   let addBtn = null;
@@ -551,7 +558,9 @@ function previewPanel(t, alive) {
   const labels = Object.fromEntries(t.columns.filter((c) => c.label).map((c) => [c.name, c.label]));
   let opener = null;
   const rows = rowsView({
-    path: `${tablePath(t.name)}/rows/query`, columns: t.columns, labels, alive,
+    path: `${tablePath(t.name)}/rows/query`,
+    exportPath: hasFeature("export") ? `${tablePath(t.name)}/export` : null,
+    columns: t.columns, labels, alive,
     rowAction: canEdit ? (row) => {
       const b = btn(D.editRow, () => { opener = b; openEdit(row); }, "small");
       b.setAttribute("aria-label", D.editRowFor(t.primary_key.map((k) => row[k]).join(", ")));
@@ -580,6 +589,68 @@ function previewPanel(t, alive) {
 
   return h("div", { class: "d-stack gap" },
     h("p", { class: "a-note", text: canEdit ? D.previewIntroEdit : D.previewIntro }), editBox, rows.el);
+}
+
+/** 열 통계 탭: 누를 때만 계산한다. 민감 열은 '***'로 표시한다. */
+function profilePanel(t, alive) {
+  const labels = Object.fromEntries((t.columns || []).filter((c) => c.label).map((c) => [c.name, c.label]));
+  const out = h("div");
+  const runBtn = btn(D.profileRun, run, "primary");
+  const fmtStat = (v) => (v == null ? "—" : String(v));
+  const fmtNulls = (c) => {
+    if (c.sensitive) return "***";
+    if (c.null_count == null) return "—";
+    if (c.null_ratio == null) return D.num(c.null_count);
+    const pct = (Number(c.null_ratio) * 100).toFixed(1);
+    return `${D.num(c.null_count)} (${pct}%)`;
+  };
+
+  async function run() {
+    runBtn.disabled = true;
+    out.replaceChildren(h("div", { class: "sk-note", role: "status", text: T.loading }));
+    let res;
+    try {
+      res = await api("GET", `${tablePath(t.name)}/profile`);
+    } catch (err) {
+      if (!alive()) return;
+      runBtn.disabled = false;
+      const isTimeout = err instanceof ApiFail && err.detail === "query_timeout";
+      out.replaceChildren(box("bad", isTimeout ? D.profileTimeout : failText(err),
+        isTimeout ? h("div", { class: "a-actions" }, btn(D.retry, run)) : null));
+      return;
+    }
+    if (!alive()) return;
+    runBtn.disabled = false;
+    const rows = (res.columns || []).map((c) => {
+      const label = labels[c.name];
+      const nameCell = h("td", {}, h("span", { class: "d-stack" },
+        h("span", { text: label || c.name }),
+        label ? h("small", { class: "a-key", text: c.name }) : null));
+      return h("tr", {},
+        nameCell,
+        h("td", {}, h("code", { text: c.type })),
+        h("td", { class: "num", text: fmtNulls(c) }),
+        h("td", { class: "num", text: c.sensitive ? "***" : (c.distinct_count == null ? "—" : D.num(c.distinct_count)) }),
+        h("td", { class: "num", text: c.sensitive ? "***" : fmtStat(c.min) }),
+        h("td", { class: "num", text: c.sensitive ? "***" : fmtStat(c.max) }));
+    });
+    out.replaceChildren(
+      h("p", { class: "a-note", text: D.profileTotalRows(res.total_rows || 0) }),
+      h("div", { class: "a-table-wrap" }, h("table", { class: "a-table" },
+        h("thead", {}, h("tr", {},
+          h("th", { scope: "col", text: D.profileColumn }),
+          h("th", { scope: "col", text: D.profileType }),
+          h("th", { scope: "col", class: "num", text: D.profileNulls }),
+          h("th", { scope: "col", class: "num", text: D.profileDistinct }),
+          h("th", { scope: "col", class: "num", text: D.profileMin }),
+          h("th", { scope: "col", class: "num", text: D.profileMax }))),
+        h("tbody", {}, ...rows))));
+  }
+
+  return h("div", { class: "d-stack gap" },
+    h("p", { class: "a-note", text: D.profileIntro }),
+    h("div", { class: "a-actions" }, runBtn),
+    out);
 }
 
 /** 이 행 고치기 폼: 한 행 읽기의 값으로 채운다. 기본 키는 읽기만, 잘린 칸(truncated_cells)은 잠근다.

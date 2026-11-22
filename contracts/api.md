@@ -84,7 +84,7 @@
 ```
 
 - `user`: 로그인한 사용자의 이메일과 등급(`admin` · `operator` · `user`).
-- `tabs`: **로그인한 사용자가 볼 수 있는 탭만**, 설정 순서대로. 운용자(`admin`·`operator`)는 전부, `user`는 속한 그룹들이 허용한 탭([auth.md](auth.md) "접근 제어"). 하나도 없으면 빈 배열이고 웹앱은 "접근할 수 있는 대시보드가 없습니다"를 보여 준다.
+- `tabs`: **로그인한 사용자가 볼 수 있는 탭만**, 설정 순서대로. 운용자(`admin`·`operator`)는 전부, `user`는 속한 그룹들이 허용한 탭([auth.md](auth.md) "접근 제어"). 하나도 없으면 빈 배열이고 웹앱은 "접근할 수 있는 대시보드가 없습니다"를 보여 준다. `MANAGE_FEATURES=freshness`일 때만 `dash_reader`로 배치 기록과 계보를 읽어 각 탭에 `data_as_of`(UTC ISO 문자열 `YYYY-MM-DDTHH:MM:SSZ` 또는 `null`)를 포함한다(비활성 시 키를 넣지 않는다).
 - `app.as_of`: `"today"`이면 요청 시점 날짜(`TZ` 환경변수)로 바꿔 돌려준다. 항상 `YYYY-MM-DD`.
 - `app.logo_text`, `app.theme`: 설정에 없으면 `null`. 웹앱은 `null`이면 기본 토큰을 쓴다.
 - `superset.url`: 환경변수 `SUPERSET_PUBLIC_URL`(브라우저가 접속할 주소). 비어 있으면 `null`.

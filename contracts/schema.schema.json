@@ -57,6 +57,11 @@
         "checks": {
           "type": "array",
           "items": { "$ref": "#/$defs/check" }
+        },
+        "freshness": {
+          "description": "데이터 갱신 기한(선택. 예: 30m, 12h, 7d). MANAGE_FEATURES=freshness일 때 기한을 넘기면 운용 화면 테이블 목록에 경고한다.",
+          "type": "string",
+          "pattern": "^[1-9][0-9]*[mhd]$"
         }
       }
     },

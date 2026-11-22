@@ -39,9 +39,9 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | 메서드·경로 | 로그인 | 내용 |
 |---|---|---|
 | `GET /health` | 불필요 | `{"status": "ok"}` |
-| `GET /config` | 운용자 | `{"project", "role", "limits"}`. 운용 화면이 데이터 메뉴를 그리는 데 쓴다 |
-| `GET /tables` | 운용자 | `{"items", "total", "project"}`. 항목 `{name, mode, on_conflict, description, rows, batches, compact_hint, used_by, last_batch: {file, added_at, actor_email} \| null}`. `rows`는 배치 기록의 `inserted` 합(적용한 적이 없으면 `null`), `batches`는 배치 폴더의 파일 수, `compact_hint`는 그 수가 `INGEST_COMPACT_HINT`를 넘는지, `used_by`는 그 테이블을 읽는 데이터셋의 수(계보) |
-| `GET /tables/{t}` | 운용자 | 입력 폼을 만드는 정의: `{name, mode, on_conflict, description, primary_key, revision, columns: [{name, type, required, primary_key, label, values?, ref?, min?, max?, pattern?, description?, default?, aliases?}], checks: [이름], datasets: [그 테이블을 그대로 보는 데이터셋]}`. `label`은 그 테이블을 보는 `table:` 데이터셋의 `labels` |
+| `GET /config` | 운용자 | `{"project", "role", "limits", "features"}`. 운용 화면이 데이터 메뉴와 선택 기능 UI를 그리는 데 쓴다 |
+| `GET /tables` | 운용자 | `{"items", "total", "project"}`. 항목 `{name, mode, on_conflict, description, rows, batches, compact_hint, used_by, last_batch: {file, added_at, actor_email} \| null}` (+ `MANAGE_FEATURES=freshness`일 때 `freshness`, `stale`). `rows`는 배치 기록의 `inserted` 합(적용한 적이 없으면 `null`), `batches`는 배치 폴더의 파일 수, `compact_hint`는 그 수가 `INGEST_COMPACT_HINT`를 넘는지, `used_by`는 그 테이블을 읽는 데이터셋의 수(계보) |
+| `GET /tables/{t}` | 운용자 | 입력 폼을 만드는 정의: `{name, mode, on_conflict, description, primary_key, revision, freshness?, columns: [{name, type, required, primary_key, label, values?, ref?, min?, max?, pattern?, description?, default?, aliases?}], checks: [이름], datasets: [그 테이블을 그대로 보는 데이터셋]}`. `label`은 그 테이블을 보는 `table:` 데이터셋의 `labels` |
 | `POST /tables/{t}/batches` | 운용자 | **데이터 더하기**([ingest.md](ingest.md) "더하기"). 아래 "데이터 더하기" |
 | `GET /tables/{t}/batches?removed=1` | 운용자 | 배치 이력, 최근 것부터: `{"items", "total"}`. 항목 `{file, removed, first, merged, added_at, recorded, rows, inserted, updated, skipped, unchanged, actor_email, method, source_name, mine}`. 누가·방법·원래 파일 이름은 감사 로그(`data.batch.create`)에서 온다. `mine`은 요청한 사람이 더한 배치인지. `removed=1`이면 `_removed/`의 배치도 싣는다 |
 | `GET /tables/{t}/batches/{file}` | 운용자 | 배치 파일 내려받기(정규형 그대로, `.csv.gz`는 `application/gzip`) |
@@ -51,6 +51,8 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `GET /tables/{t}/template` | 운용자 | 빈 양식: 열 이름 머리글 + 예시 한 줄(`default`, enum의 첫 값, 유형별 예시)의 CSV(UTF-8 BOM) |
 | `POST /tables/{t}/aliases` | admin | 머리글 맞춤 저장: `{"aliases": {"<머리글>": "<열>"}, "revision"}` → 200 `{"revision", "changed"}`. `column.update` 연산으로 그 열의 `aliases`에 더한다(Studio와 같은 저장. [studio.md](studio.md) "변경 연산"). `revision`은 `GET /tables/{t}`가 준 값이고 다르면 409 `stale_config`. aliases는 DB와 상관없어 적용이 필요 없다. 감사 로그 `data.table.alter` |
 | `POST /tables/{t}/rows/query` | 운용자 | 테이블 원본(`raw.<t>`)의 행 조회(아래 "행 조회") |
+| `GET /tables/{t}/profile` | 운용자 | 열 통계 조회(`MANAGE_FEATURES=profile`, 비활성 시 404 `not_found`). `dash_inspect` 단일 SELECT로 `total_rows`와 열별 `null_count`, `null_ratio`, `distinct_count`, `min`, `max`를 반환(`boolean`의 `min`/`max`는 `null`, `text`·`enum`은 2,000자 절단, `sensitive: true` 열은 SQL 제외 및 `null`). 시간 초과 시 504 `query_timeout` |
+| `GET /tables/{t}/export?format=csv` | 운용자 | 행 조회 결과 CSV 내보내기(`MANAGE_FEATURES=export`, 비활성 시 404 `not_found`). `filters`·`sort`·`columns`는 행 조회와 같은 검증(`paging.parse_query`)을 쓰며, `dash_inspect` 서버사이드 커서 단일 쿼리로 UTF-8 BOM CSV를 스트리밍한다(`LIMIT EXPORT_MAX_ROWS + 1`, 헤더 `X-Export-Max-Rows`). `sensitive: true` 열은 `***`로 출력하고 필터·정렬에 쓰면 422로 거절한다. 감사 로그 `data.export` 기록(값 미포함) |
 | `POST /datasets/{d}/rows/query` | 운용자 | 그래프가 실제로 보는 뷰(`dash.<d>`)의 행 조회 |
 | `GET /datasets` | 운용자 | 데이터셋 목록 `{"items", "total"}`: `{key, kind: "table" \| "sql", table, sources, description, used_by, labels}`. `sources`는 그 뷰가 읽는 테이블과 열(계보. `sql:`이고 적용 전이면 `null`), `used_by`는 그 데이터셋을 쓰는 차트·위젯 섹션의 수(설정에서 센다) |
 | `GET /lineage` | 운용자 | 계보(아래 "구조 변경") |
@@ -151,5 +153,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `MANAGE_STATEMENT_TIMEOUT_MS` | `15000` | 조회 시간 제한 |
 | `MANAGE_LOCK_WAIT_MS` | `5000` | 즉시 응답 요청(직접 입력·붙여넣기, 빠른 취소 후보)이 쓰기 잠금을 기다리는 시간. 넘으면 409 `apply_running` |
 | `MANAGE_JOB_LOCK_WAIT_MS` | `600000` | 202 비동기 작업이 쓰기 잠금을 기다리는 시간. 넘으면 작업이 409 `apply_running`으로 실패 |
+| `MANAGE_FEATURES` | (비어 있음) | 켤 선택 기능(쉼표 구분: `export`, `profile`, `freshness`) |
+| `EXPORT_MAX_ROWS` | `1000000` | CSV 내보내기 최대 행 수(`MANAGE_FEATURES=export`) |
 
 `limits.page_max`(200)는 한 번에 돌려주는 행의 최대(고정)다.

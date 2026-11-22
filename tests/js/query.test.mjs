@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  nextSort, filterOps, needsValue, buildFilters, filterErrorIndex, buildQuery,
+  nextSort, filterOps, needsValue, buildFilters, filterErrorIndex, buildQuery, buildExportUrl,
   pagerStart, pagerCursor, pagerIndex, pagerNext, pagerPrev, truncatedSet, valueToInput, changedColumns, editRow, pageRange,
 } from "../../web/shared/query.js";
 
@@ -61,6 +61,21 @@ test("요청 본문", () => {
   assert.deepEqual(buildQuery({ filters: [], sort: { column: "qty", dir: "desc" }, cursor: "c1" }),
     { filters: [], sort: [{ column: "qty", dir: "desc" }], limit: 50, cursor: "c1" });
   assert.deepEqual(buildQuery({ count: true }), { filters: [], sort: [], limit: 50, cursor: null, count: true });
+});
+
+test("CSV 내보내기 URL 직렬화", () => {
+  assert.equal(buildExportUrl("/api/manage/tables/t/export"), "/api/manage/tables/t/export?format=csv");
+  const url = buildExportUrl("/api/manage/tables/t/export", {
+    filters: [{ column: "state", op: "eq", value: "open" }],
+    sort: { column: "qty", dir: "desc" },
+    columns: ["id", "state"],
+  });
+  const parsed = new URL(url, "http://localhost");
+  assert.equal(parsed.pathname, "/api/manage/tables/t/export");
+  assert.equal(parsed.searchParams.get("format"), "csv");
+  assert.deepEqual(JSON.parse(parsed.searchParams.get("filters")), [{ column: "state", op: "eq", value: "open" }]);
+  assert.deepEqual(JSON.parse(parsed.searchParams.get("sort")), [{ column: "qty", dir: "desc" }]);
+  assert.deepEqual(JSON.parse(parsed.searchParams.get("columns")), ["id", "state"]);
 });
 
 test("커서 쌓기: 다음은 쌓고 이전은 되돌아간다", () => {

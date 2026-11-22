@@ -269,6 +269,12 @@ def _check_schema_refs(project: Project) -> list[str]:
             errors.append(f"{f}:{fmt_path(base)}: 테이블 이름 '{tname}'은 SQL 예약어")
         if "on_conflict" in table and table.get("mode") != "append":
             errors.append(f"{f}:{fmt_path(base + ['on_conflict'])}: on_conflict는 mode: append인 테이블에만 씀")
+        if "freshness" in table:
+            from .freshness import parse_freshness
+            try:
+                parse_freshness(table["freshness"])
+            except ValueError as exc:
+                errors.append(f"{f}:{fmt_path(base + ['freshness'])}: {exc}")
         cols = table["columns"]
         errors += _check_aliases(f, base, cols)
         for pk in table["primary_key"]:

@@ -45,6 +45,7 @@ class Limits:
     statement_timeout_ms: int
     lock_wait_ms: int
     job_lock_wait_ms: int
+    export_max_rows: int
 
     def public(self) -> dict[str, Any]:
         return {
@@ -68,4 +69,5 @@ def limits() -> Limits:
         statement_timeout_ms=_int("MANAGE_STATEMENT_TIMEOUT_MS", 15000),
         lock_wait_ms=_int("MANAGE_LOCK_WAIT_MS", 5000),
         job_lock_wait_ms=_int("MANAGE_JOB_LOCK_WAIT_MS", 600000),
+        export_max_rows=max(_int("EXPORT_MAX_ROWS", 1_000_000), 1),
     )

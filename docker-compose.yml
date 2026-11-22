@@ -134,6 +134,7 @@ services:
       GUEST_TOKEN_JWT_AUDIENCE: ${GUEST_TOKEN_JWT_AUDIENCE}
       STATE_DIR: ${STATE_DIR}
       DATA_MAX_ROWS: ${DATA_MAX_ROWS}
+      MANAGE_FEATURES: ${MANAGE_FEATURES:-}
     volumes:
       - ./projects:/app/projects:ro
       # 테스트 스택(make test)은 HOST_STATE_DIR, STATE_DIR을 .test/state로 바꿔 개발 상태와 분리한다
@@ -295,6 +296,8 @@ services:
       MANAGE_STATEMENT_TIMEOUT_MS: ${MANAGE_STATEMENT_TIMEOUT_MS:-15000}
       MANAGE_LOCK_WAIT_MS: ${MANAGE_LOCK_WAIT_MS:-5000}
       MANAGE_JOB_LOCK_WAIT_MS: ${MANAGE_JOB_LOCK_WAIT_MS:-600000}
+      MANAGE_FEATURES: ${MANAGE_FEATURES:-}
+      EXPORT_MAX_ROWS: ${EXPORT_MAX_ROWS:-1000000}
       HOME: /tmp
     volumes:
       - ./projects:/app/projects

@@ -17,9 +17,10 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from ... import config, db
+from ... import config, db, freshness
 from ...auth import store as auth_store
 from ...auth.routes import Principal, client_ip, require_admin, require_operator
+from ...features import has_manage_feature
 from ...ingest import Item, IngestError, batches, ingest, ledger, lineage
 from ...ingest.batches import REMOVED_DIR
 from ...ingest.remove import NeedsRebuild, remove_batch, restore_batch
@@ -112,6 +113,7 @@ def get_tables(principal: Principal = Depends(require_operator)) -> dict[str, An
     recorded = _recorded()
     hint = context.limits().compact_hint
     graph = _lineage(project)
+    show_freshness = has_manage_feature("freshness")
     items = []
     for name, spec in project.schema["tables"].items():
         mode = spec.get("mode") or "replace"
@@ -119,7 +121,7 @@ def get_tables(principal: Principal = Depends(require_operator)) -> dict[str, An
         files = batches.list_batches(project.data_dir, name)[0] if mode == "append" else []
         last = max(rec.values(), key=lambda r: (r.added_at is not None, r.added_at or 0, r.file), default=None) \
             if rec else None
-        items.append({
+        item: dict[str, Any] = {
             "name": name, "mode": mode, "on_conflict": (spec.get("on_conflict") or "error") if mode == "append" else None,
             "description": spec.get("description"),
             "rows": sum(r.inserted for r in rec.values()) if rec else None,
@@ -128,7 +130,12 @@ def get_tables(principal: Principal = Depends(require_operator)) -> dict[str, An
             "last_batch": {"file": last.file, "added_at": last.added_at,
                            "actor_email": (_batch_log(project.name, name).get(last.file) or {}).get("actor_email")}
             if last else None,
-        })
+        }
+        if show_freshness:
+            last_added = freshness.table_last_added_at(recorded, name)
+            item["freshness"] = spec.get("freshness")
+            item["stale"] = freshness.is_stale(last_added, spec.get("freshness"))
+        items.append(item)
     return {"items": items, "total": len(items), "project": project.name}
 
 
@@ -152,11 +159,16 @@ def get_table(table: str, principal: Principal = Depends(require_operator)) -> d
             if key in c:
                 item[key] = c[key]
         columns.append(item)
-    return {"name": name, "mode": spec.get("mode") or "replace",
-            "on_conflict": (spec.get("on_conflict") or "error") if spec.get("mode") == "append" else None,
-            "description": spec.get("description"), "primary_key": list(spec["primary_key"]), "columns": columns,
-            "checks": [c["name"] for c in spec.get("checks", [])], "datasets": datasets,
-            "revision": store.revision(project.root)}
+    out: dict[str, Any] = {
+        "name": name, "mode": spec.get("mode") or "replace",
+        "on_conflict": (spec.get("on_conflict") or "error") if spec.get("mode") == "append" else None,
+        "description": spec.get("description"), "primary_key": list(spec["primary_key"]), "columns": columns,
+        "checks": [c["name"] for c in spec.get("checks", [])], "datasets": datasets,
+        "revision": store.revision(project.root),
+    }
+    if "freshness" in spec:
+        out["freshness"] = spec["freshness"]
+    return out
 
 
 # ---------------------------------------------------------------- 데이터 더하기

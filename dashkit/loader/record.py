@@ -191,8 +191,8 @@ def definition_hash(dataset: Mapping[str, Any]) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-# DB의 내용과 상관없는 테이블·열 키(머리글 맞추기와 설명). 바꿔도 다시 만들 필요가 없으므로 지문에 넣지 않는다
-DB_IRRELEVANT_KEYS = ("aliases", "description")
+# DB의 내용과 상관없는 테이블·열 키(머리글 맞추기, 설명, 신선도 기한). 바꿔도 다시 만들 필요가 없으므로 지문에 넣지 않는다
+DB_IRRELEVANT_KEYS = ("aliases", "description", "freshness")
 
 
 def db_relevant(table: Mapping[str, Any]) -> dict[str, Any]:
