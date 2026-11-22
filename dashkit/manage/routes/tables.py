@@ -158,6 +158,8 @@ def get_table(table: str, principal: Principal = Depends(require_operator)) -> d
         for key in ("values", "ref", "min", "max", "pattern", "description", "default", "aliases"):
             if key in c:
                 item[key] = c[key]
+        if c.get("sensitive"):
+            item["sensitive"] = True
         columns.append(item)
     out: dict[str, Any] = {
         "name": name, "mode": spec.get("mode") or "replace",

@@ -666,7 +666,7 @@ function editCard(t, one, alive, { onClose, onDone }) {
     const input = F.createInput({ ...c, required: false, primary_key: false, default: null },
       { text: FIELD_TEXT, attrs: { id, name: c.name, "aria-describedby": `${hintId} ${errId}` } });
     input.set(Q.valueToInput(initial[c.name]));
-    const isLocked = locked.includes(c.name);
+    const isLocked = locked.includes(c.name) || Boolean(c.sensitive);
     if (c.primary_key && input.el.tagName === "INPUT") input.el.readOnly = true;
     else if (c.primary_key || isLocked) input.el.disabled = true;
     const hint = c.primary_key ? D.keyReadOnly : isLocked ? D.lockedLong

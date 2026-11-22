@@ -97,6 +97,8 @@ async def post_table_rows(table: str, request: Request, principal: Principal = D
     def work(cur):
         relation = sql.SQL("{}.{}").format(sql.Identifier("raw"), sql.Identifier(name))
         if q.key is not None:
+            if any(k in sensitive_cols for k in pk):
+                raise IngestError(422, "invalid_query", "민감 열이 기본 키인 테이블은 키 조회를 지원하지 않습니다")
             found = _one(cur, relation, query_columns, pk, q.key)
             if sensitive_cols:
                 found["columns"] = [{"name": c.name, "type": c.type} for c in columns]
@@ -116,8 +118,9 @@ async def post_table_rows(table: str, request: Request, principal: Principal = D
                 cursor=q.cursor,
                 count=q.count,
             )
+            key_cols = None if any(k in sensitive_cols for k in pk) else pk
             page = paging.fetch_page(
-                cur, relation, query_columns, q_db, key_columns=pk, version=version,
+                cur, relation, query_columns, q_db, key_columns=key_cols, version=version,
                 total_rows=sum(r.inserted for r in rec.values()) if rec else None, to_json=_to_json,
             )
             res = page.public()

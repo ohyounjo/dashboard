@@ -333,6 +333,37 @@ def test_export_api_streaming_limits_sensitive_and_audit(clients, monkeypatch):
     assert r_rows.status == 200
     assert json.loads(r_rows.body)["rows"] == [{"id": "id-1", "secret": "***"}]
 
+    # 민감 열이 기본 키인 테이블은 key_columns=None(오프셋 커서)으로 조회해 커서에 기본 키가 실리지 않는다
+    pk_secret_schema = {
+        "tables": {
+            "secret_pk_tbl": {
+                "primary_key": ["secret_id"],
+                "columns": {"secret_id": {"type": "text", "sensitive": True}, "note": {"type": "text"}},
+            }
+        }
+    }
+    monkeypatch.setattr(rows_mod, "_project", lambda: SimpleNamespace(name="p", schema=pk_secret_schema))
+    seen_key_cols: list[Any] = []
+
+    def spy_fetch_page(_cur, _rel, cols, _q, **kw):
+        seen_key_cols.append(kw.get("key_columns"))
+        return SimpleNamespace(
+            public=lambda: {
+                "columns": [{"name": c.name, "type": c.type} for c in cols],
+                "rows": [{"note": "ok"}],
+                "next_cursor": None,
+                "total": 1,
+                "changed": False,
+                "truncated_cells": [],
+            }
+        )
+
+    monkeypatch.setattr(rows_mod.paging, "fetch_page", spy_fetch_page)
+    r_pk = admin_c.post("/api/manage/tables/secret_pk_tbl/rows/query", json={"limit": 10}, headers=admin_h)
+    assert r_pk.status == 200
+    assert seen_key_cols[-1] is None
+    assert json.loads(r_pk.body)["rows"] == [{"secret_id": "***", "note": "ok"}]
+
 
 def test_freshness_api_app_and_manage_tables(clients, monkeypatch):
     from dashkit import db

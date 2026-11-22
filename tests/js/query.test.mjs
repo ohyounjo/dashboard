@@ -112,4 +112,12 @@ test("고치기 폼: 같은 뜻의 다른 표기는 바뀐 것이 아니고, 기
   assert.equal(valueToInput(false), "false");
   assert.equal(valueToInput(null), "");
   assert.equal(valueToInput(20.5), "20.5");
+  assert.deepEqual(
+    changedColumns(
+      [...COLS, { name: "secret_flag", type: "boolean", sensitive: true }],
+      { ...initial, secret_flag: "***" },
+      { ...same, qty: "9", secret_flag: "" },
+    ),
+    ["qty"],
+  );
 });

@@ -91,7 +91,7 @@ export function valueToInput(v) {
  *  같은 뜻의 다른 표기(1,000과 1000, 2026/11/20과 2026-11-20)는 바뀐 것으로 보지 않는다. */
 export function changedColumns(columns, initial, current, { locked = [] } = {}) {
   const skip = new Set(locked);
-  return (columns || []).filter((c) => !c.primary_key && !skip.has(c.name)
+  return (columns || []).filter((c) => !c.primary_key && !c.sensitive && !skip.has(c.name)
     && tidy(c, valueToInput((initial || {})[c.name])) !== tidy(c, (current || {})[c.name] ?? "")).map((c) => c.name);
 }
 
