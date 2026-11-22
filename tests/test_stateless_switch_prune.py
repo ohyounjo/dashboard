@@ -510,6 +510,42 @@ def test_sync_retains_embed_prev_project_when_preserved_by_manual_ref(tmp_path, 
     assert "pending_projects" not in json.loads((state / "managed.json").read_text())
 
 
+def test_sync_retains_managed_prev_project_when_preserved_by_manual_ref(tmp_path, monkeypatch):
+    """embed.json·적재 이력이 없고 alpha의 managed.json만 있을 때도 수동 참조 보존 후 재실행 시 남은 부모를 정리한다."""
+    monkeypatch.setenv("DATA_DB_READER_PASSWORD", "test-pw")
+    beta = _make_project(tmp_path, "beta")
+    state = tmp_path / "state"
+    build = tmp_path / "build"
+    state.mkdir()
+    (state / "managed.json").write_text(json.dumps({
+        "version": 1,
+        "project": "alpha",
+        "objects": {
+            "database": [object_uuid("alpha", "database", "main")],
+            "dataset": [object_uuid("alpha", "dataset", "things")],
+            "chart": [object_uuid("alpha", "chart", "c1")],
+            "dashboard": [object_uuid("alpha", "dashboard", "d1")],
+        },
+    }), encoding="utf-8")
+
+    snap = _snap_with_two_projects()
+    u4_chart = "33333333-3333-4333-8333-333333333333"
+    manual_chart = _chart_row("alpha", 109, "manual_c", 10, [], locked=False, row_uuid=u4_chart)
+    snap.charts.append(manual_chart)
+    client = _FakePruneClient(snap, conn_targets={1: ("data-db", 5432, "dash")})
+
+    sync(beta, state_dir=state, build_dir=build, client=client, view_columns=_columns_for(beta),
+         replaced_projects=[], log=lambda _m: None)
+    assert [r["database_name"] for r in snap.databases] == ["dashkit-alpha", "dashkit-beta"]
+    assert json.loads((state / "managed.json").read_text())["pending_projects"] == ["alpha"]
+
+    snap.charts.remove(manual_chart)
+    sync(beta, state_dir=state, build_dir=build, client=client, view_columns=_columns_for(beta),
+         replaced_projects=[], log=lambda _m: None)
+    assert [r["database_name"] for r in snap.databases] == ["dashkit-beta"]
+    assert "pending_projects" not in json.loads((state / "managed.json").read_text())
+
+
 # ---------------------------------------------------------------- prune_project + CLI + plan
 
 def test_prune_project_safety_and_cli(tmp_path, monkeypatch, capsys):

@@ -127,16 +127,18 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
-def _read_managed(path: Path) -> tuple[dict[str, list[str]], list[str]]:
+def _read_managed(path: Path) -> tuple[dict[str, list[str]], list[str], str | None]:
     if not path.is_file():
-        return {}, []
+        return {}, [], None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         objects = data.get("objects") or {}
         pending = data.get("pending_projects") or []
         if not isinstance(pending, list):
             pending = []
-        return {k: [str(u) for u in objects.get(k) or []] for k in KINDS}, _valid_project_names(pending)
+        proj = data.get("project") if isinstance(data, Mapping) else None
+        managed_proj = proj if isinstance(proj, str) and _PROJECT_NAME_RE.fullmatch(proj) else None
+        return {k: [str(u) for u in objects.get(k) or []] for k in KINDS}, _valid_project_names(pending), managed_proj
     except (ValueError, AttributeError, TypeError) as exc:
         raise SyncError(f"{path}를 읽지 못함({exc}). 내용을 확인하거나 지운 뒤 다시 실행하세요") from exc
 
@@ -623,10 +625,10 @@ def sync(
     if not password:
         raise SyncError("환경변수 DATA_DB_READER_PASSWORD가 필요합니다(import passwords)")
 
-    previous, prev_pending = _read_managed(managed_path)
+    previous, prev_pending, managed_prev = _read_managed(managed_path)
     # 5단계에서 embed.json을 새 프로젝트로 덮어쓰기 전에 이전 프로젝트 힌트를 읽는다
     embed_prev = _read_embed_project(embed_path)
-    prev_projects = _valid_project_names([*prev_pending, embed_prev, *lineage], exclude=project.name)
+    prev_projects = _valid_project_names([*prev_pending, managed_prev, embed_prev, *lineage], exclude=project.name)
 
     # 3. 로그인
     client = client or SupersetClient()
@@ -684,10 +686,15 @@ def sync(
     # 7. managed.json (prune 실패 객체와 일시적 DB 연결 조회 실패·수동 보존 이전 프로젝트는 남겨 다음 실행에서 재시도)
     preserved_uuids = {p.uuid for p in prune_plan.preserved}
     preserved_projects = [p for p, uuids in prev_by_project.items() if uuids & preserved_uuids]
+    tracked_prev_uuids = {u for p in preserved_projects for u in prev_by_project[p]}
+    untracked_preserved = {
+        k: [u for u in (previous.get(k) or ()) if u in preserved_uuids and u not in tracked_prev_uuids]
+        for k in KINDS
+    }
     next_pending = _valid_project_names([*retry_projects, *preserved_projects], exclude=project.name)
     _write_json_atomic(
         managed_path,
-        _managed_doc(project, _union(current, leftovers), pending_projects=next_pending),
+        _managed_doc(project, _union(_union(current, leftovers), untracked_preserved), pending_projects=next_pending),
     )
     if failed:
         raise SyncError("import·임베드는 끝났지만 prune 일부 실패(다시 실행하면 재시도):\n  " + "\n  ".join(failed))
