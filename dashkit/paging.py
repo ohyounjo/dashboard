@@ -33,8 +33,11 @@ CELL_CHARS = 2000                   # 목록에서 칸 하나를 자르는 길�
 
 
 def mask_view_name(schema: str, name: str) -> str:
-    """모든 열이 sensitive: true인 테이블·뷰의 행 수/상수 페이지 나눔용 마스킹 뷰 이름(dashkit_meta)."""
-    return f"mask:{schema}:{name}"
+    """모든 열이 sensitive: true인 테이블·뷰의 행 수/상수 페이지 나눔용 마스킹 뷰 이름(dashkit_meta, <= 63바이트 고유)."""
+    digest = hashlib.sha256(f"{schema}:{name}".encode("utf-8")).hexdigest()[:12]
+    prefix = f"mask_{schema}_"
+    budget = max(63 - len(prefix) - 1 - len(digest), 1)
+    return f"{prefix}{name[:budget]}_{digest}"
 ROW_BYTES = 2 * 1024 * 1024         # 한 행 읽기의 응답 한도(넘는 칸만 자른다)
 
 OPS = ("eq", "ne", "lt", "le", "gt", "ge", "in", "contains", "starts_with", "is_null", "not_null")

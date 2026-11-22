@@ -68,6 +68,7 @@ def test_sql_guard_allows_valid_read_queries():
         "SELECT pg_terminate_backend(123)",
         "SELECT pg_read_file('/etc/passwd')",
         "SELECT dblink_connect('host=127.0.0.1')",
+        "SELECT query_to_xml('SELECT pg_cancel_backend(123)', true, false, '')",
     ],
 )
 def test_sql_guard_rejects_unsafe_or_malformed_queries(bad_sql):
@@ -75,6 +76,18 @@ def test_sql_guard_rejects_unsafe_or_malformed_queries(bad_sql):
         sql_guard.prepare_sql(bad_sql)
     assert exc.value.status == 422
     assert exc.value.detail == "invalid_query"
+
+
+def test_mask_view_name_unique_within_63_bytes():
+    from dashkit.paging import mask_view_name
+
+    t1 = "a" * 54 + "x"
+    t2 = "a" * 54 + "y"
+    m1 = mask_view_name("raw", t1)
+    m2 = mask_view_name("raw", t2)
+    assert len(m1.encode("utf-8")) <= 63
+    assert len(m2.encode("utf-8")) <= 63
+    assert m1 != m2
 
 
 def _make_user_client(app, role: str):

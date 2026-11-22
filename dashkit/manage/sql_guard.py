@@ -24,6 +24,17 @@ _BLOCKED_FUNCTIONS = frozenset({
     "pg_read_file",
     "pg_read_binary_file",
     "pg_ls_dir",
+    "query_to_xml",
+    "query_to_xml_and_xmlschema",
+    "query_to_xmlschema",
+    "cursor_to_xml",
+    "cursor_to_xmlschema",
+    "table_to_xml",
+    "table_to_xml_and_xmlschema",
+    "table_to_xmlschema",
+    "database_to_xml",
+    "database_to_xml_and_xmlschema",
+    "database_to_xmlschema",
 })
 _DOLLAR_TAG_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
 
