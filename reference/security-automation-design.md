@@ -5,7 +5,7 @@
 - [이슈 #38](https://github.com/ohyounjo/dashboard/issues/38): `[5] 자동 적재용 API 토큰` (`MANAGE_FEATURES=tokens`)
 - [이슈 #35](https://github.com/ohyounjo/dashboard/issues/35): `[5] 읽기 전용 SQL 콘솔` (`MANAGE_FEATURES=sql`)
 
-참조: [데이터 설계서 8-3·9·10-4·10-5·10-6·11절](./data-design.md) · [관리 서비스 보완·선택 기능 통합 설계](./manage-enhancements-design.md) · [관리 서비스 계약](../contracts/manage.md) · [인증·감사 로그 계약](../contracts/auth.md) · [적재 계약](../contracts/ingest.md)
+참조: [데이터 설계서 8-3·9·10-4·10-5·10-6·11절](./data-design.md) · [관리 서비스 보완·선택 기능 통합 설계](./manage-enhancements-design.md) · [관리 서비스 계약](../contracts/manage.md) · [인증·감사 로그 계약](../contracts/auth.md) · [적재 계약](../contracts/ingest.md) · [오케스트레이션 프롬프트](./security-automation-prompt.md)
 
 ---
 
