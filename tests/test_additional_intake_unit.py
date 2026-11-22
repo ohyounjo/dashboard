@@ -594,6 +594,33 @@ def test_xlsx_security_defenses_and_filename_checks(tmp_path):
         XlsxParser(zipenc_xlsx, "zipenc.xlsx").header()
     assert zenc_exc.value.detail == "invalid_xlsx"
 
+    # 5-j) t="s" 공유 문자열 인덱스 범위 초과/음수/비숫자 거절 (빈 <c t="s"/>만 빈 값 허용)
+    for bad_idx in ("-1", "999", "abc"):
+        bad_sst = tmp_path / f"bad_sst_{bad_idx}.xlsx"
+        bad_sst.write_bytes(
+            make_xlsx_bytes(
+                [{"name": "S1", "rows": [["id", "note"], ["E1", {"t": "s", "v": bad_idx}]]}],
+                shared_strings=["alpha", "beta"],
+            )
+        )
+        sp = XlsxParser(bad_sst, f"bad_sst_{bad_idx}.xlsx")
+        assert sp.header() == ["id", "note"]
+        srows = list(sp.rows())
+        sp.close()
+        assert len(srows) == 1 and isinstance(srows[0][1], RowError) and srows[0][1].fatal is True
+
+    blank_sst = tmp_path / "blank_sst.xlsx"
+    blank_sst.write_bytes(
+        make_xlsx_bytes(
+            [{"name": "S1", "rows": [["id", "note"], ["E1", {"t": "s", "v": ""}]]}],
+            shared_strings=["alpha", "beta"],
+        )
+    )
+    bp = XlsxParser(blank_sst, "blank_sst.xlsx")
+    assert bp.header() == ["id", "note"]
+    assert list(bp.rows()) == [(2, ["E1", ""])]
+    bp.close()
+
     # 6) 파일 이름 검증 분리: Studio(check_filename)는 .csv만, 관리 서비스(check_ingest_filename)는 .csv·.xlsx 허용
     assert upload.check_ingest_filename("orders.xlsx") == "orders.xlsx"
     assert upload.check_ingest_filename("orders.CSV") == "orders.CSV"

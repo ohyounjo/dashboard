@@ -510,16 +510,26 @@ class XlsxParser(Parser):
         except _ZIP_CORRUPT_ERRORS as exc:
             raise self._reject_xlsx(f"손상된 xlsx 스타일 엔트리입니다 ({exc})") from None
 
-    def _cell_value(self, ctype: str, style_idx: int | None, raw_v: str, inline_parts: list[str]) -> str:
+    def _cell_value(self, ctype: str, style_idx: int | None, raw_v: str, inline_parts: list[str],
+                    *, row_num: int = 1) -> str:
         if ctype == "s":
-            try:
-                raw_idx = raw_v.strip()
-                if len(raw_idx) > 12:
-                    return ""
-                idx = int(raw_idx)
-                return self._shared_strings[idx]
-            except (ValueError, IndexError):
+            raw_idx = raw_v.strip()
+            if not raw_idx:
                 return ""
+            if len(raw_idx) > 12 or not raw_idx.isascii() or not raw_idx.isdigit():
+                raise IntakeError(
+                    "invalid_csv",
+                    "손상된 xlsx 공유 문자열 참조입니다",
+                    [f"{self.name}:{max(row_num, 1)}:-: 잘못된 공유 문자열 인덱스 '{raw_idx[:32]}'"],
+                )
+            idx = int(raw_idx)
+            if idx < 0 or idx >= len(self._shared_strings):
+                raise IntakeError(
+                    "invalid_csv",
+                    "손상된 xlsx 공유 문자열 참조입니다",
+                    [f"{self.name}:{max(row_num, 1)}:-: 공유 문자열 인덱스 {idx}가 범위를 벗어남(전체 {len(self._shared_strings)}개)"],
+                )
+            return self._shared_strings[idx]
         if ctype == "inlineStr":
             return "".join(inline_parts)
         if ctype in ("str", "d", "e"):
@@ -625,7 +635,7 @@ class XlsxParser(Parser):
                     elif tag == "v" and in_c:
                         c_v = elem.text or ""
                     elif tag == "c" and in_c:
-                        val = self._cell_value(c_type, c_style, c_v, c_inline)
+                        val = self._cell_value(c_type, c_style, c_v, c_inline, row_num=cur_row_num)
                         assert c_col is not None
                         row_cells.append((c_col, val))
                         in_c = False
