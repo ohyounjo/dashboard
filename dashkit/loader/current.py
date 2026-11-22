@@ -213,34 +213,34 @@ def read_load_record(conn: psycopg.Connection, tables: Sequence[str] | None = No
                 if row is None or not isinstance(row[0], dict):
                     return None
                 out = LoadRecord(row[0], fingerprints_readable=bool(include_fingerprints))
-        if include_fingerprints and (tables is None or len(tables) > 0):
+            if include_fingerprints and (tables is None or len(tables) > 0):
+                try:
+                    with conn.transaction():
+                        with conn.cursor() as cur:
+                            stmt = sql.SQL("SELECT table_name, row_key, row_hash FROM {}.{}").format(
+                                meta, sql.Identifier(record.FINGERPRINT_TABLE))
+                            if tables is not None:
+                                cur.execute(stmt + sql.SQL(" WHERE table_name = ANY(%s)"), (list(tables),))
+                            else:
+                                cur.execute(stmt)
+                            for table, key, digest in cur:
+                                out.fingerprints.setdefault(table, []).append((key, digest))
+                except psycopg.errors.InsufficientPrivilege:
+                    out.fingerprints_readable = False
             try:
                 with conn.transaction():
                     with conn.cursor() as cur:
-                        stmt = sql.SQL("SELECT table_name, row_key, row_hash FROM {}.{}").format(
-                            meta, sql.Identifier(record.FINGERPRINT_TABLE))
+                        stmt = sql.SQL("SELECT table_name, file, sha256, rows, inserted FROM {}.{}").format(
+                            meta, sql.Identifier(record.BATCH_TABLE))
                         if tables is not None:
                             cur.execute(stmt + sql.SQL(" WHERE table_name = ANY(%s)"), (list(tables),))
                         else:
                             cur.execute(stmt)
-                        for table, key, digest in cur:
-                            out.fingerprints.setdefault(table, []).append((key, digest))
-            except psycopg.errors.InsufficientPrivilege:
-                out.fingerprints_readable = False
-        try:
-            with conn.transaction():
-                with conn.cursor() as cur:
-                    stmt = sql.SQL("SELECT table_name, file, sha256, rows, inserted FROM {}.{}").format(
-                        meta, sql.Identifier(record.BATCH_TABLE))
-                    if tables is not None:
-                        cur.execute(stmt + sql.SQL(" WHERE table_name = ANY(%s)"), (list(tables),))
-                    else:
-                        cur.execute(stmt)
-                    for table, file, digest, rows, inserted in cur:
-                        out.batches.setdefault(table, {})[file] = (digest, int(rows), int(inserted))
-        except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
-            pass
-        return out
+                        for table, file, digest, rows, inserted in cur:
+                            out.batches.setdefault(table, {})[file] = (digest, int(rows), int(inserted))
+            except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
+                pass
+            return out
     except (psycopg.errors.UndefinedTable, psycopg.errors.InvalidSchemaName, psycopg.errors.InsufficientPrivilege):
         return None
     except psycopg.Error as exc:
