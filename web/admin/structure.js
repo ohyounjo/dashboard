@@ -139,67 +139,120 @@ export function addColumnCard(t, { alive, onClose, onDone }) {
 
 /* ---------------- 열 규칙 고치기 ---------------- */
 
-/** 열 규칙 고치기(admin): 설명, enum 값, min·max·pattern, 유형 넓히기. 유형을 바꾸면 쓰이는 곳(차트)을 먼저 보이고 확인을 받는다 */
+/** 열 규칙·이름·유형 고치기(admin): 열 이름 변경, 설명, enum 값, min·max·pattern, 유형 넓히기·좁히기 */
 export function columnRuleCard(t, col, { alive, onClose, onDone }) {
-  const desc = textInput(col.description || "", { name: "description" });
-  const ctl = { description: desc };
-  const rows = { description: fieldRow(D.description, desc) };
-  if (col.type === "enum") {
+  const ctl = {};
+  const rows = {};
+  if (!col.primary_key) {
+    ctl.name = textInput(col.name, { name: "name", maxlength: 63 });
+    rows.name = fieldRow(D.renameColLabel, ctl.name, D.nameRule);
+  } else {
+    const ro = textInput(col.name, { name: "name", readonly: true, disabled: true });
+    rows.name = fieldRow(D.renameColLabel, ro, D.renameColHint);
+  }
+  ctl.description = textInput(col.description || "", { name: "description" });
+  rows.description = fieldRow(D.description, ctl.description);
+
+  const targets = (!col.primary_key && !col.ref) ? St.typeTargets(col.type) : [];
+  if (targets.length) {
+    ctl.type = typeSelect([col.type, ...targets], col.type);
+    rows.type = fieldRow(D.type, ctl.type, D.typeChangeHint);
+  }
+
+  const canEnum = col.type === "enum" || targets.includes("enum");
+  if (canEnum) {
     ctl.values = textInput((col.values || []).join(", "), { name: "values" });
     rows.values = fieldRow(D.enumValues, ctl.values, D.enumValuesHint);
   }
-  if (["integer", "number", "date"].includes(col.type)) {
+  const canRange = ["integer", "number", "date"].includes(col.type) || targets.some((x) => ["integer", "number", "date"].includes(x));
+  if (canRange) {
     ctl.min = textInput(col.min ?? "", { name: "min" });
     ctl.max = textInput(col.max ?? "", { name: "max" });
     rows.min = fieldRow(D.ruleMin, ctl.min);
     rows.max = fieldRow(D.ruleMax, ctl.max);
   }
-  if (col.type === "text") {
+  const canPattern = ["text", "enum"].includes(col.type) || targets.some((x) => ["text", "enum"].includes(x));
+  if (canPattern) {
     ctl.pattern = textInput(col.pattern || "", { name: "pattern" });
     rows.pattern = fieldRow(D.rulePatternLabel, ctl.pattern, D.patternHint);
   }
-  const wider = St.widenTargets(col.type);
-  if (wider.length && !col.primary_key) {
-    ctl.type = typeSelect([col.type, ...wider], col.type);
-    rows.type = fieldRow(D.type, ctl.type, D.widenHint);
-  }
+
+  const syncFields = () => {
+    const curType = ctl.type ? ctl.type.value : col.type;
+    if (rows.values) rows.values.el.hidden = curType !== "enum";
+    if (rows.min) rows.min.el.hidden = !["integer", "number", "date"].includes(curType);
+    if (rows.max) rows.max.el.hidden = !["integer", "number", "date"].includes(curType);
+    if (rows.pattern) rows.pattern.el.hidden = !["text", "enum"].includes(curType);
+  };
+  syncFields();
+
   const impact = h("div");
-  const confirm = checkbox(D.typeChangeConfirm, false);
+  const warnBox = h("div");
+  const confirm = checkbox(D.evolutionConfirm, false);
   confirm.el.hidden = true;
-  if (ctl.type) {
-    ctl.type.addEventListener("change", async () => {
-      const changing = ctl.type.value !== col.type;
-      confirm.el.hidden = !changing;
-      confirm.input.checked = false;
-      if (!changing) { impact.replaceChildren(); return; }
+  let usedCache = null;
+
+  const updateImpact = async () => {
+    syncFields();
+    const renamed = ctl.name && ctl.name.value.trim() !== col.name;
+    const curType = ctl.type ? ctl.type.value : col.type;
+    const typeChanged = curType !== col.type;
+    const narrowed = typeChanged && St.narrowTargets(col.type).includes(curType);
+    const needsConfirm = !!(renamed || typeChanged);
+    confirm.el.hidden = !needsConfirm;
+    if (!needsConfirm) confirm.input.checked = false;
+
+    if ((renamed || narrowed) && t.mode === "append") {
+      warnBox.replaceChildren(box("warn", D.appendCompactWarning));
+    } else {
+      warnBox.replaceChildren();
+    }
+    if (!needsConfirm) { impact.replaceChildren(); return; }
+    if (!usedCache) {
       impact.replaceChildren(h("div", { class: "sk-note", role: "status", text: T.loading }));
       try {
-        const used = await api("GET", `${tablePath(t.name)}/used_by`);
-        if (alive()) impact.replaceChildren(typeImpact(used));
-      } catch (err) { if (alive()) impact.replaceChildren(box("bad", dataFailText(err))); }
-    });
-  }
+        usedCache = await api("GET", `${tablePath(t.name)}/used_by`);
+      } catch (err) {
+        if (alive()) impact.replaceChildren(box("bad", dataFailText(err)));
+        return;
+      }
+    }
+    if (alive()) impact.replaceChildren(columnImpactBox(usedCache, col.name));
+  };
+
+  if (ctl.type) ctl.type.addEventListener("change", updateImpact);
+  if (ctl.name) ctl.name.addEventListener("input", updateImpact);
+
   const out = h("div", { class: "d-out" });
   const submit = h("button", { type: "submit", class: "btn primary" }, D.saveRules);
-  const form = h("form", { class: "d-form", novalidate: true }, h("div", { class: "d-fields" }, Object.values(rows).map((r) => r.el)),
-    impact, confirm.el, h("div", { class: "a-actions" }, submit, btn(D.cancel, onClose)));
+  const form = h("form", { class: "d-form", novalidate: true },
+    h("div", { class: "d-fields" }, Object.values(rows).map((r) => r.el)),
+    impact, warnBox, confirm.el, h("div", { class: "a-actions" }, submit, btn(D.cancel, onClose)));
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     Object.values(rows).forEach((r) => r.setErr(null));
     const form0 = Object.fromEntries(Object.entries(ctl).map(([k, c]) => [k, c.value]));
-    const made = St.columnUpdateOp(t.name, col, form0);
+    const made = St.columnEditOps(t.name, col, form0, t.columns.map((c) => c.name));
     if (made.problems.length) {
       for (const p of made.problems) (rows[p.field] || rows.description).setErr(problemText(p));
-      (ctl[made.problems[0].field] || desc).focus();
+      (ctl[made.problems[0].field] || ctl.description).focus();
       return;
     }
-    if (!made.op) { out.replaceChildren(box("neutral", D.noChanges)); return; }
-    if (made.typeChanged && !confirm.input.checked) { out.replaceChildren(box("warn", D.typeChangeNeedsConfirm)); confirm.input.focus(); return; }
+    if (!made.ops.length) { out.replaceChildren(box("neutral", D.noChanges)); return; }
+    if ((made.typeChanged || made.renamed) && !confirm.input.checked) {
+      out.replaceChildren(box("warn", D.evolutionNeedsConfirm));
+      confirm.input.focus();
+      return;
+    }
     submit.disabled = true;
     try {
-      const result = await runJob(async () => api("PATCH", `${BASE}/config`, { ops: [made.op], revision: t.revision }), out, alive);
+      const result = await runJob(async () => api("PATCH", `${BASE}/config`, { ops: made.ops, revision: t.revision }), out, alive);
       if (!result || !alive()) return;
-      onDone(configResult(result, D.columnUpdated(col.name)));
+      const msg = made.renamed && made.ops.length === 1
+        ? D.columnRenamed(col.name, form0.name.trim())
+        : D.columnUpdated(made.renamed ? form0.name.trim() : col.name);
+      onDone(configResult(result, msg));
     } catch (err) {
       if (alive()) out.replaceChildren(configFail(err));
     } finally {
@@ -207,16 +260,71 @@ export function columnRuleCard(t, col, { alive, onClose, onDone }) {
     }
   });
   const el = card(D.ruleTitle(`${t.name}.${col.name}`), onClose, h("p", { class: "a-note", text: D.ruleIntro }), form, out);
-  return { el, focus: () => desc.focus() };
+  return { el, focus: () => (ctl.name || ctl.description).focus() };
 }
 
-/** 유형을 바꿀 때 영향받는 그래프(쓰이는 곳의 차트·섹션). 계보는 열 단위가 아니라 테이블 단위라 넓게 보인다 */
-function typeImpact(used) {
-  const groups = St.usageByDataset(used);
-  const charts = groups.flatMap((g) => g.charts.map((c) => `${c.title || c.key} (${g.dataset})`));
-  const sections = groups.flatMap((g) => g.sections.map((s) => D.sectionAt(s.tab, s.index, g.dataset)));
-  if (!charts.length && !sections.length) return box("neutral", D.typeImpactNone);
-  return box("warn", D.typeImpactTitle, { lines: [...charts, ...sections] });
+function columnImpactBox(used, colName) {
+  const imp = St.columnImpact(used, colName);
+  const lines = [
+    ...imp.charts.map((c) => `${c.title || c.key} (${c.dataset})`),
+    ...imp.filters.map((f) => `${f.label || f.key} (${f.dashboard})`),
+    ...imp.sections.map((s) => D.sectionAt(s.tab, s.index, s.dataset)),
+  ];
+  if (!lines.length && !imp.datasets.length) return box("neutral", D.typeImpactNone);
+  if (!lines.length) return box("neutral", D.typeImpactNone, { lines: imp.datasets.map((d) => `${D.usageDataset}: ${d}`) });
+  return box("warn", D.typeImpactTitle, { lines });
+}
+
+/** 열 삭제(admin): 차단 참조가 없으면 영향·되돌리기 제약 확인 후 PATCH /config column.remove */
+export function dropColumnCard(t, col, { alive, onClose, onDone }) {
+  const confirmName = textInput("", { name: "confirm" });
+  const row = fieldRow(D.dropColumnConfirmLabel(col.name), confirmName);
+  const impact = h("div", {}, h("div", { class: "sk-note", role: "status", text: T.loading }));
+  const out = h("div", { class: "d-out" });
+  const submit = h("button", { type: "submit", class: "btn danger" }, D.dropColumn);
+  submit.disabled = true;
+
+  api("GET", `${tablePath(t.name)}/used_by`).then((used) => {
+    if (!alive()) return;
+    const imp = St.columnImpact(used, col.name);
+    if (imp.blocking.length) {
+      const lines = imp.blocking.map((b) =>
+        b.kind === "chart" ? `${b.title || b.key} (${b.dataset})`
+          : b.kind === "filter" ? `${b.label || b.key} (${b.dashboard})`
+          : D.sectionAt(b.tab, b.index, b.dataset));
+      impact.replaceChildren(box("bad", D.dropColumnBlocked, { lines }));
+      submit.disabled = true;
+      return;
+    }
+    const parts = [columnImpactBox(used, col.name)];
+    if (t.mode === "append") parts.push(box("warn", D.dropColumnAppendWarning));
+    impact.replaceChildren(...parts);
+    submit.disabled = false;
+  }).catch((err) => {
+    if (alive()) impact.replaceChildren(box("bad", dataFailText(err)));
+  });
+
+  const form = h("form", { class: "d-form", novalidate: true },
+    impact, row.el, h("div", { class: "a-actions" }, submit, btn(D.cancel, onClose)));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (confirmName.value.trim() !== col.name) { row.setErr(D.dropColumnMismatch); confirmName.focus(); return; }
+    row.setErr(null);
+    submit.disabled = true;
+    try {
+      const op = St.columnRemoveOp(t.name, col.name);
+      const result = await runJob(async () => api("PATCH", `${BASE}/config`, { ops: [op], revision: t.revision }), out, alive);
+      if (!result || !alive()) return;
+      onDone(configResult(result, D.columnDropped(col.name)));
+    } catch (err) {
+      if (alive()) out.replaceChildren(configFail(err));
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  const el = card(D.dropColumnTitle(`${t.name}.${col.name}`), onClose, h("p", { class: "a-note", text: D.dropColumnIntro }), form, out);
+  el.classList.add("danger-zone");
+  return { el, focus: () => confirmName.focus() };
 }
 
 /* ---------------- 쓰이는 곳 ---------------- */

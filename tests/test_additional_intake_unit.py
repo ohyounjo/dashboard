@@ -1,6 +1,7 @@
 """이슈 #42 단위 테스트: xlsx 파서, CursorParser/ingest-db 보안, 감시 폴더 필터/마스킹, 이어 올리기 저장소, 정규형 동등성."""
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
@@ -461,6 +462,36 @@ def test_xlsx_security_defenses_and_filename_checks(tmp_path):
     bad_rows = list(rp.rows())
     rp.close()
     assert len(bad_rows) == 1 and isinstance(bad_rows[0][1], RowError) and bad_rows[0][1].fatal is True
+
+    # 5-c) 지수 표기 숫자 확장 길이 상한 초과(1e200000000 등) → MemoryError 없이 즉시 거절
+    from dashkit.ingest.xlsx import _format_number_cell
+    from dashkit.ingest.intake import CsvParser
+    assert _format_number_cell("0e200000000") == "0"
+    for huge_num in ("1e200000000", "1e-200000000", "-1.5e200000000"):
+        with pytest.raises(IntakeError) as num_exc:
+            _format_number_cell(huge_num)
+        assert num_exc.value.detail == "invalid_csv"
+
+    huge_exp_xlsx = tmp_path / "huge_exp.xlsx"
+    huge_exp_xlsx.write_bytes(make_xlsx_bytes([{"name": "S1", "rows": [["id", "n"], ["E1", {"t": "n", "v": "1e200000000"}]]}]))
+    ep = XlsxParser(huge_exp_xlsx, "huge_exp.xlsx")
+    assert ep.header() == ["id", "n"]
+    exp_rows = list(ep.rows())
+    ep.close()
+    assert len(exp_rows) == 1 and isinstance(exp_rows[0][1], RowError) and exp_rows[0][1].fatal is True
+
+    # 5-d) 손상된/잘린 .csv.gz → IntakeError('invalid_csv') 정규화
+    bad_gz = tmp_path / "corrupt.csv.gz"
+    bad_gz.write_bytes(b"not-a-gzip")
+    with pytest.raises(IntakeError) as gz_exc:
+        CsvParser(bad_gz, "corrupt.csv.gz").header()
+    assert gz_exc.value.detail == "invalid_csv"
+    valid_gz = gzip.compress(b"id,name\n1,a\n")
+    trunc_gz = tmp_path / "trunc.csv.gz"
+    trunc_gz.write_bytes(valid_gz[:-4])
+    with pytest.raises(IntakeError) as gz_exc2:
+        CsvParser(trunc_gz, "trunc.csv.gz").header()
+    assert gz_exc2.value.detail == "invalid_csv"
 
     # 6) 파일 이름 검증 분리: Studio(check_filename)는 .csv만, 관리 서비스(check_ingest_filename)는 .csv·.xlsx 허용
     assert upload.check_ingest_filename("orders.xlsx") == "orders.xlsx"

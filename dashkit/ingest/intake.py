@@ -16,8 +16,10 @@ from __future__ import annotations
 import codecs
 import csv
 import difflib
+import gzip
 import io
 import re
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, Callable, Iterator, Mapping, Sequence
@@ -84,6 +86,9 @@ def _utf8_ok(path: Path) -> bool:
             decoder.decode(b"", final=True)
     except UnicodeDecodeError:
         return False
+    except (gzip.BadGzipFile, EOFError, zlib.error, OSError) as exc:
+        raise IntakeError("invalid_csv", "CSV 파일을 읽을 수 없습니다",
+                          [f"{path.name}:1:-: 압축 해제 또는 파일 읽기 오류 ({exc})"]) from None
     return True
 
 
@@ -115,7 +120,11 @@ class CsvParser(Parser):
             self.encoding = "utf-8"
         else:
             self.encoding = "utf-8" if _utf8_ok(path) else "cp949"
-        raw = batches.open_binary(path)
+        try:
+            raw = batches.open_binary(path)
+        except (gzip.BadGzipFile, EOFError, zlib.error, OSError) as exc:
+            raise IntakeError("invalid_csv", "CSV 파일을 열 수 없습니다",
+                              [f"{name}:1:-: 압축 해제 또는 파일 열기 오류 ({exc})"]) from None
         self._raw_file = getattr(raw, "fileobj", None) or raw     # gzip이면 바깥 파일
         try:
             self._size: int | None = path.stat().st_size
@@ -135,15 +144,25 @@ class CsvParser(Parser):
         try:
             first = self._text.readline()
         except UnicodeDecodeError as exc:
+            self.close()
             raise IntakeError("invalid_csv", "CSV를 읽을 수 없습니다",
                               [f"{self.name}:1:-: UTF-8이 아님 ({exc.reason}, 바이트 위치 {exc.start})"]) from None
+        except (gzip.BadGzipFile, EOFError, zlib.error, OSError) as exc:
+            self.close()
+            raise IntakeError("invalid_csv", "CSV 파일을 읽을 수 없습니다",
+                              [f"{self.name}:1:-: 압축 해제 또는 파일 읽기 오류 ({exc})"]) from None
         self.delimiter = "," if self.strict else _sniff_delimiter(first)
         rest = self._text
         self._reader = csv.reader(_chain(first, rest), delimiter=self.delimiter)
         try:
             header = next(self._reader, None)
         except csv.Error as exc:
+            self.close()
             raise IntakeError("invalid_csv", "CSV를 읽을 수 없습니다", [f"{self.name}:1:-: CSV 문법 오류: {exc}"]) from None
+        except (gzip.BadGzipFile, EOFError, zlib.error, OSError) as exc:
+            self.close()
+            raise IntakeError("invalid_csv", "CSV 파일을 읽을 수 없습니다",
+                              [f"{self.name}:1:-: 압축 해제 또는 파일 읽기 오류 ({exc})"]) from None
         if not header or all(h.strip() == "" for h in header):
             raise IntakeError("invalid_csv", "CSV를 읽을 수 없습니다", [f"{self.name}:1:-: 머리글이 없음"])
         self._header = [h.strip() for h in header]
@@ -170,6 +189,10 @@ class CsvParser(Parser):
                 at = self._prev_end + 1
                 yield at, RowError(self.where(at, "-"), f"UTF-8이 아님 ({exc.reason}, 바이트 위치 {exc.start})",
                                    fatal=True)
+                return
+            except (gzip.BadGzipFile, EOFError, zlib.error, OSError) as exc:
+                at = self._prev_end + 1
+                yield at, RowError(self.where(at, "-"), f"압축 해제 또는 파일 읽기 오류: {exc}", fatal=True)
                 return
             line = self._prev_end + 1
             self._prev_end = reader.line_num

@@ -2,7 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  NAME_RE, widenTargets, splitValues, columnAddOp, columnUpdateOp, datasetAddOp, tableForCreate, renameInKey, usageByDataset,
+  NAME_RE, widenTargets, narrowTargets, typeTargets, splitValues, columnAddOp, columnUpdateOp,
+  columnEditOps, columnRemoveOp, columnImpact, datasetAddOp, tableForCreate, renameInKey, usageByDataset,
 } from "../../web/shared/structure.js";
 
 const codes = (made) => made.problems.map((p) => `${p.field}:${p.code}`);
@@ -106,4 +107,41 @@ test("쓰이는 곳을 데이터셋마다 묶는다", () => {
     { dataset: "d2", charts: [], sections: [{ tab: "y", index: 0, type: "kanban" }] },
   ]);
   assert.deepEqual(usageByDataset(null), []);
+});
+
+test("유형 좁히기 후보 및 열 이름 변경·삭제·영향 계산", () => {
+  assert.deepEqual(narrowTargets("text"), ["integer", "number", "boolean", "date", "timestamp", "enum"]);
+  assert.deepEqual(narrowTargets("number"), ["integer"]);
+  assert.deepEqual(narrowTargets("timestamp"), ["date"]);
+  assert.deepEqual(narrowTargets("integer"), []);
+  assert.ok(typeTargets("number").includes("text") && typeTargets("number").includes("integer"));
+
+  const col = { name: "amount", type: "text", pattern: "^[0-9]+$" };
+  const made = columnEditOps("entries", col, { name: "qty", type: "integer", description: "수량", min: "1", max: "" }, ["id", "amount"]);
+  assert.deepEqual(made.problems, []);
+  assert.equal(made.renamed, true);
+  assert.equal(made.typeChanged, true);
+  assert.equal(made.typeNarrowed, true);
+  assert.equal(made.needsCompact, true);
+  assert.deepEqual(made.ops, [
+    { op: "column.rename", table: "entries", column: "amount", to: "qty" },
+    { op: "column.update", table: "entries", column: "qty", set: { description: "수량", min: 1, pattern: null, type: "integer" } },
+  ]);
+
+  assert.deepEqual(columnRemoveOp("entries", "note"), { op: "column.remove", table: "entries", column: "note" });
+
+  const imp = columnImpact({
+    columns: {
+      note: {
+        datasets: ["d1", "d2"],
+        charts: [{ key: "c1", title: "C1", dashboard: "db", dataset: "d1", tabs: ["t1"], direct: true },
+                 { key: "c2", title: "C2", dashboard: "db", dataset: "d2", tabs: ["t1"], direct: false }],
+        filters: [{ dashboard: "db", key: "f1", label: "F1", dataset: "d1" }],
+        sections: [{ tab: "t1", index: 0, type: "kanban", dataset: "d1", direct: true }],
+        labels: ["d1"],
+      },
+    },
+  }, "note");
+  assert.equal(imp.datasets.length, 2);
+  assert.equal(imp.blocking.length, 3);
 });

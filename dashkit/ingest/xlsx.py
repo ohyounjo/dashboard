@@ -116,7 +116,7 @@ def _excel_serial_to_iso(raw: str, *, has_time: bool, date1904: bool) -> str | N
         serial = Decimal(raw)
     except InvalidOperation:
         return None
-    if not serial.is_finite():
+    if not serial.is_finite() or serial < 0 or serial > 3_000_000:
         return None
     days_dec = serial // 1
     frac = serial - days_dec
@@ -149,11 +149,32 @@ def _excel_serial_to_iso(raw: str, *, has_time: bool, date1904: bool) -> str | N
     return dt.isoformat()
 
 
-def _format_number_cell(raw: str) -> str:
+def _decimal_fixed_length(d: Decimal) -> int:
+    """Decimal을 format(d, 'f')로 펼쳤을 때의 예상 문자열 길이를 할당 없이 계산한다."""
+    sign, digits, exp = d.as_tuple()
+    assert isinstance(exp, int)
+    if all(dig == 0 for dig in digits):
+        return 1 + (1 if sign else 0)
+    end = len(digits)
+    while exp < 0 and end > 0 and digits[end - 1] == 0:
+        end -= 1
+        exp += 1
+    n = max(end, 1)
+    s_len = 1 if sign else 0
+    if exp >= 0:
+        return s_len + n + exp
+    if n + exp > 0:
+        return s_len + n + 1
+    return s_len + 2 + (-exp)
+
+
+def _format_number_cell(raw: str, *, max_chars: int = MAX_CELL_CHARS) -> str:
     s = raw.strip()
     if not s:
         return ""
     if "e" not in s.lower():
+        if len(s) > max_chars:
+            raise IntakeError("invalid_csv", f"숫자 셀 길이가 최대 허용 길이({max_chars}자)를 초과했습니다")
         return s
     try:
         d = Decimal(s)
@@ -161,6 +182,11 @@ def _format_number_cell(raw: str) -> str:
         return s
     if not d.is_finite():
         return s
+    if _decimal_fixed_length(d) > max_chars:
+        raise IntakeError(
+            "invalid_csv",
+            f"숫자 셀 길이가 최대 허용 길이({max_chars}자)를 초과했습니다",
+        )
     text = format(d, "f")
     if "." in text:
         text = text.rstrip("0").rstrip(".")
@@ -477,7 +503,7 @@ class XlsxParser(Parser):
                 iso = _excel_serial_to_iso(raw_v.strip(), has_time=has_time, date1904=self._date1904)
                 if iso is not None:
                     return iso
-        return _format_number_cell(raw_v)
+        return _format_number_cell(raw_v, max_chars=self.limits.max_cell_chars)
 
     def _iter_sheet_rows(self) -> Iterator[tuple[int, list[str]]]:
         assert self._zf is not None and self._sheet_target is not None

@@ -944,6 +944,15 @@ def test_watch_processing_recovery_transient_retry_and_sensitive_redaction(tmp_p
         doc = _json.loads(raw_txt)
         assert doc["detail"] == "invalid_rows"
 
+    # 5) 손상된 .csv.gz 격리 후 다음 정상 파일 계속 처리
+    (inbox / "01_bad.csv.gz").write_bytes(b"not-a-valid-gzip-stream")
+    (inbox / "02_ok.csv").write_text("id,group_id,state\nE962,g1,open\n", encoding="utf-8")
+    st_corrupt = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db)
+    assert st_corrupt["failed"] == 1 and st_corrupt["succeeded"] == 1
+    assert not list(proc.iterdir())
+    assert any(p.name.endswith("-01_bad.csv.gz.error.json") for p in (inbox / "_failed").iterdir())
+    assert any(p.name.endswith("-02_ok.csv") for p in (inbox / "_done").iterdir())
+
     rebuilt_equals_current(root, scratch_db)
 
 

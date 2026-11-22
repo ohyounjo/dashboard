@@ -325,8 +325,8 @@ def test_hand_edit_between_requests_is_respected(client):
 def test_ops_registry_takes_new_ops(monkeypatch):
     """연산은 등록 표에 함수를 더하면 는다."""
     assert sorted(ops.OPS) == [
-        "app.update", "chart.add", "chart.remove", "chart.update", "column.add", "column.update",
-        "dashboard.add", "dashboard.update", "dataset.add", "dataset.remove", "dataset.update",
+        "app.update", "chart.add", "chart.remove", "chart.update", "column.add", "column.remove", "column.rename",
+        "column.update", "dashboard.add", "dashboard.update", "dataset.add", "dataset.remove", "dataset.update",
         "filter.add", "filter.move", "filter.remove", "filter.update", "layout.set",
         "section.add", "section.move", "section.remove", "section.update",
         "tab.add", "tab.move", "tab.remove", "tab.update", "table.add", "table.remove", "table.update"]
@@ -1102,7 +1102,9 @@ def test_column_update_saves_aliases_the_same_way_as_the_manager(client, tmp_pat
     assert out["changed"] == ["schema.yaml"]
     assert (other.projects / "devtracker" / "schema.yaml").read_bytes() == via_studio
     r = patch(client, {"op": "column.update", "table": "members", "column": "name", "set": {"type": "integer"}})
-    assert r.status == 400 and "넓히기만" in json.loads(r.body)["message"]
+    assert r.status == 400 and "데이터 파일을 함께 변환" in json.loads(r.body)["message"]
+    r = patch(client, {"op": "column.update", "table": "issues", "column": "created", "set": {"type": "integer"}})
+    assert r.status == 400 and "지원하지 않는 유형 변경" in json.loads(r.body)["message"]
     r = patch(client, {"op": "column.update", "table": "members", "column": "name", "set": {"ref": "docs.id"}})
     assert r.status == 400 and "바꿀 수 없는 키" in json.loads(r.body)["message"]
 

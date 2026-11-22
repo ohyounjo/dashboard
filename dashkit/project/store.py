@@ -330,16 +330,29 @@ def save_ops(name: str, op_list: list[Mapping[str, Any]], base_revision: str | N
 
 
 def _no_replace_column_add(root: Path, op_list: list[Mapping[str, Any]]) -> None:
-    """replace 테이블의 열 추가는 그 CSV에도 열을 더해야 한다(설계서 6-2). 이 저장은 YAML만 쓰므로 거절한다.
-    관리 서비스의 구조 변경(dashkit/ingest/structure.py)이 두 파일을 한 번에 바꾼다."""
-    if not any(o.get("op") == "column.add" for o in op_list):
-        return
+    """데이터 파일 변환·합치기가 필요한 연산은 YAML만 쓰는 Studio 저장에서 거절한다.
+    관리 서비스의 구조 변경(dashkit/ingest/structure.py)이 설정과 데이터 파일을 한 번에 바꾼다."""
+    from . import ops
+
     tables = (read_raw(root, config.SCHEMA_FILE) or {}).get("tables") or {}
     for i, o in enumerate(op_list):
-        spec = tables.get(o.get("table")) if o.get("op") == "column.add" else None
-        if isinstance(spec, dict) and (spec.get("mode") or "replace") == "replace":
-            message = f"ops[{i}] column.add: replace 테이블은 CSV에도 열을 더해야 함(운용 화면의 열 추가를 쓰거나 두 파일을 함께 고친다)"
+        op_name = o.get("op")
+        if op_name == "column.add":
+            spec = tables.get(o.get("table"))
+            if isinstance(spec, dict) and (spec.get("mode") or "replace") == "replace":
+                message = f"ops[{i}] column.add: replace 테이블은 CSV에도 열을 더해야 함(운용 화면의 열 추가를 쓰거나 두 파일을 함께 고친다)"
+                raise StoreError(400, "invalid_op", message, [message])
+        elif op_name in ("column.rename", "column.remove"):
+            message = f"ops[{i}] {op_name}: 데이터 파일을 함께 변환해야 하는 연산입니다. 운용 화면에서 실행하세요"
             raise StoreError(400, "invalid_op", message, [message])
+        elif op_name == "column.update":
+            spec = tables.get(o.get("table"))
+            col_spec = (spec.get("columns") or {}).get(o.get("column")) if isinstance(spec, dict) else None
+            old_type = col_spec.get("type") if isinstance(col_spec, dict) else None
+            new_type = (o.get("set") or {}).get("type") if isinstance(o.get("set"), Mapping) else None
+            if old_type and new_type and (old_type, new_type) in ops._NARROWER:
+                message = f"ops[{i}] column.update: 유형 좁히기는 데이터 파일을 함께 변환해야 하는 연산입니다. 운용 화면에서 실행하세요"
+                raise StoreError(400, "invalid_op", message, [message])
 
 
 # ---------------------------------------------------------------- YAML 고쳐 쓰기

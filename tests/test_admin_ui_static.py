@@ -210,7 +210,7 @@ def test_rows_query_screens():
 
 # 관리 서비스의 PATCH /config가 받는 연산(contracts/manage.md "구조 변경")
 STRUCT_OPS = {"table.add", "table.update", "table.remove", "column.add", "column.update",
-              "dataset.add", "dataset.update", "dataset.remove"}
+              "column.rename", "column.remove", "dataset.add", "dataset.update", "dataset.remove"}
 
 
 def test_structure_screens_use_contract():
@@ -231,7 +231,7 @@ def test_structure_screens_use_contract():
         assert f"`{op}`" in contract, f"contracts/manage.md에 없는 연산: {op}"
     # revision은 폼을 연 때의 것을 보낸다(보내기 직전에 읽으면 그 사이 다른 사람의 변경을 덮어써도 409가 나지 않는다)
     assert "revision: await currentRevision(" not in code
-    assert code.count("revision: t.revision") == 3 and code.count("revision: await revAtOpen") == 2
+    assert code.count("revision: t.revision") == 4 and code.count("revision: await revAtOpen") == 2
 
 
 def test_structure_buttons_are_admin_only():

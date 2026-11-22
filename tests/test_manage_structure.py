@@ -169,3 +169,47 @@ def test_export_has_only_the_config_files(who):
         assert r.status == 200 and r.headers.get("Content-Type") == "application/zip"
         names = zipfile.ZipFile(io.BytesIO(r.read())).namelist()
     assert sorted(names) == ["zz-ingest/REVISION", "zz-ingest/dashboard.yaml", "zz-ingest/schema.yaml"]
+
+
+def test_column_used_by_in_use_and_irreversible_history(who):
+    admin, op = who["admin"], who["operator"]
+    code, used, _h = call("GET", "/tables/entries/used_by", op)
+    assert code == 200 and "columns" in used
+    assert "amount" in used["columns"]
+
+    # table: 데이터셋을 통해 차트가 참조 중인 열(id 또는 group_id 등) 삭제 시 409 in_use 확인
+    # (operator는 403)
+    code, b, _h = call("PATCH", "/config", op, {"ops": [{"op": "column.remove", "table": "entries", "column": "memo"}], "revision": revision(admin)})
+    assert code == 403
+
+    # append 테이블 열 삭제 → irreversible: true 이력 생성, 복원 시 409 irreversible_history
+    code, b, _h = call("PATCH", "/config", admin, {
+        "ops": [{"op": "column.remove", "table": "entries", "column": "memo"}],
+        "revision": revision(admin),
+    })
+    assert code == 202, b
+    job = wait_job(b["job"], admin)
+    assert job["status"] == "succeeded", job
+    assert any(a["op"] == "column.remove" and a["column"] == "memo" for a in job["result"].get("affected") or [])
+    hid = job["result"]["history"]
+    code, hist, _h = call("GET", "/history", admin)
+    entry = next(h for h in hist["items"] if h["id"] == hid)
+    assert entry.get("irreversible") is True
+    code, b, _h = call("POST", f"/history/{hid}/restore", admin, {"revision": hist["revision"]})
+    assert code == 409 and b["detail"] == "irreversible_history"
+
+    # replace 테이블(groups) 열 이름 변경 → irreversible 아님, 복원 가능
+    code, b, _h = call("PATCH", "/config", admin, {
+        "ops": [{"op": "column.rename", "table": "groups", "column": "label", "to": "title"}],
+        "revision": revision(admin),
+    })
+    assert code == 202, b
+    job2 = wait_job(b["job"], admin)
+    assert job2["status"] == "succeeded", job2
+    hid2 = job2["result"]["history"]
+    code, hist2, _h = call("GET", "/history", admin)
+    entry2 = next(h for h in hist2["items"] if h["id"] == hid2)
+    assert not entry2.get("irreversible")
+    code, b, _h = call("POST", f"/history/{hid2}/restore", admin, {"revision": hist2["revision"]})
+    assert code == 202
+    assert wait_job(b["job"], admin)["status"] == "succeeded"

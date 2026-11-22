@@ -11,12 +11,14 @@
 from __future__ import annotations
 
 import fcntl
+import gzip
 import json
 import logging
 import os
 import re
 import signal
 import time
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -282,6 +284,15 @@ def _process_one(
         _quarantine(
             folder, proc_path, orig_name, tname, table_spec,
             status=exc.status, detail=exc.detail, message=exc.message, errors=exc.errors,
+        )
+        stats["failed"] += 1
+        return
+    except (gzip.BadGzipFile, EOFError, zlib.error, UnicodeError) as exc:
+        _audit_watch(project.name, tname, orig_name, detail_code="invalid_csv")
+        _quarantine(
+            folder, proc_path, orig_name, tname, table_spec,
+            status=422, detail="invalid_csv", message="손상되었거나 읽을 수 없는 파일입니다",
+            errors=[f"{orig_name}:1:-: {exc}"],
         )
         stats["failed"] += 1
         return
