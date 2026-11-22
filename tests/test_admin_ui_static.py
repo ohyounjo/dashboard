@@ -103,7 +103,8 @@ def test_data_menu_strings_match():
     used: set[str] = set()
     # 데이터 쪽 화면(테이블, 행 표, 데이터셋)은 모두 S.admin.data(D)의 문구를 쓴다
     for f in (ADMIN / "menus" / "tables.js", ADMIN / "rows.js", ADMIN / "menus" / "datasets.js", ADMIN / "datakit.js",
-              ADMIN / "structure.js", ADMIN / "menus" / "history.js"):
+              ADMIN / "structure.js", ADMIN / "menus" / "history.js", ADMIN / "menus" / "tokens.js",
+              ADMIN / "menus" / "sql.js"):
         code = _read(f)
         assert "const D = T.data;" in code, f"{f.name}: const D = T.data;"
         used |= set(re.findall(r"\bD\.([A-Za-z][A-Za-z0-9_]*)", code))
@@ -249,3 +250,17 @@ def test_structure_buttons_are_admin_only():
     shared = _without_comments(_read(SHARED / "structure.js"))
     assert not re.search(r"\bdocument\b|\bwindow\b", shared)
     assert (ROOT / "tests" / "js" / "structure.test.mjs").is_file()
+
+
+def test_security_automation_menus():
+    assert (ADMIN / "menus" / "tokens.js").is_file()
+    assert (ADMIN / "menus" / "sql.js").is_file()
+    listed = re.search(r"const MENUS = \[([^\]]*)\]", _read(ADMIN / "admin.js")).group(1)
+    assert re.search(r"\btokens\b", listed) and re.search(r"\bsql\b", listed)
+    strings = _read(WEB / "strings.js")
+    for action in ("data.token.create", "data.token.revoke", "data.query.run"):
+        assert f'"{action}":' in strings
+    tokens_js = _without_comments(_read(ADMIN / "menus" / "tokens.js"))
+    assert 'isManageFeature("tokens")' in tokens_js and "isAdmin()" in tokens_js
+    sql_js = _without_comments(_read(ADMIN / "menus" / "sql.js"))
+    assert 'isManageFeature("sql")' in sql_js and "pendingDatasetSql" in sql_js

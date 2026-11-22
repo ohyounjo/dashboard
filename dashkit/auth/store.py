@@ -1067,3 +1067,153 @@ def batch_log(project: str, table: str) -> dict[str, dict[str, Any]]:
         ).fetchall()
     return {r["file"]: {"actor_id": str(r["actor_id"]) if r["actor_id"] else None, "actor_email": r["actor_email"],
                         "method": r["method"], "source_name": r["source_name"], "at": r["at"]} for r in rows}
+
+
+# ---------------------------------------------------------------- 자동 적재용 API 토큰
+
+@dataclass(frozen=True)
+class ApiToken:
+    id: str
+    name: str
+    project: str
+    tables: tuple[str, ...]
+    created_by: str | None
+    created_by_email: str | None
+    created_at: datetime
+    expires_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+    revoked_by: str | None
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> "ApiToken":
+        return cls(
+            id=str(row["id"]),
+            name=row["name"],
+            project=row["project"],
+            tables=tuple(row["tables"]),
+            created_by=str(row["created_by"]) if row["created_by"] else None,
+            created_by_email=row.get("created_by_email"),
+            created_at=row["created_at"],
+            expires_at=row["expires_at"],
+            last_used_at=row["last_used_at"],
+            revoked_at=row["revoked_at"],
+            revoked_by=str(row["revoked_by"]) if row["revoked_by"] else None,
+        )
+
+    def status(self, at: datetime | None = None) -> str:
+        if self.revoked_at is not None:
+            return "revoked"
+        if self.expires_at <= (at or now()):
+            return "expired"
+        return "active"
+
+    def public(self, at: datetime | None = None) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "project": self.project,
+            "tables": list(self.tables),
+            "created_at": self.created_at,
+            "created_by_email": self.created_by_email,
+            "expires_at": self.expires_at,
+            "last_used_at": self.last_used_at,
+            "revoked_at": self.revoked_at,
+            "status": self.status(at),
+        }
+
+
+_API_TOKEN_COLS = (
+    "t.id, t.name, t.project, t.tables, t.created_by, u.email AS created_by_email, "
+    "t.created_at, t.expires_at, t.last_used_at, t.revoked_at, t.revoked_by"
+)
+
+
+def create_api_token(
+    name: str,
+    project: str,
+    token_hash: bytes,
+    tables: list[str] | tuple[str, ...],
+    expires_at: datetime,
+    *,
+    created_by: str | None = None,
+) -> ApiToken:
+    with connection() as conn:
+        row = conn.execute(
+            """WITH ins AS (
+                   INSERT INTO dashkit_auth.api_tokens (name, project, token_hash, tables, created_by, expires_at)
+                   VALUES (%s, %s, %s, %s, %s, %s)
+                   RETURNING id, name, project, tables, created_by, created_at, expires_at,
+                             last_used_at, revoked_at, revoked_by
+               )
+               SELECT t.*, u.email AS created_by_email
+                 FROM ins t
+                 LEFT JOIN dashkit_auth.users u ON u.id = t.created_by""",
+            (name, project, token_hash, list(tables), created_by, expires_at),
+        ).fetchone()
+    return ApiToken.from_row(row)
+
+
+def list_api_tokens(project: str | None = None) -> list[ApiToken]:
+    where = "WHERE t.project = %s" if project is not None else ""
+    params = (project,) if project is not None else ()
+    with connection() as conn:
+        rows = conn.execute(
+            f"""SELECT {_API_TOKEN_COLS}
+                  FROM dashkit_auth.api_tokens t
+                  LEFT JOIN dashkit_auth.users u ON u.id = t.created_by
+                  {where}
+                 ORDER BY t.created_at DESC, t.id DESC""",
+            params,
+        ).fetchall()
+    return [ApiToken.from_row(r) for r in rows]
+
+
+def api_token_by_hash(token_hash: bytes) -> ApiToken | None:
+    with connection() as conn:
+        row = conn.execute(
+            f"""SELECT {_API_TOKEN_COLS}
+                  FROM dashkit_auth.api_tokens t
+                  LEFT JOIN dashkit_auth.users u ON u.id = t.created_by
+                 WHERE t.token_hash = %s""",
+            (token_hash,),
+        ).fetchone()
+    return ApiToken.from_row(row) if row else None
+
+
+def touch_api_token(token_id: str) -> None:
+    with connection() as conn:
+        conn.execute("UPDATE dashkit_auth.api_tokens SET last_used_at = now() WHERE id = %s", (token_id,))
+
+
+def revoke_api_token(
+    token_id: str,
+    *,
+    revoked_by: str | None = None,
+    project: str | None = None,
+) -> tuple[ApiToken | None, bool]:
+    """토큰을 소프트 폐기한다. (토큰, 이번에 새로 폐기했는지). 없는 ID면 (None, False)."""
+    if not is_uuid(token_id):
+        return None, False
+    with connection() as conn, conn.transaction():
+        row = conn.execute(
+            f"""SELECT {_API_TOKEN_COLS}
+                  FROM dashkit_auth.api_tokens t
+                  LEFT JOIN dashkit_auth.users u ON u.id = t.created_by
+                 WHERE t.id = %s FOR UPDATE OF t""",
+            (token_id,),
+        ).fetchone()
+        if not row or (project is not None and row["project"] != project):
+            return None, False
+        if row["revoked_at"] is not None:
+            return ApiToken.from_row(row), False
+        updated = conn.execute(
+            """UPDATE dashkit_auth.api_tokens
+                  SET revoked_at = now(), revoked_by = %s
+                WHERE id = %s
+                RETURNING revoked_at, revoked_by""",
+            (revoked_by, token_id),
+        ).fetchone()
+        row["revoked_at"] = updated["revoked_at"]
+        row["revoked_by"] = updated["revoked_by"]
+        return ApiToken.from_row(row), True

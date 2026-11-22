@@ -20,7 +20,7 @@ const isAdmin = () => ((session.manage && session.manage.role) || (session.me &&
 
 /** 데이터셋 만들기(admin): 키 + (테이블 고르기 | SQL 문) → PATCH /config {ops: [dataset.add], revision} → 작업.
  *  load가 실패하면(load_failed: SQL 오류 등) 서버가 모든 파일을 되돌렸으므로 "파일은 그대로"라고 알린다 */
-function createCard(existing, alive, { onClose, onDone }) {
+function createCard(existing, alive, { onClose, onDone, initialSql = "" }) {
   const out = h("div", { class: "d-out" });
   const field = (label, control, hint) => {
     control.id = uid("ds");
@@ -38,6 +38,10 @@ function createCard(existing, alive, { onClose, onDone }) {
     sql: field(D.datasetSql, sql, D.datasetSqlHint), description: field(D.description, desc) };
   const sync = () => { rows.table.el.hidden = kind.value !== "table"; rows.sql.el.hidden = kind.value !== "sql"; };
   kind.addEventListener("change", sync);
+  if (initialSql) {
+    kind.value = "sql";
+    sql.value = initialSql;
+  }
   sync();
   api("GET", `${BASE}/tables`).then((r) => {
     for (const t of r.items || []) table.append(h("option", { value: t.name, text: t.name }));
@@ -101,20 +105,27 @@ function listView(my) {
   const createBox = h("div");
   let createBtn = null;
   if (isAdmin()) {
-    createBtn = btn(D.createDataset, async () => {
+    createBtn = btn(D.createDataset, () => openCreate(), "primary");
+    createBtn.dataset.action = "new-dataset";
+    const openCreate = async (initialSql = "") => {
       let keys = [];
       try { keys = (cache || (await api("GET", `${BASE}/datasets`)).items || []).map((d) => d.key); } catch (e) { keys = []; }
       if (!alive()) return;
       createBtn.hidden = true;
       const close = () => { createBox.replaceChildren(); createBtn.hidden = false; createBtn.focus(); };
       const made = createCard(keys, alive, {
+        initialSql,
         onClose: close,
         onDone: (done) => { createBox.replaceChildren(done); createBtn.hidden = false; cache = null; table.draw(); },
       });
       createBox.replaceChildren(made.el);
       made.focus();
-    }, "primary");
-    createBtn.dataset.action = "new-dataset";
+    };
+    if (session.pendingDatasetSql) {
+      const pending = session.pendingDatasetSql;
+      session.pendingDatasetSql = null;
+      openCreate(pending);
+    }
   }
   view().replaceChildren(head(D.datasetsTitle, D.datasetsIntro, createBtn, refresh), createBox, table.el);
   table.draw();

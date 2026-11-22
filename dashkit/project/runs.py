@@ -43,6 +43,7 @@ class Run:
     result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
     rejects: Path | None = None   # 빠진 행 파일(있으면)
+    token_id: str | None = None   # API 토큰으로 시작한 작업 ID(public()에는 노출하지 않음)
 
     def public(self) -> dict[str, Any]:
         return {"id": self.id, "kind": self.kind, "table": self.table, "status": self.status,
@@ -76,8 +77,9 @@ class Runs:
         self._items: "OrderedDict[str, Run]" = OrderedDict()
 
     def start(self, kind: str, work: Work, *, table: str | None = None, actor_id: str | None = None,
-              actor_email: str | None = None, on_done: Callable[[Run], None] | None = None) -> Run:
-        run = Run(secrets.token_hex(8), kind, table, actor_id, actor_email)
+              actor_email: str | None = None, token_id: str | None = None,
+              on_done: Callable[[Run], None] | None = None) -> Run:
+        run = Run(secrets.token_hex(8), kind, table, actor_id, actor_email, token_id=token_id)
         with self._lock:
             self._items[run.id] = run
             while len(self._items) > MAX_KEEP:

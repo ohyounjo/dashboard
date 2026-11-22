@@ -30,6 +30,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 ## 요청 보호
 
 - `dashkit/auth/guard.py`를 그대로 쓴다: 상태를 바꾸는 요청은 `Origin`이 웹앱 출처여야 하고(`Sec-Fetch-Site: cross-site` 거절), 본문은 `application/json`이다. 업로드 경로(`POST /tables/{t}/batches`, `POST /batches`, `POST /tables/infer`)만 `multipart/form-data`도 받는다(출처 검사는 같다). 업로드 규칙(파일 이름 `<이름>.csv`, 경로 문자 금지)은 [studio.md](studio.md)와 같고, 올린 파일의 이름은 경로로 쓰지 않는다.
+- `Authorization` 헤더가 2개 이상이면 400 `bad_request`다. 모든 메서드·경로에서 `Authorization` 헤더와 `dashkit_session` 쿠키가 함께 오면 400 `ambiguous_auth`로 거절한다. 쿠키가 없고 `Bearer ` 헤더로 호출한 `POST /tables/{t}/batches` 요청만 `Origin`·`Sec-Fetch-Site` 검사를 건너뛴다(`Content-Type` 검사는 유지).
 - 응답은 모두 `Cache-Control: no-store`, 오류는 `{"detail", "message"}`(+ `errors` 등)로 [api.md](api.md)와 같다.
 - 경로 값(`{table}`·`{dataset}`·`{file}`·이력 `{id}`)은 현재 프로젝트의 설정과 폴더 목록에 대조한 뒤에만 쓴다. 사용자 입력이 들어가는 SQL은 전부 매개변수 바인딩이고 식별자는 목록과 대조한 뒤 `psycopg.sql.Identifier`로만 넣는다.
 - 로그·오류 응답·감사 로그에 비밀값과 데이터 값을 싣지 않는다.
@@ -42,7 +43,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `GET /config` | 운용자 | `{"project", "role", "limits", "features"}`. 운용 화면이 데이터 메뉴와 선택 기능 UI를 그리는 데 쓴다 |
 | `GET /tables` | 운용자 | `{"items", "total", "project"}`. 항목 `{name, mode, on_conflict, description, rows, batches, compact_hint, used_by, last_batch: {file, added_at, actor_email} \| null}` (+ `MANAGE_FEATURES=freshness`일 때 `freshness`, `stale`). `rows`는 배치 기록의 `inserted` 합(적용한 적이 없으면 `null`), `batches`는 배치 폴더의 파일 수, `compact_hint`는 그 수가 `INGEST_COMPACT_HINT`를 넘는지, `used_by`는 그 테이블을 읽는 데이터셋의 수(계보) |
 | `GET /tables/{t}` | 운용자 | 입력 폼을 만드는 정의: `{name, mode, on_conflict, description, primary_key, revision, freshness?, columns: [{name, type, required, primary_key, label, values?, ref?, min?, max?, pattern?, description?, default?, aliases?}], checks: [이름], datasets: [그 테이블을 그대로 보는 데이터셋]}`. `label`은 그 테이블을 보는 `table:` 데이터셋의 `labels` |
-| `POST /tables/{t}/batches` | 운용자 | **데이터 더하기**([ingest.md](ingest.md) "더하기"). 아래 "데이터 더하기" |
+| `POST /tables/{t}/batches` | 운용자 또는 API 토큰 | **데이터 더하기**([ingest.md](ingest.md) "더하기"). 아래 "데이터 더하기". API 토큰은 `MANAGE_FEATURES=tokens`일 때 `token.project == 현재 프로젝트`이고 `t in token.tables`인 `append` 테이블만 허용(아니면 403 `forbidden`, 비활성 시 401 `unauthenticated`, 무효·만료·폐기 시 401 `invalid_token`) |
 | `GET /tables/{t}/batches?removed=1` | 운용자 | 배치 이력, 최근 것부터: `{"items", "total"}`. 항목 `{file, removed, first, merged, added_at, recorded, rows, inserted, updated, skipped, unchanged, actor_email, method, source_name, mine}`. 누가·방법·원래 파일 이름은 감사 로그(`data.batch.create`)에서 온다. `mine`은 요청한 사람이 더한 배치인지. `removed=1`이면 `_removed/`의 배치도 싣는다 |
 | `GET /tables/{t}/batches/{file}` | 운용자 | 배치 파일 내려받기(정규형 그대로, `.csv.gz`는 `application/gzip`) |
 | `DELETE /tables/{t}/batches/{file}` | admin, 또는 그 배치를 더한 operator | 되돌리기. 빠른 길(방금 추가 취소)이면 200 `{"ok", "fast": true, "table", "file", "rows"}`, 아니면 202 작업(다시 만들기) |
@@ -63,8 +64,12 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `POST /tables/{t}/compact` | admin | 합치기 → 202 작업. `append` 테이블만(아니면 409 `not_append`) |
 | `GET /history` | admin | 설정 변경 이력, 최근 것부터: `{"items": [{id, action, at, files: [{path, before, after}]}], "total", "revision"}` |
 | `POST /history/{id}/restore` | admin | 그 판으로 되돌리기: `{"revision"}` → 202 작업. 없는 이력은 404 `unknown_history` |
+| `GET /tokens` | admin | 현재 프로젝트의 API 토큰 목록(`MANAGE_FEATURES=tokens`, 비활성 시 404 `not_found`): `{"items", "total"}` |
+| `POST /tokens` | admin | API 토큰 발급(`MANAGE_FEATURES=tokens`, 비활성 시 404 `not_found`): `{"name", "tables", "expires_at"}` → 201 `token` 원문 1회 반환(`append` 테이블, 미래~365일 이내 만료일 검증). 감사 로그 `data.token.create` |
+| `DELETE /tokens/{id}` | admin | API 토큰 소프트 폐기(`MANAGE_FEATURES=tokens`, 비활성 시 404 `not_found`): 204(멱등, 없는 토큰 404 `unknown_token`). 감사 로그 `data.token.revoke` |
+| `POST /sql` | 운용자 | 읽기 전용 SQL 콘솔(`MANAGE_FEATURES=sql`, 비활성 시 404 `not_found`): `{"sql", "limit"?, "offset"?}` → 200 `{"columns", "rows", "has_more", "elapsed_ms", "truncated_cells"}`. `dash_inspect` 읽기 전용 트랜잭션(`raw`·`dash`·`dashkit_meta`만), 단일 조회 문장 래핑·`%` 이스케이프·차단 함수 검사, `rows`는 `columns` 순서의 2차원 배열, 감사 로그 `data.query.run` |
 | `GET /export` | admin | 설정 파일 내려받기(zip: `<프로젝트>/schema.yaml`, `dashboard.yaml`, `REVISION`. 데이터는 넣지 않는다). 사람이 저장소에 커밋한다 |
-| `GET /jobs`, `GET /jobs/{id}` | 운용자 | 작업 목록(최근 것부터, 로그 없이), 작업 하나(아래 "작업") |
+| `GET /jobs`, `GET /jobs/{id}` | 운용자(`GET /jobs/{id}`는 자기 작업의 API 토큰 포함) | 작업 목록(최근 것부터, 로그 없이), 작업 하나(아래 "작업". API 토큰은 해당 토큰이 시작한 작업만 허용, 타 작업 403 `forbidden`) |
 | `GET /jobs/{id}/rejects` | 운용자 | 오류 행을 빼고 넣은 작업의 빠진 행: 올린 행(정규형 머리글) + `오류` 열의 CSV(UTF-8 BOM). 여러 파일이면 파일마다 하나씩 담은 zip. 없으면 404 `unknown_job` |
 
 경로는 `dashkit/manage/routes/`의 모듈 하나씩이다. 경로를 더하는 일은 모듈 하나와 `routes/__init__.py`의 목록 한 줄이다.
@@ -153,7 +158,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `MANAGE_STATEMENT_TIMEOUT_MS` | `15000` | 조회 시간 제한 |
 | `MANAGE_LOCK_WAIT_MS` | `5000` | 즉시 응답 요청(직접 입력·붙여넣기, 빠른 취소 후보)이 쓰기 잠금을 기다리는 시간. 넘으면 409 `apply_running` |
 | `MANAGE_JOB_LOCK_WAIT_MS` | `600000` | 202 비동기 작업이 쓰기 잠금을 기다리는 시간. 넘으면 작업이 409 `apply_running`으로 실패 |
-| `MANAGE_FEATURES` | (비어 있음) | 켤 선택 기능(쉼표 구분: `export`, `profile`, `freshness`) |
+| `MANAGE_FEATURES` | (비어 있음) | 켤 선택 기능(쉼표 구분: `export`, `profile`, `freshness`, `sql`, `tokens`) |
 | `EXPORT_MAX_ROWS` | `1000000` | CSV 내보내기 최대 행 수(`MANAGE_FEATURES=export`) |
 
 `limits.page_max`(200)는 한 번에 돌려주는 행의 최대(고정)다.

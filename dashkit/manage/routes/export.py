@@ -96,25 +96,40 @@ async def export_table_rows(
         raise IngestError(422, "invalid_query", "민감 열은 정렬 기준으로 쓸 수 없습니다")
 
     selected_cols = q.columns or [c.name for c in all_cols]
+    non_sensitive_cols = [c.name for c in all_cols if c.name not in sensitive_cols]
     sql_cols = [c for c in selected_cols if c not in sensitive_cols]
     sql_pos = {c: i for i, c in enumerate(sql_cols)}
 
     pk = list(spec["primary_key"])
     sort_cols = {c for c, _d in q.sort}
-    order_keys = list(q.sort) + [(k, "asc") for k in pk if k not in sort_cols]
+    order_keys = list(q.sort) + [(k, "asc") for k in pk if k not in sort_cols and k not in sensitive_cols]
     where_sql, where_params = paging.where_clause(q.filters)
-    order_sql = paging._order(order_keys)
     max_rows = context.limits().export_max_rows
 
-    select_sql = sql.SQL(", ").join(map(sql.Identifier, sql_cols)) if sql_cols else sql.SQL("1")
-    stmt = sql.SQL("SELECT {select} FROM {schema}.{table} WHERE {where} ORDER BY {order} LIMIT %s").format(
-        select=select_sql,
-        schema=sql.Identifier("raw"),
-        table=sql.Identifier(name),
-        where=where_sql,
-        order=order_sql,
-    )
-    params = [*where_params, max_rows + 1]
+    if not non_sensitive_cols:
+        stmt = sql.SQL("SELECT 1 FROM {schema}.{table} LIMIT %s").format(
+            schema=sql.Identifier("dashkit_meta"),
+            table=sql.Identifier(paging.mask_view_name("raw", name)),
+        )
+        params = [max_rows + 1]
+    else:
+        select_sql = sql.SQL(", ").join(map(sql.Identifier, sql_cols)) if sql_cols else sql.SQL("1")
+        if order_keys:
+            stmt = sql.SQL("SELECT {select} FROM {schema}.{table} WHERE {where} ORDER BY {order} LIMIT %s").format(
+                select=select_sql,
+                schema=sql.Identifier("raw"),
+                table=sql.Identifier(name),
+                where=where_sql,
+                order=paging._order(order_keys),
+            )
+        else:
+            stmt = sql.SQL("SELECT {select} FROM {schema}.{table} WHERE {where} LIMIT %s").format(
+                select=select_sql,
+                schema=sql.Identifier("raw"),
+                table=sql.Identifier(name),
+                where=where_sql,
+            )
+        params = [*where_params, max_rows + 1]
 
     def _open_stream():
         conn = rows._connect()

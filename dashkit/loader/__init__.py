@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 from psycopg import sql
 
-from .. import db
+from .. import db, paging
 from ..config import Project, check_view_columns, resolve_as_of, table_order
 from . import record
 from .validate import TableData, validate_csv
@@ -275,7 +275,8 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
         "CREATE FUNCTION {}.as_of() RETURNS date LANGUAGE sql STABLE AS {}"
     ).format(dash, sql.Literal(as_of_sql)))
 
-    # 데이터셋 뷰(설정 순서. 뒤 뷰가 앞 뷰를 쓸 수 있다)
+    # 데이터셋 뷰(설정 순서. 뒤 뷰가 앞 뷰를 쓸 수 있다. SQL 콘솔과 동일한 search_path 적용)
+    _step(cur, "search_path 설정", sql.SQL("SET LOCAL search_path = {}, {}, public").format(raw, dash))
     for key, ds in project.dashboard["datasets"].items():
         if "table" in ds:
             body = sql.SQL("SELECT * FROM {}.{}").format(raw, sql.Identifier(ds["table"]))
@@ -287,6 +288,7 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
                 cur.execute(stmt)
         except psycopg.Error as exc:
             errors.append(f"dashboard.yaml:datasets.{key}: 뷰 생성 실패: {_pg_message(exc)}")
+    _step(cur, "search_path 복원", sql.SQL("RESET search_path"))
     if errors:
         raise _StepError(errors)
 
@@ -319,13 +321,59 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
     _step(cur, label, sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}").format(dash, reader))
     _step(cur, label, sql.SQL("GRANT EXECUTE ON FUNCTION {}.as_of() TO {}").format(dash, reader))
     readers: list[str] = []
+    all_sensitive_relations: list[tuple[str, str]] = []
     cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (inspect_role(),))
-    if cur.fetchone():
+    inspect_exists = cur.fetchone() is not None
+    if inspect_exists:
         inspect = sql.Identifier(inspect_role())
         readers.append(inspect_role())
         for schema in (raw, dash):
             _step(cur, label, sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(schema, inspect))
-            _step(cur, label, sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}").format(schema, inspect))
+        for tname, tspec in tables.items():
+            sens = {cname for cname, cspec in tspec["columns"].items() if cspec.get("sensitive")}
+            if not sens:
+                _step(cur, label, sql.SQL("GRANT SELECT ON TABLE {}.{} TO {}").format(
+                    raw, sql.Identifier(tname), inspect,
+                ))
+            else:
+                non_sens = [sql.Identifier(cname) for cname in tspec["columns"] if cname not in sens]
+                if non_sens:
+                    _step(cur, label, sql.SQL("GRANT SELECT ({}) ON TABLE {}.{} TO {}").format(
+                        sql.SQL(", ").join(non_sens), raw, sql.Identifier(tname), inspect,
+                    ))
+                else:
+                    all_sensitive_relations.append((RAW, tname))
+        for ds_key, ds in project.dashboard["datasets"].items():
+            if "table" in ds:
+                tname = ds["table"]
+                sens = {cname for cname, cspec in tables[tname]["columns"].items() if cspec.get("sensitive")}
+                if not sens:
+                    _step(cur, label, sql.SQL("GRANT SELECT ON TABLE {}.{} TO {}").format(
+                        dash, sql.Identifier(ds_key), inspect,
+                    ))
+                else:
+                    non_sens = [
+                        sql.Identifier(c)
+                        for c in sorted(view_columns.get(ds_key, ()))
+                        if c not in sens
+                    ]
+                    if non_sens:
+                        _step(cur, label, sql.SQL("GRANT SELECT ({}) ON TABLE {}.{} TO {}").format(
+                            sql.SQL(", ").join(non_sens), dash, sql.Identifier(ds_key), inspect,
+                        ))
+                    else:
+                        all_sensitive_relations.append((DASH, ds_key))
+            else:
+                ds_sources = sources.get(ds_key, {})
+                reads_sensitive = any(
+                    tables.get(src_tbl, {}).get("columns", {}).get(cname, {}).get("sensitive")
+                    for src_tbl, src_cols in ds_sources.items()
+                    for cname in src_cols
+                )
+                if not reads_sensitive:
+                    _step(cur, label, sql.SQL("GRANT SELECT ON TABLE {}.{} TO {}").format(
+                        dash, sql.Identifier(ds_key), inspect,
+                    ))
         _step(cur, label, sql.SQL("GRANT EXECUTE ON FUNCTION {}.as_of() TO {}").format(dash, inspect))
 
     # 적재 기록(dash_inspect가 row_fingerprint를 읽고, dash_reader는 load_snapshot·batch만 읽는다).
@@ -342,6 +390,14 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
                            fingerprint_key_id=record.key_id(fkey))
     try:
         record.write(cur, snap, prints, os.environ.get("DATA_DB_READER_USER") or "dash_reader", batch_rows, readers)
+        for schema_name, rel_name in all_sensitive_relations:
+            view_id = sql.Identifier(paging.mask_view_name(schema_name, rel_name))
+            cur.execute(sql.SQL("CREATE VIEW {}.{} AS SELECT 1 AS _masked FROM {}.{}").format(
+                sql.Identifier("dashkit_meta"), view_id, sql.Identifier(schema_name), sql.Identifier(rel_name),
+            ))
+            cur.execute(sql.SQL("GRANT SELECT ON TABLE {}.{} TO {}").format(
+                sql.Identifier("dashkit_meta"), view_id, inspect,
+            ))
     except psycopg.Error as exc:
         raise _StepError([f"적재 기록({record.META}) 쓰기: {_pg_message(exc)}"]) from None
     return {t: counts[t] for t in order}

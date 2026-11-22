@@ -248,13 +248,15 @@
 | `group.delete` | 그룹 삭제 | `{"members": <구성원 수>}` |
 | `group.tabs` | 허용 탭 변경(바뀐 것이 있을 때) | `{project, added: [...], removed: [...]}` |
 | `group.members` | 구성원 변경(바뀐 것이 있을 때. 일괄 그룹 지정은 그룹마다 한 줄, `bulk: true`) | `{added: [이메일], removed: [이메일]}` |
-| `data.batch.create` · `data.batch.failed` | 관리 서비스·CLI의 데이터 더하기(미리보기는 남기지 않는다) · 그 실패. 대상은 테이블 | `{project, table, file, sha256, rows, method, source_name}` · `{project, table, method, detail_code}`. 데이터 값은 싣지 않는다([manage.md](manage.md)) |
+| `data.batch.create` · `data.batch.failed` | 관리 서비스·CLI의 데이터 더하기(미리보기는 남기지 않는다) · 그 실패. 대상은 테이블 | `{project, table, file, sha256, rows, method, source_name}` · `{project, table, method, detail_code}`. API 토큰 적재 시 `actor_id=NULL`, `actor_email="token:<이름>"`, `detail`에 `{auth_type: "api_token", api_key_id, api_key_name}` 포함. 데이터 값은 싣지 않는다([manage.md](manage.md)) |
 | `data.batch.remove` · `data.batch.restore` | 배치 되돌리기(방금 추가 취소 포함) · 되살리기 | `{project, table, file, fast}` · `{project, table, file}` |
 | `data.batch.compact` | 배치 합치기. 대상은 테이블 | `{project, table, file, merged, rows}` |
 | `data.table.create` · `data.table.alter` · `data.table.drop` | 관리 서비스의 테이블 추가(첫 파일 포함) · 테이블·열 변경(`aliases` 저장 포함) · 테이블 삭제. 대상은 테이블 | `{project, mode, source_name, dataset, dashboard, history}` · `{project, op, column, history}`(`aliases` 저장은 `{project, table, aliases}`) · `{project, op, history}` |
 | `data.dataset.create` · `data.dataset.alter` · `data.dataset.drop` | 관리 서비스의 데이터셋 만들기 · 변경 · 삭제. 대상은 데이터셋 | `{project, op, history}` |
 | `data.config.restore` | 설정 변경 이력으로 되돌리기. 대상은 프로젝트 | `{project, restored, history, files}` |
 | `data.export` | 관리 서비스의 행 조회 결과 CSV 내보내기(`MANAGE_FEATURES=export`). 대상은 테이블 | `{project, table, format, columns, filter_count, rows, truncated}`. 데이터 값과 필터 값은 싣지 않는다 |
+| `data.token.create` · `data.token.revoke` | 자동 적재용 API 토큰 발급 · 폐기(`MANAGE_FEATURES=tokens`). 대상은 `api_token` | `{project, tables, expires_at}` · `{project, tables}`. 토큰 원문·해시는 싣지 않는다 |
+| `data.query.run` | 읽기 전용 SQL 콘솔 실행(`MANAGE_FEATURES=sql`). 대상은 `sql` | `{project, sql(앞 2,000자), rows, elapsed_ms, has_more?, limit?, offset?, error?}`. 결과 데이터 값은 싣지 않는다 |
 
 ## 계정 흐름
 
@@ -372,6 +374,7 @@ class Mailer(Protocol):
 | `view_events` | `id` bigserial PK, `user_id` FK NULL(삭제 시 NULL), `project`, `tab_key`, `viewed_at`. 색인(`project`, `tab_key`, `viewed_at`) |
 | `audit_log` | `id` bigserial PK, `at`, `actor_id` uuid NULL, `actor_email` text, `action` text, `target_type` text, `target_id` text, `target_label` text, `detail` jsonb, `ip` inet |
 | `outbox` | `id` bigserial PK, `user_id` FK(함께 삭제), `to_email`, `kind`(`verify_email`·`reset_password`·`invite`·`already_registered`), `link` text NULL, `created_at`. 메일 테스트 모드 전용 |
+| `api_tokens` | (`002_api_tokens.sql`) `id` uuid PK, `name` text(1~100자), `project` text, `token_hash` bytea UNIQUE, `tables` text[], `created_by` uuid NULL, `created_at`, `expires_at`, `last_used_at`, `revoked_at`, `revoked_by` uuid NULL. 색인(`project`, `created_at` DESC) |
 | `schema_version` | `version` int PK, `applied_at` |
 
 새 열·표는 다음 번호의 SQL 파일(`002_….sql`)로 더한다. 적용한 파일은 고치지 않는다.

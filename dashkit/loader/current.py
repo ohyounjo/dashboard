@@ -108,19 +108,28 @@ def inspector(dbname: str | None = None) -> Iterator[psycopg.Connection]:
 
 def _read_schema_columns(conn: psycopg.Connection, schema: str, names: Sequence[str] | None,
                          error_prefix: str) -> dict[str, list[tuple[str, str]]]:
-    query = ("SELECT table_name, column_name, data_type, udt_name FROM information_schema.columns "
-             "WHERE table_schema = %s")
+    # pg_attribute는 열 단위 SELECT 권한이 제한돼도 전체 열 메타데이터를 돌려준다(plan 비교용)
+    query = (
+        "SELECT c.relname, a.attname, "
+        "CASE WHEN t.typtype = 'e' OR (t.typelem <> 0 AND t.typlen = -1) "
+        "THEN t.typname ELSE pg_catalog.format_type(a.atttypid, -1) END AS col_type "
+        "FROM pg_catalog.pg_attribute a "
+        "JOIN pg_catalog.pg_class c ON c.oid = a.attrelid "
+        "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+        "JOIN pg_catalog.pg_type t ON t.oid = a.atttypid "
+        "WHERE n.nspname = %s AND a.attnum > 0 AND NOT a.attisdropped"
+    )
     params: list[Any] = [schema]
     if names is not None:
-        query += " AND table_name = ANY(%s)"
+        query += " AND c.relname = ANY(%s)"
         params.append(list(names))
-    query += " ORDER BY table_name, ordinal_position"
+    query += " ORDER BY c.relname, a.attnum"
     out: dict[str, list[tuple[str, str]]] = {}
     try:
         with conn.cursor() as cur:
             cur.execute(query, params)
-            for table, col, data_type, udt in cur.fetchall():
-                out.setdefault(table, []).append((col, udt if data_type in ("USER-DEFINED", "ARRAY") else data_type))
+            for table, col, col_type in cur.fetchall():
+                out.setdefault(table, []).append((col, col_type))
     except psycopg.Error as exc:
         raise CurrentError(f"{error_prefix}: {pg_message(exc)}") from None
     return out
