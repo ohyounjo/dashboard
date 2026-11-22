@@ -284,6 +284,8 @@ async def post_dataset_rows(dataset: str, request: Request, principal: Principal
             for c, s in (project.schema["tables"].get(t, {}).get("columns") or {}).items()
             if s.get("sensitive")
         }
+        if not table and sensitive_cols:
+            raise IngestError(403, "sensitive_dataset", "민감 열을 읽는 SQL 데이터셋은 행 조회를 지원하지 않습니다")
         _reject_sensitive(q, sensitive_cols)
         version = paging.data_version(loaded_at, {f"{t}/{f}": r.sha256 for t in tables
                                                   for f, r in recorded.get(t, {}).items()})

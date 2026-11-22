@@ -416,6 +416,18 @@ def test_export_api_streaming_limits_sensitive_and_audit(clients, monkeypatch):
     assert r_ds.status == 200
     assert json.loads(r_ds.body)["rows"] == [{"secret": "***"}]
 
+    # 별칭을 사용하는 SQL 데이터셋(SELECT id, secret AS public_alias)은 403 sensitive_dataset으로 차단
+    sql_ds_project = SimpleNamespace(
+        name="p",
+        schema=fake_schema,
+        dashboard={"datasets": {"secret_sql": {"sql": "SELECT id, secret AS public_alias FROM raw.secret_tbl"}}},
+    )
+    monkeypatch.setattr(rows_mod, "_project", lambda: sql_ds_project)
+    monkeypatch.setattr(rows_mod, "_view_columns", lambda _cur, _k: [rows_mod.paging.Column("id", "text"), rows_mod.paging.Column("public_alias", "text")])
+    monkeypatch.setattr(rows_mod.lineage, "build", lambda _p, _s: {"datasets": {"secret_sql": {"sources": ["secret_tbl"]}}})
+    r_sql_ds = admin_c.post("/api/manage/datasets/secret_sql/rows/query", json={"limit": 5}, headers=admin_h)
+    assert r_sql_ds.status == 403 and json.loads(r_sql_ds.body)["detail"] == "sensitive_dataset"
+
 
 def test_freshness_api_app_and_manage_tables(clients, monkeypatch):
     from dashkit import db
