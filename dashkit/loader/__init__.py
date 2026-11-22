@@ -11,7 +11,10 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+from collections.abc import Sequence
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -241,6 +244,9 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
             batch_rows.append(ledger.row(tname, f"{tname}.csv",
                                          batches.content_hash(batches.first_file(project.data_dir, tname)),
                                          {"total": n, "inserted": n, "updated": 0, "skipped": 0, "unchanged": 0}))
+            for i, idx in enumerate(tables[tname].get("indexes") or []):
+                _step(cur, f"schema.yaml:tables.{tname}.indexes[{i}]: 색인 생성",
+                      _create_index_sql(tname, i, idx))
             continue
         counts[tname] = 0
         failed = False
@@ -266,6 +272,10 @@ def _rebuild(project: Project, cur: psycopg.Cursor, order: list[str],
                 raise _StepError([f"{label}: 적재 실패: {_pg_message(exc)}"]) from None
             counts[tname] += result["inserted"]
             batch_rows.append(ledger.row(tname, src.name, staged.sha256 or "", result))
+        if not failed and not errors:
+            for i, idx in enumerate(tables[tname].get("indexes") or []):
+                _step(cur, f"schema.yaml:tables.{tname}.indexes[{i}]: 색인 생성",
+                      _create_index_sql(tname, i, idx))
     if errors:
         raise _StepError(errors)
 
@@ -446,6 +456,23 @@ def _create_table_sql(tname: str, table: dict) -> sql.Composed:
                 sql.Identifier(cname), sql.Identifier(RAW), sql.Identifier(rt), sql.Identifier(rc)))
     return sql.SQL("CREATE TABLE {}.{} ({})").format(
         sql.Identifier(RAW), sql.Identifier(tname), sql.SQL(", ").join(parts))
+
+
+def _index_name(tname: str, index_no: int, cols: Sequence[str]) -> str:
+    payload = json.dumps([tname, index_no, list(cols)], separators=(",", ":"))
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
+    prefix = f"ix_{tname}_{index_no}_{'_'.join(cols)}"[:54].rstrip("_")
+    return f"{prefix}_{digest}"
+
+
+def _create_index_sql(tname: str, index_no: int, cols: Sequence[str]) -> sql.Composed:
+    idx_name = _index_name(tname, index_no, cols)
+    return sql.SQL("CREATE INDEX {} ON {}.{} ({})").format(
+        sql.Identifier(idx_name),
+        sql.Identifier(RAW),
+        sql.Identifier(tname),
+        sql.SQL(", ").join(map(sql.Identifier, cols)),
+    )
 
 
 __all__ = ["LoadError", "load", "rebuild_locked", "table_mode"]

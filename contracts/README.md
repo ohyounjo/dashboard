@@ -65,6 +65,7 @@
 | schema `on_conflict` | `mode: append`인 테이블에만 |
 | schema `default` | 열의 type·규칙(`enum`·`min`·`max`·`pattern`)을 통과하는 값. 기본 키 열에는 쓸 수 없음 |
 | schema `aliases` | 같은 테이블의 다른 열 이름이나 다른 열의 `aliases`와 겹치지 않음 |
+| schema `indexes` | `columns`에 있는 열(한 색인 내 중복 없음), `primary_key`와 동일하지 않음, 같은 테이블 내 중복 색인 선언 없음(열 순서가 다르면 허용) |
 | 누적 테이블의 배치 파일 이름(`dashkit check`, load) | `data/<테이블>/` 바로 아래의 `<번호>[-<덧붙임>].csv(.gz)`. 같은 번호가 둘이면 오류([ingest.md](ingest.md) "배치 폴더") |
 | `datasets.*.table` | schema의 테이블 |
 | `datasets` 키 | 예약어 금지 |

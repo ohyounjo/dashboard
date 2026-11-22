@@ -865,3 +865,72 @@ def test_layout_set_with_identical_blocks_changes_only_that_line_in_the_file():
     assert yaml.safe_load(new)["dashboards"]["d"]["layout"] == [[{"markdown": "same", "width": 6}], [{"markdown": "same", "width": 10}]]
     assert "      - [{ markdown: same, width: 6 }]    # 첫째\n" in new, "건드리지 않은 행은 글자 그대로여야 함"
     assert "width: 10" in new and "# 둘째" in new and how == "exact"
+
+
+def test_ops_indexes_and_schema_evolution_ops():
+    def edit_schema(text, op_list):
+        return store.edit_yaml(text, lambda doc: ops.apply_ops(doc, op_list, "schema.yaml"))
+
+    schema_text = (
+        "tables:\n"
+        "  events:\n"
+        "    mode: append\n"
+        "    primary_key: id\n"
+        "    columns:\n"
+        "      id: { type: text }\n"
+        "      state: { type: text }\n"
+        "      amount: { type: number }\n"
+        "    indexes:\n"
+        "      - [state, amount]\n"
+    )
+    # table.update indexes & table.add indexes
+    new, how = edit_schema(schema_text, [{"op": "table.update", "table": "events", "set": {"indexes": [["amount"]]}}])
+    assert yaml.safe_load(new)["tables"]["events"]["indexes"] == [["amount"]]
+    new, _ = edit_schema(schema_text, [{"op": "table.add", "table": "other", "value": {
+        "primary_key": "id", "columns": {"id": {"type": "text"}, "tag": {"type": "text"}}, "indexes": [["tag"]],
+    }}])
+    assert yaml.safe_load(new)["tables"]["other"]["indexes"] == [["tag"]]
+
+    # column.rename: 열 순서 보존 + indexes 동기화
+    renamed, _ = edit_schema(schema_text, [{"op": "column.rename", "table": "events", "column": "state", "to": "status"}])
+    doc_r = yaml.safe_load(renamed)
+    assert list(doc_r["tables"]["events"]["columns"]) == ["id", "status", "amount"]
+    assert doc_r["tables"]["events"]["indexes"] == [["status", "amount"]]
+
+    # column.remove: indexes 정리
+    removed, _ = edit_schema(schema_text, [{"op": "column.remove", "table": "events", "column": "state"}])
+    doc_rm = yaml.safe_load(removed)
+    assert list(doc_rm["tables"]["events"]["columns"]) == ["id", "amount"]
+    assert doc_rm["tables"]["events"]["indexes"] == [["amount"]]
+
+    # column.remove가 단일 열 색인만 남았을 때 indexes 키 제거
+    removed2, _ = edit_schema(removed, [{"op": "column.remove", "table": "events", "column": "amount"}])
+    assert "indexes" not in yaml.safe_load(removed2)["tables"]["events"]
+
+    # column.update 유형 좁히기 허용, 미지원 거부
+    narrowed, _ = edit_schema(schema_text, [{"op": "column.update", "table": "events", "column": "amount", "set": {"type": "integer"}}])
+    assert yaml.safe_load(narrowed)["tables"]["events"]["columns"]["amount"]["type"] == "integer"
+
+    for bad_op in (
+        {"op": "column.rename", "table": "events", "column": "id", "to": "eid"},
+        {"op": "column.rename", "table": "events", "column": "state", "to": "select"},
+        {"op": "column.rename", "table": "events", "column": "state", "to": "amount"},
+        {"op": "column.remove", "table": "events", "column": "id"},
+        {"op": "column.update", "table": "events", "column": "id", "set": {"type": "integer"}},
+        {"op": "column.update", "table": "events", "column": "amount", "set": {"type": "date"}},
+    ):
+        with pytest.raises(ops.OpError):
+            ops.apply_ops(yaml.safe_load(schema_text), [bad_op], "schema.yaml")
+
+
+def test_studio_rejects_data_rewriting_evolution_ops(tmp_path, monkeypatch):
+    from studio_client import fresh_client
+
+    client = fresh_client(tmp_path, monkeypatch, projects=["devtracker"])
+    for op in (
+        {"op": "column.rename", "table": "members", "column": "name", "to": "full_name"},
+        {"op": "column.remove", "table": "members", "column": "role"},
+        {"op": "column.update", "table": "members", "column": "name", "set": {"type": "integer"}},
+    ):
+        r = client.patch("/studio/api/projects/devtracker/config", json={"ops": [op]})
+        assert r.status == 400 and r.json["detail"] == "invalid_op", (op, r.status, r.json)

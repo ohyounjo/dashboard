@@ -31,7 +31,7 @@ router = APIRouter()
 
 # 운용 화면의 구조 변경이 쓰는 연산(설계서 6-3). 탭·섹션·차트 같은 화면 연산은 Studio에서 한다
 STRUCT_OPS = ("table.add", "table.update", "table.remove", "column.add", "column.update",
-              "dataset.add", "dataset.update", "dataset.remove")
+              "column.rename", "column.remove", "dataset.add", "dataset.update", "dataset.remove")
 MAX_INFER_ROWS = 2_000_000
 
 
@@ -54,9 +54,9 @@ def get_lineage(principal: Principal = Depends(require_operator)) -> dict[str, A
 
 @router.get("/tables/{table}/used_by")
 def get_used_by(table: str, principal: Principal = Depends(require_operator)) -> dict[str, Any]:
-    """테이블의 "쓰이는 곳": 읽는 데이터셋 → 그래프(차트·위젯 섹션) → 탭."""
+    """테이블의 "쓰이는 곳": 읽는 데이터셋 → 그래프(차트·위젯 섹션) → 탭 및 열별 참조."""
     project = _project()
-    return lineage.used_by(_lineage(project), _table(project, table))
+    return lineage.used_by(_lineage(project), _table(project, table), project=project)
 
 
 # ---------------------------------------------------------------- 설정 연산(PATCH /config)
@@ -69,6 +69,8 @@ def _check_ops(project: config.Project, op_list: Any) -> list[dict[str, Any]]:
         raise IngestError(422, "invalid_op", "운용 화면에서 쓸 수 없는 연산입니다(" + ", ".join(bad) + ")",
                           [f"쓸 수 있는 연산: {', '.join(STRUCT_OPS)}"])
     graph = None
+    removed_tables = {o.get("table") for o in op_list if o.get("op") == "table.remove" and isinstance(o.get("table"), str)}
+    removed_datasets = {o.get("key") for o in op_list if o.get("op") == "dataset.remove" and isinstance(o.get("key"), str)}
     for o in op_list:
         name = o.get("table")
         spec = project.schema["tables"].get(name) if isinstance(name, str) else None
@@ -81,6 +83,37 @@ def _check_ops(project: config.Project, op_list: Any) -> list[dict[str, Any]]:
                 raise IngestError(409, "in_use", "쓰는 곳이 있는 테이블은 지우지 않습니다(데이터셋·참조를 먼저 정리하세요)",
                                   [f"데이터셋 {d}" for d in used["datasets"]] + [f"참조 {r}" for r in refs],
                                   used_by=used)
+        if o["op"] in ("column.remove", "column.rename") and spec is not None:
+            cname = o.get("column")
+            if isinstance(cname, str) and cname in spec["columns"]:
+                graph = graph or _lineage(project)
+                col_info = lineage.column_usage(project, graph, name).get(cname, {})
+                in_use: list[str] = []
+                for c in col_info.get("charts", []):
+                    if c.get("direct") and c.get("dataset") not in removed_datasets \
+                            and (graph["datasets"].get(c["dataset"]) or {}).get("kind") == "table":
+                        in_use.append(f"차트 {c['key']}")
+                for f in col_info.get("filters", []):
+                    if f.get("dataset") not in removed_datasets \
+                            and (graph["datasets"].get(f["dataset"]) or {}).get("kind") == "table":
+                        in_use.append(f"필터 {f['dashboard']}.{f['key']}")
+                for s in col_info.get("sections", []):
+                    if s.get("direct") and s.get("dataset") not in removed_datasets \
+                            and (graph["datasets"].get(s["dataset"]) or {}).get("kind") == "table":
+                        in_use.append(f"섹션 {s['tab']}#{s['index']}")
+                for m in col_info.get("metrics", []):
+                    if m.get("dataset") not in removed_datasets:
+                        in_use.append(f"지표 {m['dataset']}.{m['metric']}")
+                for t, s in project.schema["tables"].items():
+                    if t in removed_tables or t == name:
+                        continue
+                    for rc, cs in s["columns"].items():
+                        if cs.get("ref") == f"{name}.{cname}":
+                            in_use.append(f"참조 {t}.{rc}")
+                if in_use:
+                    raise IngestError(409, "in_use",
+                                      "그래프·필터·참조에서 사용 중인 열은 변경하거나 지우지 않습니다(먼저 참조를 정리하세요)",
+                                      in_use)
         if o["op"] == "dataset.remove" and o.get("key") in project.dashboard["datasets"]:
             graph = graph or _lineage(project)
             charts = [c["key"] for c in graph["charts"] if c["dataset"] == o["key"]]
@@ -92,17 +125,38 @@ def _check_ops(project: config.Project, op_list: Any) -> list[dict[str, Any]]:
 
 
 def _affected(project: config.Project, op_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """유형을 바꾸는 열 연산이 닿는 그래프(설계서 6-2 "영향 목록")."""
+    """열 변경 연산(유형 변경·이름 변경·삭제)이 닿는 데이터셋·그래프(설계서 6-2 "영향 목록")."""
     graph = None
     out = []
     for o in op_list:
-        if o["op"] != "column.update" or "type" not in (o.get("set") or {}):
+        op_name = o["op"]
+        if op_name == "column.update" and "type" in (o.get("set") or {}):
+            pass
+        elif op_name not in ("column.rename", "column.remove"):
+            continue
+        tname, cname = o.get("table"), o.get("column")
+        if not isinstance(tname, str) or not isinstance(cname, str):
             continue
         graph = graph or _lineage(project)
-        used = lineage.used_by(graph, o.get("table"))
-        cols = graph["columns_used"]
-        charts = [c["key"] for c in used["charts"] if o.get("column") in cols.get(c["dataset"], [])]
-        out.append({"table": o.get("table"), "column": o.get("column"), "datasets": used["datasets"], "charts": charts})
+        col_info = lineage.column_usage(project, graph, tname).get(cname)
+        if col_info is None:
+            used = lineage.used_by(graph, tname)
+            cols = graph["columns_used"]
+            charts = [c["key"] for c in used["charts"] if cname in cols.get(c["dataset"], [])]
+            entry: dict[str, Any] = {"table": tname, "column": cname, "op": op_name,
+                                     "datasets": used["datasets"], "charts": charts, "sections": []}
+        else:
+            entry = {
+                "table": tname,
+                "column": cname,
+                "op": op_name,
+                "datasets": col_info["datasets"],
+                "charts": [c["key"] for c in col_info["charts"]],
+                "sections": [f"{s['tab']}#{s['index']}" for s in col_info["sections"]],
+            }
+        if op_name == "column.rename":
+            entry["to"] = o.get("to")
+        out.append(entry)
     return out
 
 
@@ -287,8 +341,11 @@ async def post_history_restore(hid: str, request: Request, principal: Principal 
     revision = body.get("revision")
     if not isinstance(revision, str):
         raise IngestError(400, "invalid_request", "revision이 필요합니다(설정을 읽을 때 받은 값)")
-    if not any(m.get("id") == hid for m in structure.list_history(project.name)):
+    entry = next((m for m in structure.list_history(project.name) if m.get("id") == hid), None)
+    if entry is None:
         raise IngestError(404, "unknown_history", "그 설정 이력이 없습니다")
+    if entry.get("irreversible"):
+        raise IngestError(409, "irreversible_history", "배치 합치기를 동반한 구조 변경은 이전 판으로 되돌릴 수 없습니다")
 
     def change(ctx, limits) -> dict[str, Any]:
         # 그 뒤에 다시 바뀐 파일이 있으면 409 stale_config(검사는 작업이 쓰기 잠금을 잡은 뒤에 한다)

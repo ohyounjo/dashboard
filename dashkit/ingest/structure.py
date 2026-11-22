@@ -23,15 +23,20 @@ import logging
 import os
 import shutil
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 import psycopg
+import yaml
+from psycopg import sql
 
 from .. import config, db
+from ..loader import record as loader_record
+from ..loader import validate as loader_validate
 from ..loader.record import data_revision
 from ..project import locks
-from . import ledger, pending, recover
+from . import batches, compact, ledger, normalize, pending, recover
 from .faults import fault
 from .operation import IngestError, StaleConfig, locked
 
@@ -71,7 +76,8 @@ def _new_history_id(action: str) -> str:
     return f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}-{action}"
 
 
-def _write_history(project: str, hid: str, action: str, files: list[tuple[str, bytes | None, str | None]]) -> None:
+def _write_history(project: str, hid: str, action: str, files: list[tuple[str, bytes | None, str | None]],
+                   *, irreversible: bool = False) -> None:
     """변경 전 사본과 전·후 해시를 남긴다(.state/history/<프로젝트>/<시각>-<동작>/). 최근 HISTORY_KEEP개만.
 
     files는 [(경로, 변경 전 내용 | None, 새 내용의 해시 | None)]. load까지 끝난 변경만 남긴다(되돌려진 변경은 남기지 않는다).
@@ -81,7 +87,9 @@ def _write_history(project: str, hid: str, action: str, files: list[tuple[str, b
     if (root / "meta.json").is_file():
         return
     (root / "before").mkdir(parents=True, exist_ok=True)
-    meta = {"id": hid, "action": action, "at": datetime.now(timezone.utc).isoformat(), "files": []}
+    meta: dict[str, Any] = {"id": hid, "action": action, "at": datetime.now(timezone.utc).isoformat(), "files": []}
+    if irreversible:
+        meta["irreversible"] = True
     for rel, before, after_sha in files:
         if before is not None:
             target = root / "before" / rel
@@ -101,7 +109,8 @@ def _history_from_record(project: str, record: Mapping[str, Any]) -> None:
         return
     _write_history(project, record["history"], str(record.get("action") or "config"),
                    [(f["path"], base64.b64decode(f["before"]) if f.get("before") is not None else None, f.get("after"))
-                    for f in record.get("files") or []])
+                    for f in record.get("files") or []],
+                   irreversible=bool(record.get("irreversible")))
 
 
 def list_history(project: str) -> list[dict[str, Any]]:
@@ -126,6 +135,8 @@ def history_files(project: str, hid: str) -> dict[str, bytes | None]:
     entry = next((m for m in list_history(project) if m.get("id") == hid), None)
     if entry is None:
         raise IngestError(404, "unknown_history", "그 설정 이력이 없습니다")
+    if entry.get("irreversible"):
+        raise IngestError(409, "irreversible_history", "배치 합치기를 동반한 구조 변경은 이전 판으로 되돌릴 수 없습니다")
     root = store.projects_dir() / project
     out: dict[str, bytes | None] = {}
     for f in entry["files"]:
@@ -139,14 +150,20 @@ def history_files(project: str, hid: str) -> dict[str, bytes | None]:
 # ---------------------------------------------------------------- 묶음 기록(종류 config)
 
 def _write_record(project: config.Project, files: Mapping[str, tuple[bytes | None, bytes | None]],
-                  new_revision: str, hid: str, action: str, loaded_at: Any) -> tuple[Path, dict[str, Any]]:
+                  new_revision: str, hid: str, action: str, loaded_at: Any,
+                  *, compactions: list[dict[str, Any]] | None = None) -> tuple[Path, dict[str, Any]]:
     rid = pending.new_id()
     # loaded_at: 작업 전 적재 시각. 이 작업의 load가 커밋되면 바뀐다(커밋 표식. data_revision만으로는 설명·aliases처럼
     # 지문에 들지 않는 변경의 커밋 여부를 가를 수 없다)
-    record = {"id": rid, "kind": "config", "project": project.name, "data_revision": new_revision,
-              "history": hid, "action": action, "loaded_at": loaded_at.isoformat() if loaded_at is not None else None,
-              "files": [{"path": rel, "before": base64.b64encode(b).decode() if b is not None else None,
-                         "after": _sha(a)} for rel, (b, a) in files.items()]}
+    record: dict[str, Any] = {
+        "id": rid, "kind": "config", "project": project.name, "data_revision": new_revision,
+        "history": hid, "action": action, "loaded_at": loaded_at.isoformat() if loaded_at is not None else None,
+        "files": [{"path": rel, "before": base64.b64encode(b).decode() if b is not None else None,
+                   "after": _sha(a)} for rel, (b, a) in files.items()],
+    }
+    if compactions:
+        record["compactions"] = compactions
+        record["irreversible"] = True
     return pending.write_record(project.data_dir, record), record
 
 
@@ -154,6 +171,7 @@ def recover_config(project: config.Project, conn: psycopg.Connection | None, rec
     """종류 config의 복구(recover.RECOVERERS). conn이 없으면(DB를 볼 수 없음) 되돌린다."""
     rid = str(record.get("id"))
     files = record.get("files") or []
+    compactions = record.get("compactions") or []
     loaded_now = False
     if conn is not None:
         with conn.cursor() as cur:
@@ -165,9 +183,31 @@ def recover_config(project: config.Project, conn: psycopg.Connection | None, rec
         loaded_now = stamp != record.get("loaded_at") and now.data_revision == record.get("data_revision")
     root = project.root
     all_new = all(_sha(_read(root / _safe_rel(f["path"]))) == f.get("after") for f in files)
-    if loaded_now and all_new:
+    all_compactions_ready = True
+    for comp in compactions:
+        final, temp, _merged, _moves = compact._paths(project, comp)
+        new_file = final if final.exists() else temp if temp.exists() else None
+        if new_file is None or batches.content_hash(new_file) != comp.get("sha256"):
+            all_compactions_ready = False
+            break
+    if loaded_now and all_new and all_compactions_ready:
+        for comp in compactions:
+            compact._finish(project, comp)
         _history_from_record(project.name, record)       # 커밋 뒤 이력을 쓰기 전에 끊겼으면 여기서 쓴다
+        for comp in compactions:
+            shutil.rmtree(batches.table_dir(project.data_dir, comp["table"]) / batches.MERGED_DIR, ignore_errors=True)
         return recover.Outcome(rid, "config", "committed", [f["path"] for f in files])
+    for comp in compactions:
+        final, temp, merged, moves = compact._paths(project, comp)
+        for src, dst in moves:
+            if dst.exists() and not src.exists():
+                os.replace(dst, src)
+        for p in (final, temp):
+            try:
+                p.unlink()
+            except FileNotFoundError:
+                pass
+        shutil.rmtree(merged, ignore_errors=True)
     for f in files:
         path = root / _safe_rel(f["path"])
         if f.get("before") is None:
@@ -239,42 +279,339 @@ def _default_text(spec: Mapping[str, Any]) -> str:
     return ("true" if raw else "false") if isinstance(raw, bool) else str(raw)
 
 
+_BIGINT_MIN = -(1 << 63)
+_BIGINT_MAX = (1 << 63) - 1
+_MAX_ROW_ERRORS = 200
+
+
+def _expand_label_ops(project: config.Project, op_list: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """table: 데이터셋의 labels에 있는 열이 이름 변경·삭제될 때 labels도 함께 갱신하는 연산을 덧붙인다."""
+    out = [dict(o) for o in op_list]
+    explicit = {
+        o.get("key")
+        for o in op_list
+        if o.get("op") == "dataset.update" and isinstance(o.get("set"), Mapping) and "labels" in o["set"]
+    }
+    ds_labels: dict[str, dict[str, Any]] = {}
+    changed_ds: set[str] = set()
+    for dskey, ds in project.dashboard["datasets"].items():
+        if "table" in ds and isinstance(ds.get("labels"), Mapping) and dskey not in explicit:
+            ds_labels[dskey] = dict(ds["labels"])
+
+    for o in op_list:
+        op_name = o.get("op")
+        if op_name not in ("column.rename", "column.remove"):
+            continue
+        tname, cname = o.get("table"), o.get("column")
+        if not isinstance(tname, str) or not isinstance(cname, str):
+            continue
+        for dskey, ds in project.dashboard["datasets"].items():
+            if ds.get("table") != tname or dskey not in ds_labels:
+                continue
+            if cname in (ds.get("metrics") or {}):
+                continue
+            labels = ds_labels[dskey]
+            if cname not in labels:
+                continue
+            if op_name == "column.remove":
+                del labels[cname]
+            else:
+                to = str(o.get("to"))
+                ds_labels[dskey] = {(to if k == cname else k): v for k, v in labels.items()}
+            changed_ds.add(dskey)
+
+    for dskey in sorted(changed_ds):
+        labels = ds_labels[dskey]
+        out.append({"op": "dataset.update", "key": dskey, "set": {"labels": labels if labels else None}})
+    return out
+
+
+def _table_evolution_plans(project: config.Project, op_list: list[Mapping[str, Any]]) -> tuple[dict[str, list[dict[str, Any]]], dict[str, bool]]:
+    """테이블별 최종 열 매핑과 데이터 재작성 필요 여부를 계산한다."""
+    from ..project import ops
+
+    cols_state: dict[str, list[dict[str, Any]]] = {}
+    needs_rewrite: dict[str, bool] = {}
+    for tname, spec in project.schema["tables"].items():
+        cols_state[tname] = [
+            {"name": c, "source": c, "old_type": cs["type"], "type": cs["type"],
+             "is_new": False, "default": "", "narrowed": False}
+            for c, cs in spec["columns"].items()
+        ]
+        needs_rewrite[tname] = False
+
+    for o in op_list:
+        op_name = o.get("op")
+        tname = o.get("table")
+        if not isinstance(tname, str) or tname not in cols_state:
+            continue
+        mode = project.schema["tables"][tname].get("mode") or "replace"
+        state = cols_state[tname]
+        if op_name == "column.add":
+            val = o.get("value") or {}
+            state.append({
+                "name": str(o["column"]), "source": None, "old_type": None,
+                "type": val.get("type"), "is_new": True, "default": _default_text(val), "narrowed": False,
+            })
+            if mode == "replace":
+                needs_rewrite[tname] = True
+        elif op_name == "column.rename":
+            for entry in state:
+                if entry["name"] == o.get("column"):
+                    entry["name"] = str(o["to"])
+                    break
+            needs_rewrite[tname] = True
+        elif op_name == "column.remove":
+            cols_state[tname] = [e for e in state if e["name"] != o.get("column")]
+            needs_rewrite[tname] = True
+        elif op_name == "column.update":
+            new_type = (o.get("set") or {}).get("type") if isinstance(o.get("set"), Mapping) else None
+            if isinstance(new_type, str):
+                for entry in state:
+                    if entry["name"] == o.get("column") and new_type != entry["type"]:
+                        if (entry["type"], new_type) in ops._NARROWER:
+                            entry["narrowed"] = True
+                            needs_rewrite[tname] = True
+                        elif mode == "replace":
+                            needs_rewrite[tname] = True
+                        entry["type"] = new_type
+                        break
+    return cols_state, needs_rewrite
+
+
+def _convert_cell(raw_text: str, new_spec: Mapping[str, Any], *,
+                  old_type: str | None, is_narrowed: bool) -> tuple[str | None, str | None]:
+    if raw_text == "":
+        if new_spec.get("required"):
+            return None, "값이 필요함"
+        return "", None
+    target_type = new_spec["type"]
+    if is_narrowed:
+        if old_type == "number" and target_type == "integer":
+            norm = normalize.normalize(raw_text, "number", {})
+            try:
+                d = Decimal(norm)
+            except InvalidOperation:
+                return None, f"정수로 바꿀 수 없음 '{raw_text}'"
+            if not d.is_finite() or d != int(d):
+                return None, f"정수로 바꿀 수 없음 '{raw_text}'"
+            n = int(d)
+            if not (_BIGINT_MIN <= n <= _BIGINT_MAX):
+                return None, f"정수 범위를 벗어남 '{raw_text}'"
+            text = str(n)
+        elif old_type == "timestamp" and target_type == "date":
+            norm = normalize.normalize(raw_text, "timestamp", {})
+            try:
+                dt = datetime.fromisoformat(norm)
+            except ValueError:
+                return None, f"날짜로 바꿀 수 없음 '{raw_text}'"
+            text = dt.date().isoformat()
+        else:
+            text = normalize.normalize(raw_text, target_type, {})
+    else:
+        text = raw_text
+    try:
+        val = loader_validate._parse(text, dict(new_spec))
+    except ValueError as exc:
+        return None, str(exc)
+    reasons = loader_validate._check_value(val, text, dict(new_spec))
+    if reasons:
+        return None, "; ".join(reasons)
+    c = loader_record.canonical(val)
+    return ("" if c is None else str(c)), None
+
+
+def _rewrite_replace_csv(tname: str, content: bytes, col_plan: list[dict[str, Any]],
+                         new_table_spec: Mapping[str, Any]) -> bytes:
+    """replace 테이블의 CSV를 새 열 순서·이름·유형에 맞춰 변환하고 오류 위치를 수집한다."""
+    text = content.decode("utf-8-sig")
+    rows = list(csv.reader(io.StringIO(text, newline="")))
+    if not rows:
+        return content
+    header = [h.strip() for h in rows[0]]
+    old_idx = {h: i for i, h in enumerate(header)}
+    missing_hdr = [entry["source"] for entry in col_plan if not entry["is_new"] and entry["source"] not in old_idx]
+    if missing_hdr:
+        raise IngestError(422, "invalid_rows", "CSV 머리글이 스키마와 맞지 않습니다",
+                          [f"data/{tname}.csv:1: 열 '{c}'가 머리글에 없음" for c in missing_hdr])
+    new_cols = new_table_spec["columns"]
+    out = io.StringIO()
+    w = csv.writer(out, lineterminator="\n")
+    w.writerow([e["name"] for e in col_plan])
+    errors: list[str] = []
+    for line_no, row in enumerate(rows[1:], 2):
+        if not row or (len(row) == 1 and row[0].strip() == ""):
+            continue
+        out_row: list[str] = []
+        for entry in col_plan:
+            cname = entry["name"]
+            if entry["is_new"]:
+                out_row.append(entry["default"])
+                continue
+            src = entry["source"]
+            raw_text = row[old_idx[src]] if old_idx[src] < len(row) else ""
+            converted, err = _convert_cell(raw_text, new_cols[cname],
+                                           old_type=entry["old_type"], is_narrowed=entry["narrowed"])
+            if err is not None:
+                if len(errors) < _MAX_ROW_ERRORS:
+                    errors.append(f"data/{tname}.csv:{line_no}:{cname}: {err}")
+            else:
+                out_row.append(converted or "")
+        if not errors:
+            w.writerow(out_row)
+    if errors:
+        raise IngestError(422, "invalid_rows", "변환할 수 없는 값이 있어 변경하지 않았습니다", errors)
+    return out.getvalue().encode("utf-8")
+
+
+def _find_append_cell_sources(project: config.Project, tname: str, olds: list[batches.SourceFile],
+                              pk_cols: list[str], on_conflict: str,
+                              target_keys: set[tuple[tuple[str, ...], str]]) -> dict[tuple[tuple[str, ...], str], tuple[str, int]]:
+    """변환 불가 셀이 마지막으로 들어온 원본 배치 파일과 줄 번호를 찾는다."""
+    found: dict[tuple[tuple[str, ...], str], tuple[str, int]] = {}
+    if not target_keys:
+        return found
+    for src in olds:
+        label = f"data/{tname}.csv" if src.number is None else f"data/{tname}/{src.name}"
+        with batches.open_binary(src.path) as raw_io:
+            reader = csv.reader(io.TextIOWrapper(raw_io, encoding="utf-8-sig", newline=""))
+            hdr = next(reader, None)
+            if not hdr:
+                continue
+            col_idx = {h: i for i, h in enumerate(hdr)}
+            if any(pk not in col_idx for pk in pk_cols):
+                continue
+            for line_no, row in enumerate(reader, 2):
+                if not row or (len(row) == 1 and row[0].strip() == ""):
+                    continue
+                row_pk = tuple(row[col_idx[pk]] if col_idx[pk] < len(row) else "" for pk in pk_cols)
+                for pk_t, old_c in target_keys:
+                    if row_pk == pk_t and old_c in col_idx:
+                        if on_conflict == "skip" and (pk_t, old_c) in found:
+                            continue
+                        found[(pk_t, old_c)] = (label, line_no)
+    return found
+
+
+def _prepare_append_compaction(project: config.Project, new_project: config.Project,
+                               conn: psycopg.Connection, tname: str,
+                               col_plan: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """append 테이블의 현재 행을 새 스키마로 변환·검증해 _pending/incoming/에 정규형 합친 배치를 쓴다."""
+    olds, _naming = batches.sources(project.data_dir, tname, "append")
+    if not olds:
+        return None
+    old_spec = project.schema["tables"][tname]
+    new_spec = new_project.schema["tables"][tname]
+    new_cols = new_spec["columns"]
+    pk_cols = list(old_spec["primary_key"])
+    select_cols = list(old_spec["columns"])
+    col_pos = {c: i for i, c in enumerate(select_cols)}
+    pk_pos = [col_pos[pk] for pk in pk_cols]
+
+    temp = pending.incoming_path(project.data_dir)
+    writer = batches.CanonicalWriter(temp)
+    rows = 0
+    raw_errors: list[tuple[tuple[str, ...], str, str, str, str]] = []
+    target_keys: set[tuple[tuple[str, ...], str]] = set()
+    try:
+        writer.header([e["name"] for e in col_plan])
+        with conn.cursor(name="dk_evolve") as cur:
+            cur.execute(sql.SQL("SELECT {} FROM {}.{} ORDER BY {}").format(
+                sql.SQL(", ").join(map(sql.Identifier, select_cols)),
+                sql.Identifier("raw"), sql.Identifier(tname),
+                sql.SQL(", ").join(map(sql.Identifier, pk_cols))))
+            for row in cur:
+                pk_tuple = tuple("" if row[i] is None else str(loader_record.canonical(row[i])) for i in pk_pos)
+                pk_label = pk_tuple[0] if len(pk_tuple) == 1 else ",".join(pk_tuple)
+                out_row: list[str] = []
+                for entry in col_plan:
+                    cname = entry["name"]
+                    if entry["is_new"]:
+                        out_row.append(entry["default"])
+                        continue
+                    src = entry["source"]
+                    raw_val = row[col_pos[src]]
+                    raw_text = "" if raw_val is None else str(loader_record.canonical(raw_val))
+                    converted, err = _convert_cell(raw_text, new_cols[cname],
+                                                   old_type=entry["old_type"], is_narrowed=entry["narrowed"])
+                    if err is not None:
+                        if len(raw_errors) < _MAX_ROW_ERRORS:
+                            raw_errors.append((pk_tuple, pk_label, cname, src, err))
+                            target_keys.add((pk_tuple, src))
+                    else:
+                        out_row.append(converted or "")
+                if not raw_errors:
+                    writer.row(out_row)
+                rows += 1
+        conn.commit()
+        if raw_errors:
+            writer.abort()
+            on_conflict = old_spec.get("on_conflict") or "error"
+            found = _find_append_cell_sources(project, tname, olds, pk_cols, on_conflict, target_keys)
+            formatted: list[str] = []
+            for pk_tuple, pk_label, cname, src, err in raw_errors:
+                loc = found.get((pk_tuple, src))
+                if loc is not None:
+                    formatted.append(f"{loc[0]}:{loc[1]}:{cname} (키 {pk_label}): {err}")
+                else:
+                    formatted.append(f"{tname}:{cname} (키 {pk_label}): {err}")
+            raise IngestError(422, "invalid_rows", "변환할 수 없는 값이 있어 변경하지 않았습니다", formatted)
+        sha = writer.close()
+    except BaseException:
+        writer.abort()
+        raise
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    name = batches.next_name(project.data_dir, tname, merged=True)
+    merged_rel = f"{batches.MERGED_DIR}/{stamp}"
+    return {
+        "table": tname, "name": name, "incoming": temp.name, "sha256": sha,
+        "rows": rows, "merged": merged_rel,
+        "olds": [{"name": f.name, "first": f.number is None} for f in olds],
+    }
+
+
 def plan_files(project: config.Project, op_list: list[Mapping[str, Any]],
                extra: Mapping[str, bytes | None] | None = None) -> dict[str, tuple[bytes | None, bytes | None]]:
     """연산과 함께 바뀌는 파일들: {경로: (지금 내용, 새 내용)}. 새 내용이 None이면 지운다.
 
     - YAML: 연산을 적용해 고친 곳만 다시 쓴다(store.edit_yaml).
-    - column.add가 replace 테이블에 열을 더하면 그 테이블의 CSV에도 열을 더한다(6-2).
+    - replace 테이블의 열 추가·이름 변경·삭제·유형 변경은 그 테이블의 CSV도 함께 변환한다.
     """
     from ..project import ops, store
 
+    expanded = _expand_label_ops(project, list(op_list))
     try:
-        ops.check_ops(op_list)
+        ops.check_ops(expanded)
     except ops.OpError as exc:
         raise IngestError(400, "invalid_op", str(exc), [str(exc)], op_index=exc.index) from None
     out: dict[str, tuple[bytes | None, bytes | None]] = {}
-    for file in ops.files_of(op_list):
+    for file in ops.files_of(expanded):
         before = _read(project.root / file)
         if before is None:
             raise IngestError(422, "invalid_config", "설정 파일을 읽을 수 없습니다", [f"{file}:(최상위): 파일이 없음"])
         try:
-            text, _how = store.edit_yaml(before.decode("utf-8"), lambda d, f=file: ops.apply_ops(d, op_list, f))
+            text, _how = store.edit_yaml(before.decode("utf-8"), lambda d, f=file: ops.apply_ops(d, expanded, f))
         except store.StoreError as exc:
             raise IngestError(exc.status, exc.detail, exc.message, exc.errors) from None
         except ops.OpError as exc:
             raise IngestError(400, "invalid_op", str(exc), [str(exc)], op_index=exc.index) from None
         out[file] = (before, text.encode("utf-8"))
-    for item in op_list:
-        if item.get("op") != "column.add":
+
+    schema_bytes = out[config.SCHEMA_FILE][1] if config.SCHEMA_FILE in out else _read(project.root / config.SCHEMA_FILE)
+    new_schema = config._normalize_schema(store._dates_to_str(yaml.safe_load(schema_bytes.decode("utf-8")))) if schema_bytes else project.schema
+    col_plans, needs_rewrite = _table_evolution_plans(project, list(op_list))
+    for tname, rewrite in needs_rewrite.items():
+        if not rewrite:
             continue
-        spec = project.schema["tables"].get(item["table"])
-        if spec is None or (spec.get("mode") or "replace") == "append":
+        spec = project.schema["tables"][tname]
+        if (spec.get("mode") or "replace") == "append":
             continue
-        rel = f"data/{item['table']}.csv"
-        current = out[rel][1] if rel in out else _read(project.root / rel)
-        if current is not None:
-            out[rel] = (out[rel][0] if rel in out else current,
-                        _csv_add_column(current, str(item["column"]), _default_text(item.get("value") or {})))
+        rel = f"data/{tname}.csv"
+        current = _read(project.root / rel)
+        if current is not None and tname in new_schema["tables"]:
+            out[rel] = (current, _rewrite_replace_csv(tname, current, col_plans[tname], new_schema["tables"][tname]))
+
     for rel, content in (extra or {}).items():
         out[_safe_rel(rel)] = (_read(project.root / rel), content)
     return {k: v for k, v in out.items() if v[0] != v[1]}
@@ -308,6 +645,32 @@ def _staged(project: config.Project, changes: Mapping[str, tuple[bytes | None, b
         raise IngestError(exc.status, exc.detail, exc.message, exc.errors) from None
 
 
+def check_conflict_policy_with_rewrite(project: config.Project, new_project: config.Project,
+                                       op_list: list[Mapping[str, Any]] | None) -> None:
+    """append 테이블의 충돌 정책(on_conflict)·기존 열 기본값(default) 변경과 배치 재작성은 함께 실행하지 않는다."""
+    if not op_list:
+        return
+    col_plans, needs_rewrite = _table_evolution_plans(project, op_list)
+    for tname, rewrite in needs_rewrite.items():
+        if not rewrite:
+            continue
+        old_t = project.schema["tables"].get(tname)
+        new_t = new_project.schema["tables"].get(tname)
+        if old_t is None or new_t is None or (old_t.get("mode") or "replace") != "append":
+            continue
+        if (old_t.get("on_conflict") or "error") != (new_t.get("on_conflict") or "error"):
+            raise IngestError(422, "invalid_op",
+                              f"충돌 정책(on_conflict) 변경과 배치 재작성은 함께 실행할 수 없습니다({tname}). 먼저 충돌 정책을 적용한 뒤 실행하세요")
+        for entry in col_plans[tname]:
+            if entry["is_new"]:
+                continue
+            old_col = old_t["columns"].get(entry["source"]) or {}
+            new_col = new_t["columns"].get(entry["name"]) or {}
+            if old_col.get("default") != new_col.get("default"):
+                raise IngestError(422, "invalid_op",
+                                  f"기존 열의 기본값(default) 변경과 배치 재작성은 함께 실행할 수 없습니다({tname}). 먼저 기본값 변경을 적용한 뒤 실행하세요")
+
+
 def validate(project_name: str, op_list: list[Mapping[str, Any]],
              extra: Mapping[str, bytes | None] | None = None) -> list[str]:
     """잠금 없이 미리 검사한다(요청을 받을 때 400·422를 바로 알리려고). 작업은 잠금 안에서 다시 검사한다. 바뀔 파일 목록."""
@@ -317,7 +680,9 @@ def validate(project_name: str, op_list: list[Mapping[str, Any]],
         raise IngestError(422, "invalid_config", "지금 설정이 검사를 통과하지 못합니다", exc.errors) from None
     changes = plan_files(project, op_list, extra)
     if changes:
-        check_mode_switch(project, _staged(project, changes).project)
+        staged_proj = _staged(project, changes).project
+        check_mode_switch(project, staged_proj)
+        check_conflict_policy_with_rewrite(project, staged_proj, op_list)
     return sorted(changes)
 
 
@@ -374,13 +739,49 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
             say(f"▶ 검사: {', '.join(changes)}")
             staged = _staged(project, changes)
             check_mode_switch(project, staged.project)          # 잠금 안에서 폴더를 다시 본다(이력 되돌리기 포함)
+            check_conflict_policy_with_rewrite(project, staged.project, op_list)
             new_revision = data_revision(staged.project.schema, staged.project.dashboard)
+            compactions: list[dict[str, Any]] = []
+            if restore is None and op_list:
+                col_plans, needs_rewrite = _table_evolution_plans(project, op_list)
+                need_append_rewrite = any(
+                    rewrite and (project.schema["tables"][tname].get("mode") or "replace") == "append"
+                    for tname, rewrite in needs_rewrite.items()
+                )
+                if need_append_rewrite and session.loaded.data_revision is not None \
+                        and session.loaded.data_revision != data_revision(project.schema, project.dashboard):
+                    raise IngestError(409, "rebuild_required",
+                                      "적용되지 않은 설정 변경이 있어 배치를 합칠 수 없습니다. 먼저 apply한 뒤 실행하세요")
+                for tname, rewrite in needs_rewrite.items():
+                    if not rewrite or (project.schema["tables"][tname].get("mode") or "replace") != "append":
+                        continue
+                    diff = session.diff.get(tname)
+                    if diff is not None and not diff.clean:
+                        for c in compactions:
+                            p = pending.incoming_dir(project.data_dir) / c["incoming"]
+                            p.unlink(missing_ok=True)
+                        raise IngestError(409, "rebuild_required",
+                                          "반영되지 않았거나 바뀐 배치 파일이 있어 구조를 바꿀 수 없습니다. 먼저 적용하세요",
+                                          diff.lines(tname))
+                    try:
+                        comp = _prepare_append_compaction(project, staged.project, conn, tname, col_plans[tname])
+                    except BaseException:
+                        for c in compactions:
+                            p = pending.incoming_dir(project.data_dir) / c["incoming"]
+                            p.unlink(missing_ok=True)
+                        raise
+                    if comp is not None:
+                        compactions.append(comp)
             # 검증하는 사이 다른 곳(Studio의 CSV 교체 등. YAML revision에 들지 않는다)이 파일을 바꿨으면 덮어쓰지 않는다
             for rel, (before, _after) in changes.items():
                 if _read(project.root / rel) != before:
+                    for c in compactions:
+                        p = pending.incoming_dir(project.data_dir) / c["incoming"]
+                        p.unlink(missing_ok=True)
                     raise IngestError(409, "stale_config", f"{rel}이 그 사이에 바뀌어 고치지 않았습니다. 다시 불러온 뒤 시도하세요")
             hid = _new_history_id(action)
-            record_path, record = _write_record(project, changes, new_revision, hid, action, session.loaded.loaded_at)
+            record_path, record = _write_record(project, changes, new_revision, hid, action, session.loaded.loaded_at,
+                                                compactions=compactions or None)
             for rel, (_b, after) in changes.items():
                 path = project.root / rel
                 if after is None:
@@ -391,6 +792,8 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
                 else:
                     store._replace_atomic(path, after)
                 fault("after_move")
+            for comp in compactions:
+                compact._finish(project, comp)
             say("▶ load: 다시 만들기")
             new_project = config.load_project(project.name)
             try:
@@ -406,6 +809,8 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
                 raise IngestError(422, "load_failed", "적용(load)에 실패해 모든 파일을 되돌렸습니다", exc.errors) from None
             pending.remove_record(record_path)
             record_path = None
+            if compactions:
+                compact.clear_merged(new_project)
             say(f"✔ load: {sum(counts.values())}행")
         result: dict[str, Any] = {"changed": sorted(changes), "history": hid, "revision": store.revision(project.root),
                                   "counts": counts, "sync": None}

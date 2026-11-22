@@ -174,6 +174,7 @@ def get_table(table: str, principal: Principal = Depends(require_operator)) -> d
         "on_conflict": (spec.get("on_conflict") or "error") if spec.get("mode") == "append" else None,
         "description": spec.get("description"), "primary_key": list(spec["primary_key"]), "columns": columns,
         "checks": [c["name"] for c in spec.get("checks", [])], "datasets": datasets,
+        "indexes": [list(idx) for idx in spec.get("indexes", [])],
         "revision": store.revision(project.root),
     }
     if "freshness" in spec:

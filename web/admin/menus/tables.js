@@ -9,7 +9,7 @@ import * as I from "../../shared/ingest.js";
 import * as Q from "../../shared/query.js";
 import { rowsView } from "../rows.js";
 import { box, btn, pill, jobText, jobBox, dataFailText as failText } from "../datakit.js";
-import { newTableWizard, addColumnCard, columnRuleCard, usagePanel, dropTableCard, compactTable } from "../structure.js";
+import { newTableWizard, addColumnCard, columnRuleCard, dropColumnCard, usagePanel, dropTableCard, compactTable } from "../structure.js";
 import { T, view, session, ApiFail, api, apiForm, waitJob, notice, head, checkbox, pagedTable, detailId, isManageFeature } from "../kit.js";
 
 const D = T.data;
@@ -483,7 +483,9 @@ async function detailView(name, my) {
     panel.setAttribute("aria-labelledby", ids[key]);
     if (key === "preview") panel.replaceChildren(previewPanel(t, alive));
     else if (key === "columns") {
-      panel.replaceChildren(columnsPanel(t, isAdmin() ? (col) => openAction(columnRuleCard(t, col, { alive, onClose: closeAction, onDone: reload })) : null));
+      panel.replaceChildren(columnsPanel(t,
+        isAdmin() ? (col) => openAction(columnRuleCard(t, col, { alive, onClose: closeAction, onDone: reload })) : null,
+        isAdmin() ? (col) => openAction(dropColumnCard(t, col, { alive, onClose: closeAction, onDone: reload })) : null));
     } else if (key === "usage") panel.replaceChildren(usagePanel(t, alive));
     else if (key === "profile" && showProfile) panel.replaceChildren(profilePanel(t, alive));
     else panel.replaceChildren(batchesPanel(t, alive));
@@ -754,7 +756,8 @@ function editCard(t, one, alive, { onClose, onDone }) {
 }
 
 /** 구조 탭. onRule(col)을 주면(admin) 열마다 "규칙 고치기" 버튼 */
-function columnsPanel(t, onRule = null) {
+function columnsPanel(t, onRule = null, onDrop = null) {
+  const canDrop = (c) => onDrop && !c.primary_key && t.columns.length > 1;
   const rows = t.columns.map((c) => h("tr", {},
     h("td", {}, h("span", { class: "d-stack" }, h("span", { class: "mono", text: c.name }), c.label ? h("small", { class: "a-key", text: c.label }) : null)),
     h("td", {}, typeText(c.type)),
@@ -764,11 +767,15 @@ function columnsPanel(t, onRule = null) {
     h("td", { class: "wrap" }, c.description || "—"),
     h("td", {}, c.default == null ? "—" : h("span", { class: "mono", text: F.display(c, String(c.default), FIELD_TEXT) })),
     h("td", { class: "wrap" }, c.aliases && c.aliases.length ? c.aliases.join(", ") : "—"),
-    onRule ? h("td", {}, (() => {
+    onRule ? h("td", {}, h("span", { class: "a-actions" }, (() => {
       const b = btn(D.editRules, () => onRule(c), "small");
       b.setAttribute("aria-label", D.editRulesFor(c.name));
       return b;
-    })()) : null));
+    })(), canDrop(c) ? (() => {
+      const db = btn(D.dropColumn, () => onDrop(c), "small danger");
+      db.setAttribute("aria-label", D.dropColumnFor(c.name));
+      return db;
+    })() : null)) : null));
   return h("div", { class: "a-table-wrap" }, h("table", { class: "a-table" },
     h("thead", {}, h("tr", {}, [D.column, D.type, D.rules, D.description, D.defaultValue, D.aliases].map((l) => h("th", { scope: "col", text: l })),
       onRule ? h("th", { scope: "col" }, h("span", { class: "sr-only", text: D.actions })) : null)),
