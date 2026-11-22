@@ -326,21 +326,43 @@ def test_interrupted_prune_preserves_lineage_and_recovers_statelessly(superset):
     assert _exists_summary(superset, "sales-sample") == {"database": 0, "dataset": 0, "chart": 0, "dashboard": 0}
 
 
-def test_coexisting_project_preserved_and_explicit_prune_project_cli(superset, tmp_path, capsys):
-    """이력 없는 타 프로젝트는 전환 중에도 보존되고, prune-project CLI로 안전하게 정리된다."""
+def test_coexisting_project_preserved_and_explicit_prune_project_cli(superset, tmp_path, capsys, monkeypatch):
+    """이력 없는 타 프로젝트(SYNC_LOCK_UI=0 공유 차트 포함)는 전환 중 보존되고, prune-project CLI로 정리된다."""
+    monkeypatch.setenv("SYNC_LOCK_UI", "0")
     _apply_project("devtracker")
     root = copy_project("devtracker", tmp_path, "zz-coexist")
     tmp_state = tmp_path / "coexist_state"
     tmp_build = tmp_path / "coexist_build"
     sync(load_project("zz-coexist", root), state_dir=tmp_state, build_dir=tmp_build, log=lambda _m: None)
+    monkeypatch.delenv("SYNC_LOCK_UI")
+
+    dev_overview_id = superset.find_id("dashboard", config.object_uuid("devtracker", "dashboard", "overview"))
+    coexist_dash_id = superset.find_id("dashboard", config.object_uuid("zz-coexist", "dashboard", "overview"))
+    chart_bar_id = superset.find_id("chart", config.object_uuid("devtracker", "chart", "ms_bar"))
+    assert dev_overview_id is not None and coexist_dash_id is not None and chart_bar_id is not None
+    superset.expect(
+        superset.put(f"/api/v1/chart/{chart_bar_id}", json={"dashboards": [dev_overview_id, coexist_dash_id]}),
+        "공존 대시보드에 이전 프로젝트 차트 연결",
+    )
 
     try:
         _wipe_state()
         logs: list[str] = []
         _apply_project("sales-sample", sync_kwargs={"log": logs.append})
-        # zz-coexist는 이력에 없으므로 보존되고 안내 로그만 남는다
+        # zz-coexist는 이력에 없으므로 대시보드와 공유된 devtracker 차트·부모 체인까지 함께 보존된다
         assert _exists_summary(superset, "zz-coexist", root) == {"database": 1, "dataset": 5, "chart": 11, "dashboard": 3}
+        coexist_charts = superset.get(f"/api/v1/dashboard/{coexist_dash_id}/charts").json()["result"]
+        assert chart_bar_id in [c["id"] for c in coexist_charts]
+        assert superset.get_object("chart", chart_bar_id) is not None
+        assert superset.find_id("dashboard", config.object_uuid("devtracker", "dashboard", "overview")) is None
+        assert superset.find_id("dataset", config.object_uuid("devtracker", "dataset", "docs")) is None
         assert any("zz-coexist" in m and "prune-project" in m for m in logs)
+
+        # 공존 대시보드에서 공유 차트를 떼고 재-sync 하면 남아 있던 devtracker 체인만 정리되고 zz-coexist는 무손상
+        superset.expect(superset.put(f"/api/v1/chart/{chart_bar_id}", json={"dashboards": []}), "공유 차트 연결 해제")
+        sync(load_project("sales-sample", PROJECTS), log=lambda _m: None)
+        assert _exists_summary(superset, "devtracker") == {"database": 0, "dataset": 0, "chart": 0, "dashboard": 0}
+        assert _exists_summary(superset, "zz-coexist", root) == {"database": 1, "dataset": 5, "chart": 11, "dashboard": 3}
 
         # 활성 프로젝트(sales-sample)는 거부
         assert cli_main(["prune-project", "sales-sample"]) == 1

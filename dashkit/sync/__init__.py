@@ -246,7 +246,7 @@ def fetch_snapshot(client: SupersetClient) -> SupersetSnapshot:
         charts=client.list_objects(
             "chart", ["id", "uuid", "is_managed_externally", "datasource_id", "datasource_type", "dashboards.id"]
         ),
-        dashboards=client.list_objects("dashboard", ["id", "uuid", "is_managed_externally"]),
+        dashboards=client.list_objects("dashboard", ["id", "uuid", "slug", "is_managed_externally"]),
     )
 
 
@@ -264,6 +264,27 @@ def _made_by_sync(row: Mapping[str, object]) -> bool:
         return uuid.UUID(str(row.get("uuid"))).version == 5
     except ValueError:
         return False
+
+
+def _is_project_dashboard(row: Mapping[str, object], project_name: str) -> bool:
+    """대시보드가 해당 프로젝트 소유인지 검증한다(_made_by_sync + slug/uuid5 일치).
+
+    _made_by_sync만으로는 SYNC_LOCK_UI=0 환경에서 다른 프로젝트의 관리 대시보드에 이 프로젝트 차트가 추가된
+    경우를 구분하지 못한다. 번들이 생성한 slug(<project>-<key>)에서 키 후보를 역산해 object_uuid와 대조하고,
+    소유를 확인할 수 없으면 False를 돌려주어 보존한다.
+    """
+    if not _made_by_sync(row):
+        return False
+    slug = row.get("slug")
+    prefix = f"{project_name.replace('_', '-')}-"
+    if not isinstance(slug, str) or not slug.startswith(prefix):
+        return False
+    rest = slug[len(prefix):]
+    if not rest:
+        return False
+    row_uuid = str(row.get("uuid") or "")
+    candidates = (rest.replace("-", "_"), rest) if "-" in rest else (rest,)
+    return any(row_uuid == object_uuid(project_name, "dashboard", k) for k in candidates)
 
 
 def _find_project_database(snap: SupersetSnapshot, project_name: str) -> dict[str, Any] | None:
@@ -320,7 +341,7 @@ def discover_project_objects(
     if dashboard_ids:
         found["dashboard"] = [
             str(d["uuid"]) for d in snap.dashboards
-            if d.get("id") in dashboard_ids and _made_by_sync(d)
+            if d.get("id") in dashboard_ids and _is_project_dashboard(d, project_name)
         ]
     return found
 

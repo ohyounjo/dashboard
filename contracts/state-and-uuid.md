@@ -55,7 +55,7 @@ sync(tools 컨테이너)가 읽는 환경변수다. 기본은 `1`(화면 편집 
 1. 데이터베이스: 이름이 `dashkit-<프로젝트>`이고 UUID가 `uuid5(<프로젝트>/database/main)`인 것. 없으면 찾은 것이 없는 것으로 한다.
 2. 데이터셋: 1의 데이터베이스에 속하고 `schema == "dash"`이며 UUID가 `uuid5(<프로젝트>/dataset/<table_name>)`인 것(`SYNC_LOCK_UI=0` 포함). 같은 DB에 사람이 추가한 데이터셋은 UUID가 버전 4라서 들어가지 않는다.
 3. 차트: 2의 데이터셋을 쓰는 것(`datasource_type: table`) 중 `_made_by_sync`(`is_managed_externally`가 true이거나 UUID가 버전 5)인 것.
-4. 대시보드: 3의 차트가 놓인 것 중 `_made_by_sync`인 것.
+4. 대시보드: 3의 차트가 놓인 것 중 `_made_by_sync`이면서 `slug`가 `<프로젝트._slug>-<키._slug>` 형식이고 `uuid`가 `uuid5(<프로젝트>/dashboard/<키>)`와 일치하는 것. `SYNC_LOCK_UI=0` 등에서 다른 프로젝트의 관리 대시보드에 이 프로젝트의 차트가 놓였거나 `slug`가 바뀌어 소유를 확인할 수 없는 대시보드는 대상에서 제외해 보존한다(그리고 그 대시보드가 참조하는 차트·데이터셋·DB도 연쇄 보존한다).
 
 Superset 화면이나 REST로 만든 객체는 UUID가 버전 4라서 1~4에 들어가지 않는다. 다른 프로젝트의 객체는 1에서 구분된다.
 

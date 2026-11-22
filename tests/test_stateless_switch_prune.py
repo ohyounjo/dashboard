@@ -84,10 +84,15 @@ def _chart_row(proj: str, cid: int, key: str, ds_id: int, dashboards: list[int],
     }
 
 
-def _dash_row(proj: str, did: int, key: str, *, locked: bool = True, row_uuid: str | None = None) -> dict:
+_UNSET = object()
+
+
+def _dash_row(proj: str, did: int, key: str, *, locked: bool = True, row_uuid: str | None = None,
+              slug: object = _UNSET) -> dict:
     return {
         "id": did,
         "uuid": row_uuid or object_uuid(proj, "dashboard", key),
+        "slug": f"{proj}-{key}".replace("_", "-") if slug is _UNSET else slug,
         "is_managed_externally": locked,
     }
 
@@ -197,6 +202,50 @@ def test_discover_finds_orphan_database_without_datasets():
         "chart": [],
         "dashboard": [],
     }
+
+
+def test_discover_and_prune_exclude_other_project_and_unverified_dashboards():
+    # alpha-gamma(접두사 유사 타 프로젝트) 및 gamma(타 프로젝트), slug가 바뀐 미식별 대시보드가
+    # SYNC_LOCK_UI=0 상태에서 alpha 차트를 참조해도 alpha 소유 대시보드로 오인하지 않아야 한다.
+    snap = SupersetSnapshot(
+        databases=[_db_row("alpha", 1), _db_row("gamma", 2), _db_row("alpha-gamma", 3), _db_row("beta", 4)],
+        datasets=[
+            _ds_row("alpha", 10, 1, "things"),
+            _ds_row("alpha", 11, 1, "owners"),
+            _ds_row("gamma", 20, 2, "things"),
+        ],
+        charts=[
+            _chart_row("alpha", 100, "c_owned", 11, [1000], locked=False),
+            _chart_row("alpha", 101, "c_shared_gamma", 10, [1000, 2000], locked=False),
+            _chart_row("alpha", 102, "c_shared_prefix", 10, [3000], locked=False),
+            _chart_row("alpha", 103, "c_unverified_slug", 10, [4000], locked=False),
+            _chart_row("gamma", 200, "c_gamma", 20, [2000], locked=False),
+        ],
+        dashboards=[
+            _dash_row("alpha", 1000, "sales_home", locked=False),  # _ 포함 키 → slug 역산 검증 통과
+            _dash_row("gamma", 2000, "home_view", locked=False),
+            _dash_row("alpha-gamma", 3000, "main", locked=False),
+            _dash_row("alpha", 4000, "edited", locked=False, slug="custom-edited-slug"),
+        ],
+    )
+
+    cand = discover_project_objects(snap, "alpha", include_database=True)
+    assert cand["dashboard"] == [object_uuid("alpha", "dashboard", "sales_home")]
+
+    p = plan_prune(snap, {"database": [_db_row("beta", 4)["uuid"]]}, cand, current_project="beta")
+    assert p.delete == {
+        "dashboard": [object_uuid("alpha", "dashboard", "sales_home")],
+        "chart": [object_uuid("alpha", "chart", "c_owned")],
+        "dataset": [object_uuid("alpha", "dataset", "owners")],
+        "database": [],
+    }
+    assert [(x.kind, x.uuid) for x in p.preserved] == [
+        ("chart", object_uuid("alpha", "chart", "c_shared_gamma")),
+        ("chart", object_uuid("alpha", "chart", "c_shared_prefix")),
+        ("chart", object_uuid("alpha", "chart", "c_unverified_slug")),
+        ("dataset", object_uuid("alpha", "dataset", "things")),
+        ("database", object_uuid("alpha", "database", "main")),
+    ]
 
 
 # ---------------------------------------------------------------- plan_prune 수동 의존성 보존
