@@ -12,7 +12,7 @@
 | 6 | 상태 파일 `.state/embed.json`, `.state/managed.json` | [state-and-uuid.md](state-and-uuid.md) |
 | 7 | Superset 객체 UUID | [state-and-uuid.md](state-and-uuid.md) |
 | 8 | `make new`의 추론 결과(JSON)와 추론 규칙 | [scaffold.md](scaffold.md). Studio의 프로젝트 마법사가 같은 형식을 주고받는다 |
-| 9 | 적용 전 차이 보기(`make plan`)의 비교 규칙·권한·결과 형식(JSON), 로더가 남기는 적재 기록(`dashkit_meta` 스키마) | [plan.md](plan.md). plan은 `dash_reader` 계정만 쓴다. Studio의 데이터 화면이 같은 함수를 쓴다 |
+| 9 | 적용 전 차이 보기(`make plan`)의 비교 규칙·권한·결과 형식(JSON), 로더가 남기는 적재 기록(`dashkit_meta` 스키마) | [plan.md](plan.md). plan은 `dash_inspect` 우선·`dash_reader` 폴백만 쓴다. Studio의 데이터 화면이 같은 함수를 쓴다 |
 | 10 | 설정 형식 버전(`version`)과 `dashkit migrate` | 아래 "설정 버전", 형식 변경 기록 [../CHANGELOG.md](../CHANGELOG.md) |
 | 11 | Studio(구성 화면) API, 변경 연산, 요청 보호, 저장 방식 | [studio.md](studio.md). 화면(`web/studio/`)과 API(`dashkit/studio/`)의 약속이다. 프로젝트 마법사는 8번, 데이터 화면의 차이는 9번의 형식을 그대로 쓴다 |
 | 12 | 로그인·세션·요청 보호, 등급과 계정 상태, 인증 DB(`dashkit_auth` 스키마, `dash_auth` 계정), `/api/auth/*`, `make auth-init`·`make admin` | [auth.md](auth.md). 기존 웹앱 API의 로그인 요구는 4번(api.md)에도 적는다 |
@@ -94,7 +94,7 @@
 
 ### 적재 기록 (`dashkit load`가 같은 트랜잭션에서 남긴다)
 
-로더는 raw·dash를 다시 만드는 트랜잭션에서 `dashkit_meta` 스키마(행 지문 `row_fingerprint`, 배치 기록 `batch`, 적재 스냅샷 `load_snapshot`)도 통째로 다시 만들고 `dash_reader`(와 있으면 `dash_inspect`)에게 USAGE·SELECT만 준다. raw의 원본 값은 하나도 넣지 않는다(기본 키의 해시와 행 해시, 파일 이름·내용 해시·행 수뿐). `dashkit plan`이 owner 계정 없이 원본 파일과 지난 적재를 비교하는 데 쓰고, 추가 적재가 대조와 중복 확인에 쓴다. 테이블 정의와 지문 규칙은 [plan.md](plan.md) "적재 기록". 데이터 DB의 스키마는 `raw`(owner만, `dash_inspect` 읽기), `dash`(reader·inspect 읽기), `dashkit_meta`(reader·inspect 읽기) 셋이다.
+로더는 raw·dash를 다시 만드는 트랜잭션에서 `dashkit_meta` 스키마(행 지문 `row_fingerprint`, 배치 기록 `batch`, 적재 스냅샷 `load_snapshot`)도 통째로 다시 만들고, `dash_reader`에는 `load_snapshot`·`batch`의 `SELECT`만, `dash_inspect`에는 `row_fingerprint`를 포함한 `dashkit_meta` 전체 `SELECT`를 준다. raw의 원본 값은 하나도 넣지 않는다(기본 키·행 지문은 `PLAN_FINGERPRINT_KEY` 기반 HMAC-SHA256, 파일 이름·내용 해시·행 수뿐). `dashkit plan`이 owner 계정 없이 원본 파일과 지난 적재를 비교하는 데 쓰고, 추가 적재가 대조와 중복 확인에 쓴다. 테이블 정의와 지문 규칙은 [plan.md](plan.md) "적재 기록". 데이터 DB의 스키마는 `raw`(owner만, `dash_inspect` 읽기), `dash`(reader·inspect 읽기), `dashkit_meta`(reader는 스냅샷·배치만, inspect는 전체 읽기) 셋이다.
 
 ## `dashkit/config.py` 공개 인터페이스
 

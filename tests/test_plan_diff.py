@@ -20,6 +20,14 @@ from dashkit.loader.validate import _parse
 from dashkit.sync.bundle import build_bundle
 
 FIXTURES = Path(__file__).parent / "fixtures"
+TEST_KEY_STR = "test-plan-fingerprint-key-32-bytes!"
+TEST_KEY = TEST_KEY_STR.encode("utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _set_fingerprint_key(monkeypatch):
+    monkeypatch.setenv("PLAN_FINGERPRINT_KEY", TEST_KEY_STR)
+
 
 THINGS_NOW = [("id", "text"), ("owner_id", "text"), ("phase", "text"), ("score", "bigint"),
               ("begins", "date"), ("ends", "date")]
@@ -44,10 +52,11 @@ def table_of(columns: dict[str, str], pk: list[str]) -> dict:
     return {"primary_key": pk, "columns": {c: {"type": t} for c, t in columns.items()}}
 
 
-def loaded(table: dict, rows: list[list]) -> tuple[dict, list[tuple[str, str]]]:
+def loaded(table: dict, rows: list[list], *, table_name: str = "t", key: bytes = TEST_KEY) -> tuple[dict, list[tuple[str, str]]]:
     """그 정의와 행으로 적재했을 때 남는 기록(스냅샷의 테이블 항목, 행 지문)."""
-    snap = record.snapshot("basic", {"tables": {"t": table}}, {"datasets": {}}, {"t": len(rows)})
-    return snap["tables"]["t"], record.fingerprints(table, rows)
+    snap = record.snapshot("basic", {"tables": {table_name: table}}, {"datasets": {}}, {table_name: len(rows)},
+                           fingerprint_key_id=record.key_id(key))
+    return snap["tables"][table_name], record.fingerprints(table, rows, table_name=table_name, key=key)
 
 
 def snapshot_of(project, name: str | None = None) -> dict:
@@ -104,19 +113,42 @@ def test_fingerprint_ignores_column_order_but_not_column_names():
 
 
 def test_fingerprint_holds_no_original_value():
-    """기록에 들어가는 것은 해시 둘뿐이다. 기본 키 값도 원본으로 남지 않는다."""
+    """기록에 들어가는 것은 HMAC-SHA256 지문 둘뿐이다. 무솔트 해시가 아니며 도메인·테이블·키가 분리된다."""
     table = table_of({"id": "text", "secret": "text"}, ["id"])
     rows = [["someone@example.com", "아주 비밀스러운 값"]]
-    (key, digest), = record.fingerprints(table, rows)
+    (key, digest), = record.fingerprints(table, rows, table_name="members", key=TEST_KEY)
     assert re.fullmatch(r"[0-9a-f]{64}", key) and re.fullmatch(r"[0-9a-f]{64}", digest) and key != digest
-    assert key == hashlib.sha256('["someone@example.com"]'.encode()).hexdigest()
+    assert key != hashlib.sha256('["someone@example.com"]'.encode()).hexdigest()
+    # 도메인·테이블·키 분리
+    single = table_of({"id": "text"}, ["id"])
+    (rk_a, rh_a), = record.fingerprints(single, [["v"]], table_name="a", key=TEST_KEY)
+    (rk_b, rh_b), = record.fingerprints(single, [["v"]], table_name="b", key=TEST_KEY)
+    assert rk_a != rh_a and rk_a != rk_b and rh_a != rh_b
+    other_key = b"another-fingerprint-key-32-bytes!"
+    (rk_k2, _), = record.fingerprints(single, [["v"]], table_name="a", key=other_key)
+    assert rk_a != rk_k2
+    assert len(record.key_id(TEST_KEY)) == 16 and record.key_id(TEST_KEY) == record.key_id(TEST_KEY)
+    assert record.key_id(TEST_KEY) != record.key_id(other_key)
     # 사람이 읽는 키는 CSV 쪽 행에서만 만들고 저장하지 않는다
-    assert record.labels(table, rows) == {key: "someone@example.com"}
+    assert record.labels(table, rows, table_name="members", key=TEST_KEY) == {key: "someone@example.com"}
     composite = table_of({"region": "text", "day": "date", "n": "integer"}, ["region", "day"])
     assert list(record.labels(composite, [["east", date(2026, 1, 2), 3]]).values()) == ["east, 2026-01-02"]
-    # 같은 키는 표기가 달라도 같은 해시다
+    # 같은 키는 표기가 달라도 같은 지문이다
     numeric = table_of({"n": "number"}, ["n"])
     assert record.fingerprints(numeric, [[Decimal("1.0")]])[0][0] == record.fingerprints(numeric, [[Decimal("1")]])[0][0]
+
+
+def test_fingerprint_key_rejects_missing_placeholder_or_short(monkeypatch):
+    monkeypatch.delenv("PLAN_FINGERPRINT_KEY", raising=False)
+    with pytest.raises(record.FingerprintKeyError):
+        record.fingerprint_key()
+    with pytest.raises(record.FingerprintKeyError):
+        record.fingerprints(table_of({"id": "text"}, ["id"]), [["a"]])
+    for bad in ("", "__GENERATE__", "short-15-chars!"):
+        monkeypatch.setenv("PLAN_FINGERPRINT_KEY", bad)
+        with pytest.raises(record.FingerprintKeyError):
+            record.fingerprint_key()
+        assert record.try_fingerprint_key() is None
 
 
 def test_snapshot_shape(tmp_path):
@@ -189,16 +221,17 @@ def test_table_diff_new_table_counts_everything_as_added():
 
 def test_table_diff_against_the_load_record():
     table = table_of({"id": "text", "label": "text"}, ["id"])
-    recorded, prints = loaded(table, [["o1", "가"], ["o2", "나"]])
+    recorded, prints = loaded(table, [["o1", "가"], ["o2", "나"]], table_name="owners")
     assert plan.table_diff("owners", table, [["o1", "가"], ["o2", "나"]], recorded, prints)["status"] == "unchanged"
     d = plan.table_diff("owners", table, [["o1", "가"], ["o2", "다"], ["o3", "라"]], recorded, prints)
-    assert (d["status"], d["added"], d["removed"], d["changed"], d["comparable"]) == ("changed", 1, 0, 1, True)
+    assert (d["status"], d["added"], d["removed"], d["changed"], d["comparable"], d["comparison"]) == (
+        "changed", 1, 0, 1, True, "full")
 
 
 def test_table_diff_column_order_alone_keeps_rows_comparable():
     old = table_of({"id": "text", "label": "text"}, ["id"])
     new = table_of({"label": "text", "id": "text"}, ["id"])
-    recorded, prints = loaded(old, [["o1", "가"], ["o2", "나"]])
+    recorded, prints = loaded(old, [["o1", "가"], ["o2", "나"]], table_name="owners")
     d = plan.table_diff("owners", new, [["가", "o1"], ["다", "o2"]], recorded, prints)
     assert d["comparable"] is True and (d["added"], d["removed"], d["changed"]) == (0, 0, 1)
     assert d["columns"]["reordered"] is True and d["status"] == "changed"
@@ -210,8 +243,9 @@ def test_all_columns_renamed_still_reports_the_old_row_count():
     new = table_of({"code": "text"}, ["code"])
     recorded, prints = loaded(old, [["a"], ["b"]])
     d = plan.table_diff("t", new, [["a"]], recorded, prints)
-    assert d["comparable"] is False and "열 구성" in d["reason"]
-    assert (d["status"], d["added"], d["removed"], d["changed"], d["unchanged"]) == ("changed", 1, 2, 0, 0)
+    assert d["comparable"] is False and d["comparison"] == "none" and "기본 키" in d["reason"]
+    assert (d["status"], d["added"], d["removed"], d["changed"], d["unchanged"], d["matched"]) == (
+        "changed", 1, 2, 0, 0, 0)
     assert d["columns"]["added"] == ["code"] and d["columns"]["removed"] == ["id"]
 
 
@@ -222,18 +256,30 @@ def test_changed_primary_key_does_not_hide_deletions():
     new = table_of({"id": "text", "label": "text"}, ["label"])
     recorded, prints = loaded(old, [["a", "x"], ["b", "x"]])
     d = plan.table_diff("t", new, [["b", "x"]], recorded, prints)
-    assert d["comparable"] is False and "기본 키" in d["reason"]
+    assert d["comparable"] is False and d["comparison"] == "none" and "기본 키" in d["reason"]
     assert (d["status"], d["added"], d["removed"], d["changed"], d["unchanged"]) == ("changed", 1, 2, 0, 0)
-    assert "전부 추가·전부 삭제" in plan._table_text(d)
+    assert "행 대응 불가, 전체 교체로 셈" in plan._table_text(d)
 
 
-def test_retyped_column_makes_rows_incomparable():
+def test_retyped_non_pk_column_uses_key_only_comparison():
+    """비키 열 타입이 바뀌어도 기본 키가 같으면 row_key로 추가·삭제·유지를 분리하고 값 미비교(changed=None)를 명시한다."""
     old = table_of({"id": "text", "n": "integer"}, ["id"])
     new = table_of({"id": "text", "n": "text"}, ["id"])
-    recorded, prints = loaded(old, [["a", 1]])
-    d = plan.table_diff("t", new, [["a", "1"]], recorded, prints)
-    assert d["comparable"] is False and (d["added"], d["removed"]) == (1, 1)
+    recorded, prints = loaded(old, [["a", 1], ["b", 2]])
+    d = plan.table_diff("t", new, [["a", "1"], ["c", "3"]], recorded, prints)
+    assert d["comparison"] == "key_only" and d["comparable"] is False
+    assert (d["added"], d["removed"], d["matched"], d["changed"], d["unchanged"]) == (1, 1, 1, None, None)
+    assert d["keys"] == {"added": ["c"], "removed": [], "changed": []}
     assert d["columns"]["retyped"] == [{"column": "n", "from": "bigint", "to": "text"}]
+    assert "+1행 −1행 · 유지 1행(값 미비교)" in plan._table_text(d)
+
+
+def test_retyped_pk_column_falls_back_to_none_comparison():
+    old = table_of({"id": "integer", "v": "text"}, ["id"])
+    new = table_of({"id": "text", "v": "text"}, ["id"])
+    recorded, prints = loaded(old, [[1, "a"]])
+    d = plan.table_diff("t", new, [["1", "a"]], recorded, prints)
+    assert d["comparison"] == "none" and d["comparable"] is False and (d["added"], d["removed"]) == (1, 1)
 
 
 def test_enum_and_text_are_the_same_structure():
@@ -461,8 +507,8 @@ def test_format_and_json(tmp_path):
     edited = project_copy(tmp_path / "b", mutate_dash=edit)
     wider = {**COLUMNS, "things": THINGS_VIEW + [("age_days", "integer")]}
     owners, things = edited.schema["tables"]["owners"], edited.schema["tables"]["things"]
-    rec_owners, prints_owners = loaded(owners, [["o1", "가"], ["o2", "나"]])
-    rec_things, prints_things = loaded(things, [])
+    rec_owners, prints_owners = loaded(owners, [["o1", "가"], ["o2", "나"]], table_name="owners")
+    rec_things, prints_things = loaded(things, [], table_name="things")
     tables = [
         plan.table_diff("owners", owners, [["o1", "가"], ["o2", "다"], ["o3", "라"]], rec_owners, prints_owners),
         plan.table_diff("things", things, [], rec_things, prints_things),
@@ -509,7 +555,7 @@ def test_format_incomparable_and_new_table():
     recorded, prints = loaded(table_of({"id": "text"}, ["id"]), [["a"], ["b"]])
     tables = [plan.table_diff("t", table, [["a"]], recorded, prints), plan.table_diff("fresh", table, [["a"]], None)]
     text = plan.format_plan(_plan(tables, [], plan.diff_bundles({}, {})))
-    assert "t  +1행 −2행 ~0행  열 추가: code  열 삭제: id  (열 구성이 지난 적재와 달라 행을 맞출 수 없음: 전부 추가·전부 삭제로 셈)" in text
+    assert "t  +1행 −2행  열 추가: code  열 삭제: id  (기본 키가 지난 적재와 달라 행을 맞출 수 없음: 행 대응 불가, 전체 교체로 셈)" in text
     assert "fresh  +1행 −0행 ~0행  (새 테이블)" in text
 
 
@@ -526,3 +572,112 @@ def test_number_fingerprint_keeps_full_precision():
     for text, expected in (("1.50", "1.5"), ("1.0", "1"), ("100", "100"), ("1E+3", "1000"), ("-0.0", "0"),
                            ("0.000", "0"), ("-2.500", "-2.5"), ("12345678901234567890123456789012.10", "12345678901234567890123456789012.1")):
         assert record.canonical(Decimal(text)) == expected, text
+
+
+def test_key_only_duplicate_and_pk_variants():
+    # key_only에서 새 CSV 또는 기록에 중복 키가 있으면 none으로 폴백한다
+    old = table_of({"id": "text", "n": "integer"}, ["id"])
+    new = table_of({"id": "text", "n": "integer", "extra": "text"}, ["id"])
+    recorded, prints = loaded(old, [["a", 1], ["b", 2]])
+    dup_csv = plan.table_diff("t", new, [["a", 1, "x"], ["a", 2, "y"]], recorded, prints)
+    assert dup_csv["comparison"] == "none" and dup_csv["comparable"] is False
+    assert (dup_csv["added"], dup_csv["removed"]) == (2, 2)
+    dup_old = plan.table_diff("t", new, [["a", 1, "x"]], recorded, [prints[0], prints[0]])
+    assert dup_old["comparison"] == "none" and (dup_old["added"], dup_old["removed"]) == (1, 2)
+
+    # 복합 PK 순서 변경([a, b] -> [b, a])은 none
+    old_cpk = table_of({"a": "text", "b": "text", "v": "text"}, ["a", "b"])
+    new_cpk = table_of({"a": "text", "b": "text", "v": "text", "w": "text"}, ["b", "a"])
+    rec_c, pr_c = loaded(old_cpk, [["1", "2", "x"]])
+    d_cpk = plan.table_diff("t", new_cpk, [["1", "2", "x", "y"]], rec_c, pr_c)
+    assert d_cpk["comparison"] == "none" and (d_cpk["added"], d_cpk["removed"]) == (1, 1)
+
+    # PK가 enum <-> text인 경우 동일 "text" 타입이므로 key_only 유지
+    old_enum = {"primary_key": ["id"], "columns": {"id": {"type": "enum", "values": ["a", "b"]}}}
+    new_text = table_of({"id": "text", "extra": "text"}, ["id"])
+    rec_e, pr_e = loaded(old_enum, [["a"]])
+    d_enum = plan.table_diff("t", new_text, [["a", "1"], ["b", "2"]], rec_e, pr_e)
+    assert d_enum["comparison"] == "key_only" and (d_enum["added"], d_enum["removed"], d_enum["matched"]) == (1, 0, 1)
+
+
+def test_fingerprint_status_compatibility_and_unrecorded(monkeypatch):
+    table = table_of({"id": "text"}, ["id"])
+    recorded, prints = loaded(table, [["a"], ["b"]])
+    # 1. 구버전 스냅샷(fingerprint 키 없음)
+    fkey, err = plan.fingerprint_status({"version": 1, "tables": {"t": recorded}})
+    assert fkey is None and "구버전" in err
+    d_legacy = plan.table_diff("t", table, [["a"]], recorded, prints, key=fkey, fingerprint_error=err)
+    assert d_legacy["comparison"] == "unrecorded" and d_legacy["previous_rows"] == 2
+    assert d_legacy["added"] is None and d_legacy["status"] == "unrecorded"
+
+    # 2. 키 회전(key_id 불일치)
+    fkey2, err2 = plan.fingerprint_status({"fingerprint": {"scheme": record.FINGERPRINT_SCHEME, "key_id": "0000000000000000"}})
+    assert fkey2 is None and "달라" in err2
+    d_rot = plan.table_diff("t", table, [["a"]], recorded, prints, key=fkey2, fingerprint_error=err2)
+    assert d_rot["comparison"] == "unrecorded" and d_rot["previous_rows"] == 2 and "달라" in d_rot["reason"]
+
+    # 3. dash_inspect 미연결 / 권한 없음
+    fkey3, err3 = plan.fingerprint_status({"fingerprint": {"scheme": record.FINGERPRINT_SCHEME, "key_id": record.key_id(TEST_KEY)}},
+                                         has_inspect=False)
+    assert fkey3 is None and "dash_inspect" in err3
+
+    # 4. PLAN_FINGERPRINT_KEY 미설정
+    monkeypatch.delenv("PLAN_FINGERPRINT_KEY", raising=False)
+    fkey4, err4 = plan.fingerprint_status({"fingerprint": {"scheme": record.FINGERPRINT_SCHEME, "key_id": record.key_id(TEST_KEY)}})
+    assert fkey4 is None and "PLAN_FINGERPRINT_KEY" in err4
+
+
+def test_predict_view_columns_sources_and_describe(tmp_path):
+    from dashkit.loader.current import DescribeError
+
+    # 1. sources가 있는 스냅샷: SQL 주석/문자열에 바뀐 raw 테이블 이름이 있어도 오탐 unknown 없음
+    def add_comment_sql(doc):
+        doc["datasets"]["things"]["sql"] = "-- owners 참고\nSELECT 'owners' AS tag, id, phase FROM raw.things"
+
+    project = project_copy(tmp_path / "a", mutate_dash=add_comment_sql)
+    snap = snapshot_of(project)
+    snap["datasets"]["things"]["sources"] = {"things": ["id", "phase"]}
+    # owners 열이 바뀌어도 things는 sources에 owners가 없으므로 unchanged
+    def add_owner_col(doc):
+        doc["tables"]["owners"]["columns"]["email"] = {"type": "text"}
+
+    edited = project_copy(tmp_path / "b", mutate_dash=add_comment_sql, mutate_schema=add_owner_col)
+    views_now = {"owners": OWNERS_NOW, "things": [("tag", "text"), ("id", "text"), ("phase", "text")]}
+    pred = plan.predict_view_columns(edited, snap, views_now)
+    assert pred["things"] == {"columns": views_now["things"], "reason": None}
+
+    # 2. 쿼리 변경 시 describe 성공하면 열 예측 및 superset.datasets.changed 반영
+    def change_sql(doc):
+        doc["datasets"]["things"]["sql"] = "SELECT id, owner_id, phase, score, begins, ends, 1 AS zz_extra FROM raw.things"
+
+    edited_q = project_copy(tmp_path / "c", mutate_dash=change_sql)
+    snap_q = snapshot_of(project_copy(tmp_path / "d"))
+    calls = []
+
+    def fake_describe(sql_text):
+        calls.append(sql_text)
+        return THINGS_NOW + [("zz_extra", "integer")]
+
+    pred_q = plan.predict_view_columns(edited_q, snap_q, {"owners": OWNERS_NOW, "things": THINGS_VIEW},
+                                       describe=fake_describe)
+    assert len(calls) == 1
+    assert pred_q["things"]["columns"] == THINGS_NOW + [("zz_extra", "integer")]
+    assert pred_q["things"]["reason"] is None
+
+    # 3. 참조 raw 테이블 구조가 함께 바뀌면 describe를 부르지 않고 unknown 유지
+    def change_both(doc):
+        doc["tables"]["things"]["columns"]["zz_col"] = {"type": "text"}
+
+    edited_both = project_copy(tmp_path / "e", mutate_dash=change_sql, mutate_schema=change_both)
+    calls.clear()
+    pred_both = plan.predict_view_columns(edited_both, snap_q, {"owners": OWNERS_NOW, "things": THINGS_VIEW},
+                                          describe=fake_describe)
+    assert calls == [] and pred_both["things"]["columns"] is None and "raw.things" in pred_both["things"]["reason"]
+
+    # 4. DescribeError 발생 시 해당 뷰만 unknown + 구체적 이유
+    def failing_describe(_sql):
+        raise DescribeError("column \"nope\" does not exist")
+
+    pred_err = plan.predict_view_columns(edited_q, snap_q, {"owners": OWNERS_NOW, "things": THINGS_VIEW},
+                                         describe=failing_describe)
+    assert pred_err["things"]["columns"] is None and "쿼리 분석 실패" in pred_err["things"]["reason"]

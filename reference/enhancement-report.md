@@ -129,7 +129,7 @@ Codex는 푸시만으로는 다시 리뷰하지 않아서, 고친 뒤에는 PR�
 
 - **guest 권한 제한:** 이후 이슈 #49에서 기간 변경을 위한 `can_time_range on Api`를 승인했다. `chord`, `world_map`, `country_map`은 `can_explore_json on Superset`을 부여하지 않아 여전히 임베드에서 그려지지 않는다. 권한별 실측과 SQL 노출 등은 [Superset 계약 13절](../contracts/superset-notes.md)을 따른다.
 - **prune:** 프로젝트를 전환했을 때 이전 프로젝트의 Superset 객체를 지우는 일은 여전히 `.state/managed.json`이 필요하다(같은 프로젝트 안의 이전 객체는 상태 파일 없이 지워진다).
-- **plan:** `sql:` 데이터셋의 새 열은 적용 전에 예측하지 못한다("적용해야 알 수 있음"). 이 변경 전에 적재된 DB는 한 번 `make apply`해야 데이터 차이가 나온다. 열 구성이나 기본 키를 바꾼 테이블은 전부 추가·전부 삭제로 센다. 행 지문은 솔트 없는 SHA-256이라 값의 범위가 좁은 키는 추측해 맞춰 볼 수 있다(원본은 저장하지 않음).
+- **plan:** `sql:` 데이터셋은 `dash_inspect`의 `PQprepare`·`PQdescribePrepared`와 `sources`로 적용 전 열을 예측하고, 비키 열 변경은 `key_only`로 추가·삭제·유지 행을 분리하며, 행 지문은 `PLAN_FINGERPRINT_KEY` 기반 HMAC-SHA256과 `dash_reader` 권한 회수로 보호된다(#56). 다만 `raw`·선행 `dash` 구조가 함께 바뀌는 경우·빈 DB·`dash_inspect` 미연결 시에는 `unknown`으로 남고, 기본 키 변경·중복 키 시에는 전체 교체(`none`)로 센다. 구버전 스냅샷·키 회전 시에는 오탐 없이 1회 `make apply`를 안내한다.
 - **설정 검사:** 5b 통합 확인 당시에는 막대·선 차트의 `x`와 `groupby`에 같은 열을 넣어도 검사를 통과했지만, 이후 [PR #31](https://github.com/ohyounjo/dashboard/pull/31)에서 적용 전에 YAML 경로와 함께 충돌을 보고하도록 고쳤다. [PR #60](https://github.com/ohyounjo/dashboard/pull/60)은 자동 제거되는 서로 다른 지표와 일부 원본 유형 검사도 보완했다. 확인 범위 밖 원본 설정과 일부 지표 객체는 검사를 보장하지 않는다. 현재 지원 범위는 [차트 계약](../contracts/chart-shorthand.md#중복-라벨-검사)을 따른다.
 - **`make apply`:** backend 이미지를 다시 만들지 않는다. 템플릿 코드(`dashkit/`, `web/widgets/*/widget.json`)를 바꿨으면 `make up`이 필요하다.
 - **위젯:** 새 위젯의 고정 문구(`web/strings.js`)와 전용 CSS(`web/styles.css`)는 아직 위젯 폴더 밖이다.

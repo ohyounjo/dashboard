@@ -240,8 +240,8 @@ projects/<프로젝트>/data/
 | 계정 | 권한 | 쓰는 곳 |
 |---|---|---|
 | `dash_owner` | `raw`·`dash`·`dashkit_meta` 소유 | 로더, 추가 적재(관리 서비스·CLI) |
-| `dash_reader` | `dash`·`dashkit_meta` SELECT | backend, Superset, plan. `raw`를 읽지 못한다 |
-| `dash_inspect` | `raw`·`dash`·`dashkit_meta`의 SELECT만, 기본 읽기 전용 트랜잭션 | 관리 서비스의 읽기 경로(조회·목록) |
+| `dash_reader` | `dash` 및 `dashkit_meta.load_snapshot`·`dashkit_meta.batch` SELECT | backend, Superset, plan 폴백. `raw`와 `dashkit_meta.row_fingerprint`를 읽지 못한다 |
+| `dash_inspect` | `raw`·`dash`·`dashkit_meta`의 SELECT만, 기본 읽기 전용 트랜잭션 | 관리 서비스의 읽기 경로(조회·목록), `plan`·Studio의 행 지문 비교 및 SQL 뷰 열 예측 |
 
 - `dash_inspect`는 `data-db/init/03-inspect.sh`가 만든다(새 볼륨은 initdb 때, 이미 있는 볼륨은 `make data-init`). 쓰기·역할·DB 생성 권한이 없고 `dashkit_auth`에 권한이 없다. `raw`·`dash`·`dashkit_meta`의 SELECT와 `dash.as_of()` 실행 권한은 로더가 적재할 때마다 준다(역할이 없으면 건너뛴다).
 - 테스트가 고정한다: `dash_reader`가 `raw`를 읽지 못하고, `dash_inspect`가 쓰지 못하고 `dashkit_auth`를 읽지 못한다(`tests/test_ingest_db.py`).

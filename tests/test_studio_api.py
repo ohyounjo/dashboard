@@ -849,25 +849,31 @@ def test_plan_without_db_reports_unavailable(client):
 
 
 def test_read_paths_use_the_reader_account_only(client, monkeypatch):
-    """config의 열 목록, check의 차이, plan은 dash_reader만 쓴다(AGENTS.md). owner 연결을 열면 실패하게 해 둔다."""
+    """config의 열 목록, check의 차이, plan은 읽기 전용 계정(dash_inspect/dash_reader)만 쓴다(owner 금지)."""
     from dashkit import db
 
-    opened = []
+    opened: list[tuple[str, str | None]] = []
 
     def no_owner(*a, **kw):
         raise AssertionError("읽기 경로에서 owner 계정을 씀")
 
+    def fake_inspect(*a, **kw):
+        opened.append(("inspect", kw.get("options")))
+        raise RuntimeError("테스트: inspect DB 없음")
+
     def fake_reader(*a, **kw):
-        opened.append(kw.get("options"))
-        raise RuntimeError("테스트: DB 없음")
+        opened.append(("reader", kw.get("options")))
+        raise RuntimeError("테스트: reader DB 없음")
 
     monkeypatch.setattr(db, "owner_conn", no_owner)
+    monkeypatch.setattr(db, "inspect_conn", fake_inspect)
     monkeypatch.setattr(db, "reader_conn", fake_reader)
     assert client.get(CONFIG).status == 200
     assert client.post("/studio/api/projects/devtracker/data/tasks/check",
                        files=[("file", "tasks.csv", tasks_csv(client))]).status == 200
     assert client.get("/studio/api/projects/devtracker/plan").status == 503
-    assert len(opened) == 3 and all("default_transaction_read_only=on" in o for o in opened)
+    assert [role for role, _ in opened] == ["reader", "inspect", "reader", "inspect", "reader"]
+    assert all("default_transaction_read_only=on" in (opt or "") for _, opt in opened)
 
 
 # ---------------------------------------------------------------- apply

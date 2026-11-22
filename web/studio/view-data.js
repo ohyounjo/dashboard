@@ -64,7 +64,8 @@ export function mount(container, ctx) {
     return h("div", { class: "diff" },
       h("span", { class: "diff-n", "data-tone": "good" }, h("b", { class: "num", text: `+${diff.added}` }), ` ${S.diffAdded}`),
       h("span", { class: "diff-n", "data-tone": "bad" }, h("b", { class: "num", text: `−${diff.removed}` }), ` ${S.diffRemoved}`),
-      h("span", { class: "diff-n", "data-tone": "warn" }, h("b", { class: "num", text: `~${diff.changed ?? 0}` }), ` ${S.diffChanged}`),
+      diff.changed != null ? h("span", { class: "diff-n", "data-tone": "warn" }, h("b", { class: "num", text: `~${diff.changed}` }), ` ${S.diffChanged}`) : null,
+      diff.comparison === "key_only" && diff.matched != null ? h("span", { class: "diff-n", "data-tone": "neutral" }, h("b", { class: "num", text: String(diff.matched) }), ` ${S.diffMatched}`) : null,
       diff.unchanged != null ? h("span", { class: "diff-n", "data-tone": "neutral" }, h("b", { class: "num", text: String(diff.unchanged) }), ` ${S.diffUnchanged}`) : null,
       diff.rows != null ? h("span", { class: "muted num", text: S.diffTotal(diff.rows) }) : null,
       diff.comparable === false ? h("p", { class: "hint", text: diff.reason ? S.diffNotComparable(diff.reason) : S.diffNotComparable("") }) : null);
