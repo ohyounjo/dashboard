@@ -17,13 +17,14 @@ const FIELD_TEXT = { yes: D.yes, no: D.no, choose: D.choose, empty: D.emptyValue
 const msg = (tone, text, ...extra) => h("div", { class: "a-msg d-box", "data-tone": tone, role: tone === "bad" ? "alert" : "status" }, h("span", { text }), ...extra);
 
 /** 행 표. opts
- *   path      POST …/rows/query
- *   columns   열 정의 [{name, type, values?, label?}] (테이블은 GET /tables/{t}의 열. 없으면 첫 응답의 columns)
- *   labels    {열: 표시 이름} (데이터셋의 labels)
- *   alive()   화면이 그대로인지(떠났으면 늦게 온 응답을 버린다)
+ *   path       POST …/rows/query
+ *   exportPath GET …/export (선택. null이면 CSV 내보내기 버튼을 보이지 않는다)
+ *   columns    열 정의 [{name, type, values?, label?}] (테이블은 GET /tables/{t}의 열. 없으면 첫 응답의 columns)
+ *   labels     {열: 표시 이름} (데이터셋의 labels)
+ *   alive()    화면이 그대로인지(떠났으면 늦게 온 응답을 버린다)
  *   rowAction(row) → 행 끝에 붙일 요소 | null (이 행 고치기)
  * 돌려주는 것: {el, reload()} — reload는 지금 페이지를 다시 읽는다(직접 고친 뒤라 "바뀌었습니다" 안내는 내지 않는다) */
-export function rowsView({ path, columns: known = null, labels = {}, alive = () => true, rowAction = null }) {
+export function rowsView({ path, exportPath = null, columns: known = null, labels = {}, alive = () => true, rowAction = null }) {
   let cols = known;
   let sort = null;
   let pager = Q.pagerStart();
@@ -77,7 +78,11 @@ export function rowsView({ path, columns: known = null, labels = {}, alive = () 
   } }, D.addFilter);
   const applyBtn = h("button", { type: "submit", class: "btn small primary" }, D.applyFilters);
   const clearBtn = h("button", { type: "button", class: "btn small", hidden: true, onclick: () => { entries = []; drawFilters(); restart(); } }, D.clearFilters);
-  const form = h("form", { class: "d-filter-form", "aria-label": D.filtersLabel }, filterRows, h("div", { class: "a-actions" }, addBtn, applyBtn, clearBtn));
+  const exportBtn = exportPath ? h("button", { type: "button", class: "btn small", onclick: () => {
+    const { filters } = Q.buildFilters(entries.map((e) => ({ column: e.column, op: e.op, value: e.input.get() })), cols || []);
+    window.location.assign(Q.buildExportUrl(exportPath, { filters, sort }));
+  } }, D.exportCsv) : null;
+  const form = h("form", { class: "d-filter-form", "aria-label": D.filtersLabel }, filterRows, h("div", { class: "a-actions" }, addBtn, applyBtn, clearBtn, exportBtn));
   form.addEventListener("submit", (e) => { e.preventDefault(); restart(); });
 
   /* ---------- 읽기 ---------- */

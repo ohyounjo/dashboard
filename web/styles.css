@@ -92,6 +92,7 @@ header.top .meta b { color: var(--fg); font-weight: 700 }
 
 .view { display: none; flex-direction: column; gap: 18px }
 .view.active { display: flex; animation: enter .2s ease-out }
+.tab-freshness { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px }
 @keyframes enter { from { transform: translateY(4px); opacity: .6 } to { transform: none; opacity: 1 } }
 
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-width: 0 }

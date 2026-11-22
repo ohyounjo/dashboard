@@ -56,6 +56,17 @@ export function buildQuery({ filters = [], sort = null, cursor = null, limit = 5
   return body;
 }
 
+/** CSV 내보내기 URL. sort: {column, dir} | [{column, dir}] | null */
+export function buildExportUrl(path, { filters = [], sort = null, columns = null } = {}) {
+  const params = new URLSearchParams({ format: "csv" });
+  if (Array.isArray(filters) && filters.length) params.set("filters", JSON.stringify(filters));
+  const sortList = Array.isArray(sort) ? sort : (sort ? [{ column: sort.column, dir: sort.dir }] : []);
+  if (sortList.length) params.set("sort", JSON.stringify(sortList));
+  if (Array.isArray(columns) && columns.length) params.set("columns", JSON.stringify(columns));
+  const sep = String(path).includes("?") ? "&" : "?";
+  return `${path}${sep}${params.toString()}`;
+}
+
 /** 페이지 커서 쌓기. 이전으로 가려면 받았던 커서를 쌓아 둔다(서버 커서는 앞으로만 간다).
  *  상태: {stack: [첫 페이지 null, 둘째 페이지의 커서, …]}; 지금 페이지의 커서는 stack의 마지막 */
 export const pagerStart = () => ({ stack: [null] });
@@ -80,7 +91,7 @@ export function valueToInput(v) {
  *  같은 뜻의 다른 표기(1,000과 1000, 2026/11/20과 2026-11-20)는 바뀐 것으로 보지 않는다. */
 export function changedColumns(columns, initial, current, { locked = [] } = {}) {
   const skip = new Set(locked);
-  return (columns || []).filter((c) => !c.primary_key && !skip.has(c.name)
+  return (columns || []).filter((c) => !c.primary_key && !c.sensitive && !skip.has(c.name)
     && tidy(c, valueToInput((initial || {})[c.name])) !== tidy(c, (current || {})[c.name] ?? "")).map((c) => c.name);
 }
 

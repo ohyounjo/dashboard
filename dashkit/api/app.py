@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictStr
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .. import config, paging, widgets
+from .. import config, db, freshness, paging, widgets
 from ..auth import access
 from ..auth import admin_routes
 from ..auth import settings as auth_settings
@@ -34,6 +34,8 @@ from ..auth.guard import Guard
 from ..auth.routes import Principal, require_user
 from ..auth.routes import router as auth_router
 from ..auth.routes import me_router
+from ..features import has_manage_feature
+from ..ingest import ledger, lineage
 from . import data
 from .errors import ApiError
 from .state import Current, CurrentState, default_state_dir
@@ -192,6 +194,34 @@ def _applied(project: config.Project, embeds: dict[str, str]) -> bool:
     )
 
 
+def _attach_data_as_of(project: config.Project, tabs: list[dict]) -> None:
+    """MANAGE_FEATURES=freshness일 때 dash_reader로 탭별 data_as_of를 계산한다. DB 오류 시 null 폴백."""
+    try:
+        timeout_ms = max(int(os.environ.get("DATA_STATEMENT_TIMEOUT_MS") or 10000), 100)
+    except ValueError:
+        timeout_ms = 10000
+    try:
+        with db.reader_conn(
+            application_name="dashkit-api-freshness",
+            options=f"-c statement_timeout={timeout_ms} -c default_transaction_read_only=on",
+        ) as conn:
+            with conn.cursor() as cur:
+                loaded = ledger.loaded(cur)
+                recorded = ledger.read(cur)
+        if loaded.project != project.name:
+            for tab in tabs:
+                tab["data_as_of"] = None
+            return
+        graph = lineage.build(project, loaded.snapshot)
+        for tab in tabs:
+            tab["data_as_of"] = freshness.tab_data_as_of(
+                project, tab, graph, recorded, loaded_project=loaded.project
+            )
+    except (psycopg.Error, RuntimeError):
+        for tab in tabs:
+            tab["data_as_of"] = None
+
+
 # ---------------------------------------------------------------- 엔드포인트
 
 @app.get("/api/app")
@@ -200,6 +230,8 @@ def get_app(user: Principal = Depends(require_user)):
     project, embeds = cur.project, cur.embeds
     # 볼 수 있는 탭만 돌려준다(운용자는 전부, user는 속한 그룹들이 허용한 탭)
     tabs, applied = _sections_with_embeds(project, embeds, access.allowed_tab_keys(user, project))
+    if has_manage_feature("freshness"):
+        _attach_data_as_of(project, tabs)
     app_cfg = project.dashboard["app"]
     return {
         "project": project.name,

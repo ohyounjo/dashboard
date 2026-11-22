@@ -713,12 +713,12 @@ def filter_remove(doc: MutableMapping, item: Mapping[str, Any]) -> None:
 
 # 열 연산이 바꿀 수 있는 키(설계서 6-2 표). 유형은 넓히기만(integer → number, 무엇이든 → text) 받는다. 규칙을 좁히면 옛
 # 배치가 검증에서 걸리고, 그것은 적용(load)이 파일·줄로 알린다
-COLUMN_UPDATE_KEYS = ("aliases", "description", "type", "values", "min", "max", "pattern", "default", "required")
+COLUMN_UPDATE_KEYS = ("aliases", "description", "type", "values", "min", "max", "pattern", "default", "required", "sensitive")
 _WIDER = {("integer", "number"), ("integer", "text"), ("number", "text"), ("boolean", "text"), ("date", "text"),
           ("timestamp", "text"), ("enum", "text")}
-TABLE_KEYS = ("description", "mode", "on_conflict", "primary_key", "columns", "checks")
-TABLE_UPDATE_KEYS = ("description", "mode", "on_conflict")
-COLUMN_KEYS = ("type", "required", "values", "ref", "min", "max", "pattern", "description", "default", "aliases")
+TABLE_KEYS = ("description", "mode", "on_conflict", "primary_key", "columns", "checks", "freshness")
+TABLE_UPDATE_KEYS = ("description", "mode", "on_conflict", "freshness")
+COLUMN_KEYS = ("type", "required", "values", "ref", "min", "max", "pattern", "description", "default", "aliases", "sensitive")
 
 
 def _schema_tables(doc: MutableMapping) -> MutableMapping:
@@ -760,7 +760,7 @@ def table_add(doc: MutableMapping, item: Mapping[str, Any]) -> None:
     if name in tables:
         raise OpError(f"테이블 '{name}'이 이미 있음")
     new: dict[str, Any] = {}
-    for k in ("description", "mode", "on_conflict", "primary_key"):
+    for k in ("description", "mode", "on_conflict", "freshness", "primary_key"):
         if value.get(k) is not None:
             new[k] = copy.deepcopy(value[k])
     new["columns"] = {str(c): _column_spec(_object({"c": spec}, "c")) for c, spec in value["columns"].items()}
