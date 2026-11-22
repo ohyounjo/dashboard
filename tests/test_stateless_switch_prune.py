@@ -443,6 +443,44 @@ def test_sync_stateless_switch_with_embed_hint_and_lineage(tmp_path, monkeypatch
     assert any("prune-project" in m for m in logs3)
 
 
+def test_sync_retains_embed_prev_project_across_snapshot_failure(tmp_path, monkeypatch):
+    """managed.json·적재 이력이 없고 embed.json만 있을 때 prune 목록 조회가 실패해도 재실행에서 이전 프로젝트를 정리한다."""
+    monkeypatch.setenv("DATA_DB_READER_PASSWORD", "test-pw")
+    beta = _make_project(tmp_path, "beta")
+    state = tmp_path / "state"
+    build = tmp_path / "build"
+    state.mkdir()
+    (state / "embed.json").write_text(json.dumps({"version": 1, "project": "alpha", "dashboards": {}}), encoding="utf-8")
+
+    snap = _snap_with_two_projects()
+
+    class _FlakySnapshotClient(_FakePruneClient):
+        def __init__(self, s: SupersetSnapshot, **kw):
+            super().__init__(s, **kw)
+            self.fail_list = True
+
+        def list_objects(self, kind: str, columns, filters: str = "", page_size: int = 100) -> list[dict]:
+            if self.fail_list:
+                raise SyncError("일시적 목록 조회 실패")
+            return super().list_objects(kind, columns, filters=filters, page_size=page_size)
+
+    client = _FlakySnapshotClient(snap, conn_targets={1: ("data-db", 5432, "dash")})
+    with pytest.raises(SyncError, match="일시적 목록 조회 실패"):
+        sync(beta, state_dir=state, build_dir=build, client=client, view_columns=_columns_for(beta),
+             replaced_projects=[], log=lambda _m: None)
+
+    # embed.json은 beta로 덮어써졌지만 managed.json에 pending_projects=["alpha"]가 남아 있어야 한다
+    assert json.loads((state / "embed.json").read_text())["project"] == "beta"
+    assert json.loads((state / "managed.json").read_text())["pending_projects"] == ["alpha"]
+
+    # 복구 후 재실행 → alpha 전부 삭제 및 pending_projects 정리
+    client.fail_list = False
+    sync(beta, state_dir=state, build_dir=build, client=client, view_columns=_columns_for(beta),
+         replaced_projects=[], log=lambda _m: None)
+    assert [r["database_name"] for r in snap.databases] == ["dashkit-beta"]
+    assert "pending_projects" not in json.loads((state / "managed.json").read_text())
+
+
 # ---------------------------------------------------------------- prune_project + CLI + plan
 
 def test_prune_project_safety_and_cli(tmp_path, monkeypatch, capsys):

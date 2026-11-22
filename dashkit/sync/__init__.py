@@ -127,13 +127,16 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
-def _read_managed(path: Path) -> dict[str, list[str]]:
+def _read_managed(path: Path) -> tuple[dict[str, list[str]], list[str]]:
     if not path.is_file():
-        return {}
+        return {}, []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         objects = data.get("objects") or {}
-        return {k: [str(u) for u in objects.get(k) or []] for k in KINDS}
+        pending = data.get("pending_projects") or []
+        if not isinstance(pending, list):
+            pending = []
+        return {k: [str(u) for u in objects.get(k) or []] for k in KINDS}, _valid_project_names(pending)
     except (ValueError, AttributeError, TypeError) as exc:
         raise SyncError(f"{path}를 읽지 못함({exc}). 내용을 확인하거나 지운 뒤 다시 실행하세요") from exc
 
@@ -149,13 +152,18 @@ def _read_embed_project(path: Path) -> str | None:
     return proj if isinstance(proj, str) and _PROJECT_NAME_RE.fullmatch(proj) else None
 
 
-def _managed_doc(project: Project, objects: Mapping[str, list[str]]) -> dict:
-    return {
+def _managed_doc(project: Project, objects: Mapping[str, list[str]],
+                 *, pending_projects: Iterable[str] = ()) -> dict:
+    pending = _valid_project_names(pending_projects, exclude=project.name)
+    doc = {
         "version": STATE_VERSION,
         "project": project.name,
         "synced_at": _now(),
         "objects": {k: list(objects.get(k) or []) for k in KINDS},
     }
+    if pending:
+        doc["pending_projects"] = pending
+    return doc
 
 
 def _union(a: Mapping[str, Iterable[str]], b: Mapping[str, Iterable[str]]) -> dict[str, list[str]]:
@@ -542,8 +550,9 @@ def _collect_previous_candidates(
     candidates: dict[str, list[str]],
     *,
     log: Callable[[str], None],
-) -> tuple[dict[str, list[str]], set[str]]:
+) -> tuple[dict[str, list[str]], set[str], list[str]]:
     skipped: set[str] = set()
+    retry_projects: list[str] = []
     for prev_name in prev_projects:
         db_row = _find_project_database(snap, prev_name)
         if db_row is None or db_row.get("id") is None:
@@ -553,6 +562,7 @@ def _collect_previous_candidates(
         except SyncError as exc:
             log(f"! 안내: 이전 프로젝트 '{prev_name}' DB 연결을 확인하지 못해 자동 정리하지 않음({exc})")
             skipped.add(prev_name)
+            retry_projects.append(prev_name)
             continue
         actual_target = _db_target_from_connection(conn_info)
         if actual_target != expected_target:
@@ -563,7 +573,7 @@ def _collect_previous_candidates(
             skipped.add(prev_name)
             continue
         candidates = _union(candidates, discover_project_objects(snap, prev_name, include_database=True))
-    return candidates, skipped
+    return candidates, skipped, retry_projects
 
 
 def sync(
@@ -610,18 +620,21 @@ def sync(
     if not password:
         raise SyncError("환경변수 DATA_DB_READER_PASSWORD가 필요합니다(import passwords)")
 
-    previous = _read_managed(managed_path)
+    previous, prev_pending = _read_managed(managed_path)
     # 5단계에서 embed.json을 새 프로젝트로 덮어쓰기 전에 이전 프로젝트 힌트를 읽는다
     embed_prev = _read_embed_project(embed_path)
-    prev_projects = _valid_project_names([embed_prev, *lineage], exclude=project.name)
+    prev_projects = _valid_project_names([*prev_pending, embed_prev, *lineage], exclude=project.name)
 
     # 3. 로그인
     client = client or SupersetClient()
     client.wait_ready()
     client.login()
 
-    # import가 중간에 실패해도 만들어졌을 수 있는 객체를 다음 실행이 prune할 수 있게 먼저 합집합을 기록한다
-    _write_json_atomic(managed_path, _managed_doc(project, _union(previous, current)))
+    # import가 중간에 실패하거나 prune 목록 조회 전 끊겨도 다음 실행이 이전 프로젝트를 재탐색할 수 있게 함께 기록한다
+    _write_json_atomic(
+        managed_path,
+        _managed_doc(project, _union(previous, current), pending_projects=prev_projects),
+    )
 
     # 4. import
     client.import_bundle(zip_bytes, {DATABASE_FILE: password})
@@ -651,7 +664,7 @@ def sync(
     # 6. prune. 대상 = (managed.json의 이전 목록 ∪ 현재·검증된 이전 프로젝트 객체) − 이번 목록 − 수동 보존
     snap = fetch_snapshot(client)
     candidates = _union(previous, discover_project_objects(snap, project.name, include_database=False))
-    candidates, skipped = _collect_previous_candidates(
+    candidates, skipped, retry_projects = _collect_previous_candidates(
         client, snap, prev_projects, _db_target_from_env(os.environ), candidates, log=log
     )
     prune_plan = plan_prune(snap, current, candidates, current_project=project.name)
@@ -665,8 +678,11 @@ def sync(
             f"필요하면 `python -m dashkit prune-project <이름> --dry-run`으로 확인하세요"
         )
 
-    # 7. managed.json (prune에 실패한 객체는 남겨 다음 실행에서 다시 시도. 수동 보존 항목은 남기지 않는다)
-    _write_json_atomic(managed_path, _managed_doc(project, _union(current, leftovers)))
+    # 7. managed.json (prune 실패 객체와 일시적 DB 연결 조회 실패 이전 프로젝트는 남겨 다음 실행에서 재시도)
+    _write_json_atomic(
+        managed_path,
+        _managed_doc(project, _union(current, leftovers), pending_projects=retry_projects),
+    )
     if failed:
         raise SyncError("import·임베드는 끝났지만 prune 일부 실패(다시 실행하면 재시도):\n  " + "\n  ".join(failed))
     return current
