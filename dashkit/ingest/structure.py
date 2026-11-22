@@ -599,7 +599,7 @@ def plan_files(project: config.Project, op_list: list[Mapping[str, Any]],
         out[file] = (before, text.encode("utf-8"))
 
     schema_bytes = out[config.SCHEMA_FILE][1] if config.SCHEMA_FILE in out else _read(project.root / config.SCHEMA_FILE)
-    new_schema = config._normalize_schema(yaml.safe_load(schema_bytes.decode("utf-8"))) if schema_bytes else project.schema
+    new_schema = config._normalize_schema(store._dates_to_str(yaml.safe_load(schema_bytes.decode("utf-8")))) if schema_bytes else project.schema
     col_plans, needs_rewrite = _table_evolution_plans(project, list(op_list))
     for tname, rewrite in needs_rewrite.items():
         if not rewrite:
@@ -736,6 +736,14 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
             compactions: list[dict[str, Any]] = []
             if restore is None and op_list:
                 col_plans, needs_rewrite = _table_evolution_plans(project, op_list)
+                need_append_rewrite = any(
+                    rewrite and (project.schema["tables"][tname].get("mode") or "replace") == "append"
+                    for tname, rewrite in needs_rewrite.items()
+                )
+                if need_append_rewrite and session.loaded.data_revision is not None \
+                        and session.loaded.data_revision != data_revision(project.schema, project.dashboard):
+                    raise IngestError(409, "rebuild_required",
+                                      "적용되지 않은 설정 변경이 있어 배치를 합칠 수 없습니다. 먼저 apply한 뒤 실행하세요")
                 for tname, rewrite in needs_rewrite.items():
                     if not rewrite or (project.schema["tables"][tname].get("mode") or "replace") != "append":
                         continue

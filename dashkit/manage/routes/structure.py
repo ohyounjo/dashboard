@@ -101,6 +101,9 @@ def _check_ops(project: config.Project, op_list: Any) -> list[dict[str, Any]]:
                     if s.get("direct") and s.get("dataset") not in removed_datasets \
                             and (graph["datasets"].get(s["dataset"]) or {}).get("kind") == "table":
                         in_use.append(f"섹션 {s['tab']}#{s['index']}")
+                for m in col_info.get("metrics", []):
+                    if m.get("dataset") not in removed_datasets:
+                        in_use.append(f"지표 {m['dataset']}.{m['metric']}")
                 for t, s in project.schema["tables"].items():
                     if t in removed_tables or t == name:
                         continue

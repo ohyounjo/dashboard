@@ -513,12 +513,15 @@ def test_schema_evolution_crash_recovery(root, scratch_db, fault, where, kept):
 
 
 def test_replace_csv_strips_header_whitespace_and_rejects_on_conflict_change_with_rewrite(root, scratch_db):
-    # 1) replace CSV 머리글의 앞뒤 공백을 제거해 기존 열 값을 보존한다
+    # 1) replace CSV 머리글의 앞뒤 공백을 제거해 기존 열 값을 보존하고, 따옴표 없는 날짜 경계(min: 2020-01-01)도 처리한다
     p = root / "ledger/data/groups.csv"
-    p.write_text("id, label \ng1,important\n", encoding="utf-8")
+    p.write_text("id, label \ng1,important\ng2,second\ng3,third\n", encoding="utf-8")
+    schema_p = root / "ledger/schema.yaml"
+    schema_text = schema_p.read_text(encoding="utf-8")
+    schema_p.write_text(schema_text.replace("on_day:   { type: date }", "on_day:   { type: date, min: 2020-01-01 }"), encoding="utf-8")
     load(load_project("ledger", root), dbname=scratch_db)
     change(root, scratch_db, [{"op": "column.rename", "table": "groups", "column": "label", "to": "title"}])
-    assert sorted(rows(scratch_db, "groups")) == [("g1", "important")]
+    assert sorted(rows(scratch_db, "groups")) == [("g1", "important"), ("g2", "second"), ("g3", "third")]
 
     # 2) append 테이블에서 on_conflict 변경과 열 이름 변경·삭제·유형 좁히기를 함께 요청하면 거절한다
     err = pytest.raises(IngestError, change, root, scratch_db, [
@@ -526,3 +529,10 @@ def test_replace_csv_strips_header_whitespace_and_rejects_on_conflict_change_wit
         {"op": "column.rename", "table": "entries", "column": "memo", "to": "details"},
     ]).value
     assert (err.status, err.detail) == (422, "invalid_op")
+
+    # 3) 미적용 데이터 설정 변경(예: Studio에서 on_conflict만 YAML에 저장)이 있으면 배치 합치기를 거절한다
+    schema_p.write_text(schema_p.read_text(encoding="utf-8").replace("on_conflict: update", "on_conflict: skip"), encoding="utf-8")
+    err2 = pytest.raises(IngestError, change, root, scratch_db, [
+        {"op": "column.rename", "table": "entries", "column": "memo", "to": "details"},
+    ]).value
+    assert (err2.status, err2.detail) == (409, "rebuild_required")

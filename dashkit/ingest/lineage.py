@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 from .. import config, widgets
@@ -66,13 +67,18 @@ def column_usage(project: config.Project, lineage: Mapping[str, Any], table: str
 
     out: dict[str, dict[str, Any]] = {}
     for col in table_spec["columns"]:
+        col_pat = re.compile(rf"\b{re.escape(col)}\b")
         col_datasets: list[str] = []
         col_labels: list[str] = []
+        col_metrics: list[dict[str, str]] = []
         for dskey, ds in datasets_cfg.items():
             if ds.get("table") == table:
                 col_datasets.append(dskey)
                 if col in (ds.get("labels") or {}) and col not in (ds.get("metrics") or {}):
                     col_labels.append(dskey)
+                for mkey, mexpr in (ds.get("metrics") or {}).items():
+                    if col_pat.search(str(mexpr)):
+                        col_metrics.append({"dataset": dskey, "metric": mkey})
             else:
                 sources = (lin_datasets.get(dskey) or {}).get("sources")
                 if sources is not None and col in (sources.get(table) or []):
@@ -133,6 +139,7 @@ def column_usage(project: config.Project, lineage: Mapping[str, Any], table: str
             "filters": col_filters,
             "sections": col_sections,
             "labels": col_labels,
+            "metrics": col_metrics,
         }
     return out
 
