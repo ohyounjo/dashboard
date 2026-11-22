@@ -407,6 +407,7 @@ export default {
       rowsRead: (n) => `${Number(n).toLocaleString("ko")}행 읽음`,
       previewOk: "미리보기: 아래와 같이 들어갑니다. 아직 넣지 않았습니다.",
       previewBad: "미리보기: 오류가 있어 넣을 수 없습니다.",
+      largeBatchHint: "넣을 행이 50만 행 이상입니다. 반영하는 동안 다른 쓰기가 기다릴 수 있으며, 나눠 올리면 대기가 짧아집니다.",
       doneTitle: (file) => `넣었습니다${file ? `(배치 ${file})` : ""}.`,
       count: { total: "전체 행", inserted: "새 행", updated: "바뀌는 행", skipped: "건너뛰는 행", unchanged: "같은 행", invalid: "오류 행", rejected: "빼고 넣은 오류 행" },
       normalizedLines: (n) => [

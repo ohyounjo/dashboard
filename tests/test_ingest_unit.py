@@ -282,3 +282,93 @@ def test_config_and_revision_are_read_as_a_pair(tmp_path, monkeypatch):
     project, revision = add.load_stable("ledger", tmp_path)
     assert calls["n"] == 2 and revision == store.revision(tmp_path / "ledger")
     assert project.schema["tables"]["entries"]["columns"]["amount"]["min"] == 5
+
+
+def test_manage_limits_separates_job_lock_wait_ms(monkeypatch):
+    from dashkit.manage import context
+
+    monkeypatch.delenv("MANAGE_LOCK_WAIT_MS", raising=False)
+    monkeypatch.delenv("MANAGE_JOB_LOCK_WAIT_MS", raising=False)
+    lim = context.limits()
+    assert lim.lock_wait_ms == 5000
+    assert lim.job_lock_wait_ms == 600_000
+    assert "lock_wait_ms" not in lim.public() and "job_lock_wait_ms" not in lim.public()
+
+    monkeypatch.setenv("MANAGE_LOCK_WAIT_MS", "1200")
+    monkeypatch.setenv("MANAGE_JOB_LOCK_WAIT_MS", "90000")
+    lim2 = context.limits()
+    assert lim2.lock_wait_ms == 1200
+    assert lim2.job_lock_wait_ms == 90_000
+
+
+def test_locked_calls_on_acquired_only_after_lock(tmp_path, monkeypatch):
+    from dashkit.ingest import ledger, operation, recover
+    from dashkit.project import locks, store
+
+    shutil.copytree(FIXTURES / "ledger", tmp_path / "ledger")
+    project = config.load_project("ledger", tmp_path)
+    rev = store.revision(project.root)
+
+    class DummyConn:
+        def cursor(self):
+            class Cur:
+                def __enter__(self): return self
+                def __exit__(self, *a): pass
+            return Cur()
+        def commit(self): pass
+
+    events = []
+    monkeypatch.setattr(locks, "acquire", lambda _c, _w: events.append("acquire"))
+    monkeypatch.setattr(locks, "release", lambda _c: events.append("release"))
+    monkeypatch.setattr(ledger, "loaded", lambda _cur: ledger.Loaded("ledger", None, None, {}))
+    monkeypatch.setattr(operation, "data_revision", lambda *_a: None)
+    monkeypatch.setattr(recover, "recover", lambda *_a, **_k: [])
+    monkeypatch.setattr(ledger, "read", lambda _cur: {})
+    monkeypatch.setattr(operation, "reconcile", lambda *_a: {})
+
+    with operation.locked(project, DummyConn(), revision=rev, on_acquired=lambda: events.append("acquired")):
+        events.append("body")
+    assert events == ["acquire", "acquired", "body", "release"]
+
+    events.clear()
+    monkeypatch.setattr(locks, "acquire", lambda _c, _w: (_ for _ in ()).throw(locks.LockBusy()))
+    with pytest.raises(operation.IngestError) as exc:
+        with operation.locked(project, DummyConn(), revision=rev, on_acquired=lambda: events.append("acquired")):
+            pass
+    assert exc.value.status == 409 and exc.value.detail == "apply_running"
+    assert events == []
+
+
+def test_change_config_acquires_db_lock_before_project_lock_and_rechecks_revision(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from dashkit import db
+    from dashkit.ingest import structure
+    from dashkit.project import store
+
+    shutil.copytree(FIXTURES / "ledger", tmp_path / "ledger")
+    project = config.load_project("ledger", tmp_path)
+    rev = store.revision(project.root)
+    order = []
+
+    @contextmanager
+    def fake_locked(*_a, **_k):
+        order.append("db_lock")
+        yield type("S", (), {"loaded": type("L", (), {"loaded_at": None})()})()
+
+    @contextmanager
+    def fake_project_lock(_name):
+        order.append("project_lock")
+        yield
+
+    monkeypatch.setattr(structure, "recover_before_read", lambda *_a, **_k: [])
+    monkeypatch.setattr(config, "load_project", lambda *_a, **_k: project)
+    monkeypatch.setattr(db, "owner_conn", lambda *_a, **_k: type("C", (), {"close": lambda self: None})())
+    monkeypatch.setattr(structure, "locked", fake_locked)
+    monkeypatch.setattr(store, "project_lock", fake_project_lock)
+    monkeypatch.setattr(store, "revision", lambda _root: "changed-by-aliases")
+
+    with pytest.raises(structure.IngestError) as exc:
+        structure.change_config("ledger", [{"op": "column.update", "table": "entries", "column": "memo",
+                                            "set": {"description": "x"}}], rev, action="column-update")
+    assert exc.value.status == 409 and exc.value.detail == "stale_config"
+    assert order == ["db_lock", "project_lock"]

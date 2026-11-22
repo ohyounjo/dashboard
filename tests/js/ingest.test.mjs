@@ -1,7 +1,10 @@
 // web/shared/ingest.js의 순수 함수(node --test): 여러 파일 올리기의 파일 ↔ 테이블 짝짓기, 진행률, 머리글 맞춤 저장.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fileStem, pairFiles, mergeFiles, progressRatio, filesForError, aliasesToSave } from "../../web/shared/ingest.js";
+import {
+  fileStem, pairFiles, mergeFiles, progressRatio, filesForError, aliasesToSave,
+  LARGE_BATCH_ROWS, previewInsertRows, isLargeBatchPreview,
+} from "../../web/shared/ingest.js";
 
 const TABLES = ["entries", "events", "line_items", "Marks"];
 
@@ -56,4 +59,19 @@ test("unknown_columns가 가리키는 파일: file이 있으면 그 파일, 없�
 test("aliases로 저장할 맞춤: 버린 것·빈 머리글·같은 이름은 뺀다", () => {
   assert.deepEqual(aliasesToSave({ "상태명": "state", "버릴것": null, "": "memo", " ": "memo", qty: "qty" }), { "상태명": "state" });
   assert.deepEqual(aliasesToSave(null), {});
+});
+
+test("대용량 미리보기 안내 기준(499,999 / 500,000행 경계, 여러 파일 합산, invalid 제외)", () => {
+  assert.equal(LARGE_BATCH_ROWS, 500_000);
+  // 단일 파일 경계
+  assert.equal(isLargeBatchPreview([{ rows: { total: 499_999, invalid: 0 } }]), false);
+  assert.equal(isLargeBatchPreview([{ rows: { total: 500_000, invalid: 0 } }]), true);
+  // invalid 제외 후 넣을 행 수 기준
+  assert.equal(previewInsertRows([{ rows: { total: 500_000, invalid: 1 } }]), 499_999);
+  assert.equal(isLargeBatchPreview([{ rows: { total: 500_000, invalid: 1 } }]), false);
+  assert.equal(isLargeBatchPreview([{ rows: { total: 500_001, invalid: 1 } }]), true);
+  // 여러 파일 합산
+  assert.equal(isLargeBatchPreview([{ rows: { total: 250_000, invalid: 0 } }, { rows: { total: 249_999, invalid: 0 } }]), false);
+  assert.equal(isLargeBatchPreview([{ rows: { total: 250_000, invalid: 0 } }, { rows: { total: 250_000, invalid: 0 } }]), true);
+  assert.equal(isLargeBatchPreview(null), false);
 });

@@ -155,7 +155,7 @@ class Session:
 
 @contextmanager
 def locked(project: Project, conn: psycopg.Connection, *, revision: str | None, check_data_revision: bool = True,
-           wait_ms: int | None = None) -> Iterator[Session]:
+           wait_ms: int | None = None, on_acquired: Callable[[], None] | None = None) -> Iterator[Session]:
     """1~3단계. revision은 접수·검증에 쓴 설정 파일의 revision(store.revision)이다. 다르면 StaleConfig."""
     from ..project import store
 
@@ -164,6 +164,8 @@ def locked(project: Project, conn: psycopg.Connection, *, revision: str | None, 
     except locks.LockBusy:
         raise IngestError(409, "apply_running", "다른 쓰기 작업(적용·적재)이 진행 중입니다. 끝난 뒤 다시 시도하세요") from None
     try:
+        if on_acquired is not None:
+            on_acquired()
         with conn.cursor() as cur:
             now = ledger.loaded(cur)
         if now.project != project.name:

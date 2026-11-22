@@ -80,6 +80,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 
 - **오류 행 빼고 넣기**(`skip_invalid`): 행 단위 검증 오류, 참조 오류, `default`가 없는 필수 열이 빠진 새 행을 빼고 나머지를 넣는다. 배치 파일에는 들어간 행만 쓴다. 결과의 batch에 `skip_invalid`, `rejected`(뺀 행 수)가 있고 작업 결과에 `rejects: true`면 `GET /jobs/{id}/rejects`로 빠진 행을 내려받는다. 키 충돌(`error` 정책), `checks` 위반, 배치 안의 기본 키 중복은 빼고 넣는 대상이 아니라 전체 거절이다.
 - **진행률:** 파일 적재 작업의 `progress`는 읽는 동안 `{"step": "read", "table", "rows", "bytes", "total_bytes"}`(1만 행마다), 잠금을 기다리고 반영하는 동안 `{"step": "lock"}`이다.
+- **대용량 미리보기 안내:** 단일·여러 파일 미리보기(`dry_run`)에서 넣을 행 수 합계(`total - invalid`)가 50만 행(`500,000`) 이상이면 다른 쓰기가 기다릴 수 있으며 나눠 올리면 대기가 짧아진다는 안내를 보인다.
 
 ### 여러 파일 (`POST /batches`)
 
@@ -135,7 +136,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 
 ### 작업
 
-`{"id", "kind": "ingest" | "remove" | "restore" | "config" | "create" | "compact" | "restore_config", "table", "status": "running" | "succeeded" | "failed", "started_at", "finished_at", "actor", "progress": {"step", …}, "log": [줄], "result": {…} | null, "error": {"status", "detail", "message", "errors"?} | null}`. 화면을 떠나도 작업은 끝까지 간다. 작업은 관리 서비스 프로세스의 메모리에 있어(최근 100개) 다시 뜨면 없어진다(404 `unknown_job`). 적재가 어디까지 갔는지는 묶음 기록의 복구가 정하고, 끝난 작업의 요약은 감사 로그에 있다.
+`{"id", "kind": "ingest" | "remove" | "restore" | "config" | "create" | "compact" | "restore_config", "table", "status": "running" | "succeeded" | "failed", "started_at", "finished_at", "actor", "progress": {"step", …}, "log": [줄], "result": {…} | null, "error": {"status", "detail", "message", "errors"?} | null}`. 화면을 떠나도 작업은 끝까지 간다. 모든 202 작업은 쓰기 잠금을 기다리는 동안 `progress.step`으로 `"lock"`을 보고하고, 잠금을 잡은 직후 본 단계(`remove`·`restore`는 `"rebuild"`, `config`·`create`·`compact`·`restore_config`는 `"apply"`, `ingest`는 `"lock"` 유지)로 넘어간다. `MANAGE_JOB_LOCK_WAIT_MS`를 넘기면 `status: "failed"`, `error: {"status": 409, "detail": "apply_running", ...}`로 끝난다. 작업은 관리 서비스 프로세스의 메모리에 있어(최근 100개) 다시 뜨면 없어진다(404 `unknown_job`). 적재가 어디까지 갔는지는 묶음 기록의 복구가 정하고, 끝난 작업의 요약은 감사 로그에 있다.
 
 ## 한도
 
@@ -148,6 +149,7 @@ backend와 같은 규칙이다: `.state/embed.json`의 `project`(마지막으로
 | `INGEST_MAX_REQUEST_MB` | `500` | 여러 파일을 한 번에 올릴 때의 합계 |
 | `INGEST_COMPACT_HINT` | `200` | 이 수를 넘으면 합치기를 권한다 |
 | `MANAGE_STATEMENT_TIMEOUT_MS` | `15000` | 조회 시간 제한 |
-| `MANAGE_LOCK_WAIT_MS` | `5000` | 쓰기 잠금을 기다리는 시간. 넘으면 409 `apply_running` |
+| `MANAGE_LOCK_WAIT_MS` | `5000` | 즉시 응답 요청(직접 입력·붙여넣기, 빠른 취소 후보)이 쓰기 잠금을 기다리는 시간. 넘으면 409 `apply_running` |
+| `MANAGE_JOB_LOCK_WAIT_MS` | `600000` | 202 비동기 작업이 쓰기 잠금을 기다리는 시간. 넘으면 작업이 409 `apply_running`으로 실패 |
 
 `limits.page_max`(200)는 한 번에 돌려주는 행의 최대(고정)다.

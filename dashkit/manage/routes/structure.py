@@ -125,7 +125,7 @@ def _config_job(kind: str, project_name: str, principal: Principal, *, table: st
     limits = context.limits()
 
     def work(ctx) -> dict[str, Any]:
-        ctx.progress("apply")
+        ctx.progress("lock")
         result = run_change(ctx, limits)
         return result
 
@@ -152,7 +152,8 @@ async def patch_config(request: Request, principal: Principal = Depends(require_
 
     def change(ctx, limits) -> dict[str, Any]:
         result = structure.change_config(project.name, op_list, revision, action=_action(op_list), log_line=ctx.log,
-                                         wait_ms=limits.lock_wait_ms)
+                                         wait_ms=limits.job_lock_wait_ms,
+                                         progress=lambda step, info: ctx.progress(step, **dict(info)))
         result["affected"] = affected
         added = [(o["table"], o["column"]) for o in op_list if o["op"] == "column.add"]
         if added and result["changed"]:
@@ -230,7 +231,8 @@ async def post_table(request: Request, principal: Principal = Depends(require_ad
 
     def change(ctx, limits) -> dict[str, Any]:
         result = structure.change_config(project.name, op_list, revision, action="table-create", extra=first,
-                                         log_line=ctx.log, wait_ms=limits.lock_wait_ms)
+                                         log_line=ctx.log, wait_ms=limits.job_lock_wait_ms,
+                                         progress=lambda step, info: ctx.progress(step, **dict(info)))
         result["table"] = name
         result["dataset"] = next((o["key"] for o in op_list if o["op"] == "dataset.add"), None)
         result["dashboard"] = next((o["key"] for o in op_list if o["op"] == "dashboard.add"), None)
@@ -257,7 +259,8 @@ async def post_compact(table: str, request: Request, principal: Principal = Depe
         raise IngestError(409, "not_append", "누적(append) 테이블만 합칩니다")
 
     def change(ctx, limits) -> dict[str, Any]:
-        return compact(project.name, name, wait_ms=limits.lock_wait_ms)
+        return compact(project.name, name, wait_ms=limits.job_lock_wait_ms,
+                       progress=lambda step, info: ctx.progress(step, **dict(info)))
 
     def success(result: Mapping[str, Any]) -> None:
         if result.get("file"):
@@ -290,7 +293,8 @@ async def post_history_restore(hid: str, request: Request, principal: Principal 
     def change(ctx, limits) -> dict[str, Any]:
         # 그 뒤에 다시 바뀐 파일이 있으면 409 stale_config(검사는 작업이 쓰기 잠금을 잡은 뒤에 한다)
         result = structure.change_config(project.name, None, revision, action="restore", restore=hid,
-                                         log_line=ctx.log, wait_ms=limits.lock_wait_ms)
+                                         log_line=ctx.log, wait_ms=limits.job_lock_wait_ms,
+                                         progress=lambda step, info: ctx.progress(step, **dict(info)))
         result["restored"] = hid
         return result
 

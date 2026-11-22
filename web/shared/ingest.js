@@ -58,3 +58,20 @@ export function aliasesToSave(columns) {
   }
   return out;
 }
+
+export const LARGE_BATCH_ROWS = 500_000;
+
+/** 미리보기 결과(batches)에서 실제로 넣을 행 수 합계(total - invalid). */
+export function previewInsertRows(batches) {
+  let sum = 0;
+  for (const b of batches || []) {
+    const rows = (b && b.rows) || {};
+    sum += Math.max(0, (Number(rows.total) || 0) - (Number(rows.invalid) || 0));
+  }
+  return sum;
+}
+
+/** 넣을 행 수 합계가 기준(기본 50만 행) 이상인지. */
+export function isLargeBatchPreview(batches, threshold = LARGE_BATCH_ROWS) {
+  return previewInsertRows(batches) >= threshold;
+}

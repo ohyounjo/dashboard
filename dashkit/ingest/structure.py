@@ -324,7 +324,8 @@ def validate(project_name: str, op_list: list[Mapping[str, Any]],
 def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, revision: str | None, *, action: str,
                   restore: str | None = None, extra: Mapping[str, bytes | None] | None = None,
                   run_sync: bool = True, log_line: Callable[[str], None] | None = None,
-                  dbname: str | None = None, wait_ms: int | None = None) -> dict[str, Any]:
+                  dbname: str | None = None, wait_ms: int | None = None,
+                  progress: Callable[[str, Mapping[str, Any]], None] | None = None) -> dict[str, Any]:
     """구조 변경 한 번(연산, 또는 restore: 설정 이력 id로 되돌리기). revision은 필수다(그 사이 바뀌었으면 409 stale_config).
 
     결과: {"changed": [경로], "history": id, "revision", "counts", "sync": {"ok", "errors"}}
@@ -346,9 +347,14 @@ def change_config(project_name: str, op_list: list[Mapping[str, Any]] | None, re
         raise IngestError(503, "db_unavailable", f"DB 접속 실패: {exc}") from None
     record_path: Path | None = None
     try:
-        # 같은 프로세스의 다른 설정 저장(aliases 저장 등)과도 겹치지 않게 프로젝트 잠금을 함께 잡는다
-        with store.project_lock(project.name), \
-                locked(project, conn, revision=revision, check_data_revision=False, wait_ms=wait_ms) as session:
+        if progress:
+            progress("lock", {})
+        # DB 쓰기 잠금을 먼저 잡은 뒤 프로젝트 잠금에 진입해, 긴 대기 중에도 aliases 저장이 막히지 않게 한다
+        with locked(project, conn, revision=revision, check_data_revision=False, wait_ms=wait_ms,
+                    on_acquired=(lambda: progress("apply", {})) if progress else None) as session, \
+                store.project_lock(project.name):
+            if store.revision(project.root) != revision:
+                raise StaleConfig()
             if restore is not None:
                 # 이력의 해시 검사(지금 내용이 그 작업 바로 뒤의 판인지)를 잠금 안에서 한다
                 files = history_files(project.name, restore)

@@ -200,7 +200,7 @@ def _ingest_job(project_name: str, entries: list[dict[str, Any]], principal: Pri
                  for e in entries]
         result = ingest(project_name, items, dry_run=dry_run, force=force, strict=strict, skip_invalid=skip_invalid,
                         max_rows=limits.max_rows, rejects_dir=rejects_dir,
-                        progress=lambda step, info: ctx.progress(step, **dict(info)), wait_ms=limits.lock_wait_ms)
+                        progress=lambda step, info: ctx.progress(step, **dict(info)), wait_ms=limits.job_lock_wait_ms)
         if dry_run:
             result["upload_id"] = upload_id
         else:
@@ -391,6 +391,22 @@ def _may_change(project: config.Project, table: str, file: str, principal: Princ
         raise IngestError(403, "forbidden", "자기가 더한 배치만 되돌릴 수 있습니다(admin은 모두)")
 
 
+def _is_fast_remove_candidate(project: config.Project, table: str, file: str) -> bool:
+    """잠금 전 읽기 전용 사전 판별: 빠른 길 비후보(이전 배치·수정/건너뜀 포함)는 5초 대기 없이 바로 202 작업으로 넘긴다.
+
+    없는 배치(404)와 합친 배치(409)는 기존 즉시 응답 경로를 타도록 True를 돌려준다.
+    """
+    files = batches.list_batches(project.data_dir, table)[0]
+    if not any(f.name == file for f in files) or batches.is_merged(file):
+        return True
+    if max(files, key=lambda f: f.number or 0).name != file:
+        return False
+    rec = _recorded().get(table, {}).get(file)
+    if rec is not None and (rec.inserted != rec.rows or rec.updated or rec.skipped or rec.unchanged):
+        return False
+    return True
+
+
 @router.delete("/tables/{table}/batches/{file}")
 async def delete_batch(table: str, file: str, request: Request, principal: Principal = Depends(require_operator)):
     project = _project()
@@ -399,6 +415,8 @@ async def delete_batch(table: str, file: str, request: Request, principal: Princ
     limits = context.limits()
 
     def fast() -> dict[str, Any] | None:
+        if not _is_fast_remove_candidate(project, name, file):
+            return None
         try:
             result = remove_batch(project.name, name, file, fast_only=True, wait_ms=limits.lock_wait_ms)
         except NeedsRebuild:
@@ -411,8 +429,9 @@ async def delete_batch(table: str, file: str, request: Request, principal: Princ
         return result
 
     def work(ctx) -> dict[str, Any]:
-        ctx.progress("rebuild")
-        return remove_batch(project.name, name, file, wait_ms=limits.lock_wait_ms)
+        ctx.progress("lock")
+        return remove_batch(project.name, name, file, wait_ms=limits.job_lock_wait_ms,
+                            progress=lambda step, info: ctx.progress(step, **dict(info)))
 
     def done(run) -> None:
         if run.status == "succeeded":
@@ -431,8 +450,9 @@ async def post_restore(table: str, file: str, request: Request, principal: Princ
     limits = context.limits()
 
     def work(ctx) -> dict[str, Any]:
-        ctx.progress("rebuild")
-        return restore_batch(project.name, name, file, wait_ms=limits.lock_wait_ms)
+        ctx.progress("lock")
+        return restore_batch(project.name, name, file, wait_ms=limits.job_lock_wait_ms,
+                             progress=lambda step, info: ctx.progress(step, **dict(info)))
 
     def done(run) -> None:
         if run.status == "succeeded":

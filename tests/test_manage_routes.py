@@ -114,3 +114,58 @@ def test_filter_injection_is_rejected(client):
                  {"sort": [{"column": "1; --"}]}, {"limit": 1000}):
         r = c.post(f"/api/manage/tables/{table}/rows/query", json=body, headers=headers)
         assert r.status == 422 and json.loads(r.body)["detail"] in ("invalid_filter", "invalid_query"), body
+
+
+def test_202_job_waits_with_lock_step_and_fails_409_on_timeout(client, monkeypatch):
+    """선행 쓰기 잠금 중 202 작업은 step: lock으로 대기하고, 한도 초과 시 409 apply_running으로 실패한다."""
+    from dashkit import config, db
+    from dashkit.manage import context
+    from dashkit.project import locks
+
+    c, headers = client
+    project = config.load_project(context.current_project())
+    table = next(iter(project.schema["tables"]))
+    col = next(iter(project.schema["tables"][table]["columns"]))
+    desc = project.schema["tables"][table]["columns"][col].get("description")
+    tinfo = json.loads(c.get(f"/api/manage/tables/{table}", headers=headers).body)
+    ops = [{"op": "column.update", "table": table, "column": col, "set": {"description": desc}}]
+
+    lock_conn = db.owner_conn()
+    try:
+        locks.acquire(lock_conn, 0)
+        # 1) MANAGE_JOB_LOCK_WAIT_MS 초과 시 status: failed, error: 409 apply_running
+        monkeypatch.setenv("MANAGE_JOB_LOCK_WAIT_MS", "200")
+        r = c.request("PATCH", "/api/manage/config", json={"ops": ops, "revision": tinfo["revision"]}, headers=headers)
+        assert r.status == 202, r.body
+        job_id = json.loads(r.body)["job"]["id"]
+        for _ in range(50):
+            state = json.loads(c.get(f"/api/manage/jobs/{job_id}", headers=headers).body)
+            if state["status"] != "running":
+                break
+            time.sleep(0.05)
+        assert state["status"] == "failed", state
+        assert state["error"]["status"] == 409 and state["error"]["detail"] == "apply_running", state
+
+        # 2) 긴 대기 한도 안에서는 step: lock으로 기다렸다가 잠금 해제 후 성공한다
+        monkeypatch.setenv("MANAGE_JOB_LOCK_WAIT_MS", "5000")
+        r = c.request("PATCH", "/api/manage/config", json={"ops": ops, "revision": tinfo["revision"]}, headers=headers)
+        assert r.status == 202, r.body
+        job_id = json.loads(r.body)["job"]["id"]
+        seen_lock = False
+        for _ in range(40):
+            state = json.loads(c.get(f"/api/manage/jobs/{job_id}", headers=headers).body)
+            if state["progress"].get("step") == "lock":
+                seen_lock = True
+                break
+            time.sleep(0.05)
+        assert seen_lock, state
+    finally:
+        locks.release(lock_conn)
+        lock_conn.close()
+
+    for _ in range(100):
+        state = json.loads(c.get(f"/api/manage/jobs/{job_id}", headers=headers).body)
+        if state["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert state["status"] == "succeeded", state
