@@ -25,6 +25,9 @@ def table(chart: Mapping[str, Any]) -> dict:
         p["all_columns"] = list(chart["columns"])
         if order_by:
             p["order_by_cols"] = [_order_by_col(c, d) for c, d in order_by]
+        if chart.get("page_size") is not None:
+            p["server_pagination"] = True
+            p["server_page_length"] = chart["page_size"]
     else:
         p["query_mode"] = "aggregate"
         p["groupby"] = list(chart.get("groupby") or [])

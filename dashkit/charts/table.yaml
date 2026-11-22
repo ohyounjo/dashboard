@@ -8,6 +8,7 @@ fields:
   metrics: { kind: metrics }
   order_by: { kind: order_by }
   row_limit: { kind: int, min: 1, max: 50000 }
+  page_size: { kind: int, min: 1, max: 1000, description: 서버 페이지 나눔 행 수(원본 행 모드 전용) }
   search: { kind: bool, description: 표 위 검색 상자 }
   format: { kind: d3format, emit: false }
 schema:
@@ -16,10 +17,10 @@ schema:
     - required: [columns]
       not: { anyOf: [ { required: [groupby] }, { required: [metrics] } ] }
     - required: [metrics]
-      not: { required: [columns] }
+      not: { anyOf: [ { required: [columns] }, { required: [page_size] } ] }
 notes: >-
   원본 행 모드(`columns`): `columns` → `all_columns`, `order_by: [[c, asc|desc]]` → `order_by_cols: ["[\"c\", true|false]"]`(JSON 문자열, asc=true),
-  `query_mode: "raw"`. 집계 모드(`metrics`): `groupby` → `groupby`(생략 시 `[]`), `metrics` → `metrics`,
+  `page_size` → `server_pagination: true`, `server_page_length: <page_size>`(생략 시 두 파라미터를 쓰지 않음), `query_mode: "raw"`. 집계 모드(`metrics`): `groupby` → `groupby`(생략 시 `[]`), `metrics` → `metrics`,
   `order_by`는 지표면 `timeseries_limit_metric` + `order_desc`(첫 지표 항목만), 열이면 `order_by_cols`, `query_mode: "aggregate"`.
   공통: `row_limit` → `row_limit`, `search` → `include_search`, `table_timestamp_format: "%Y-%m-%d"`.
 # 화면이 같은 열을 하나로 합쳐 보낸다(겹쳐도 오류 아님). 열과 지표 라벨이 겹치면 오류(contracts/superset-notes.md 14절)

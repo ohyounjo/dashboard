@@ -395,6 +395,44 @@ metadata:
 - 격리된 Superset 6.1.0의 실제 guest 임베드에서 390px 기준 기존 iframe 356px의 4열 숫자 카드·3열 차트·2열 표는 각각 약 69·97·154px이었다. 900px iframe에서는 각각 약 205·279·426px이었다. 필터 적용, 내부 탭, 터치·키보드 가로 스크롤 및 390→1280→390 크기 전환 후 필터 값 유지를 확인했다. 증거와 조건은 `reference/issue-54/`에 있다.
 - **필터 막대와 자동 높이:** Superset 6.1.0에서는 열린 필터 막대 때문에 SDK `getScrollSize()` 폴링마다 높이가 늘고, 문서의 기본 높이 때문에 콘텐츠가 짧아져도 높이가 줄지 않을 수 있었다. 번들의 대시보드 `css`는 임베드 문서의 높이를 콘텐츠에 맞추고 필터 패널을 콘텐츠와 iframe 높이 안에 제한하며 내부 스크롤을 허용한다. 임베드 bootstrap, `data-test` DOM 구조와 CSS `:has()` 지원에 의존하므로 Superset 또는 브라우저 지원 범위를 바꿀 때 실제 guest 화면과 필터·고정 높이를 재검증해야 한다. 기존 Superset 객체에는 `make sync`로 새 번들을 반영해야 한다. 390px·1280px의 실제 guest 화면에서 필터 적용과 내부 탭 전환 후 높이 증가·축소, 열린 패널의 높이 안정성을 확인했다. 모든 차트 구성에 대한 높이 동작을 보장하지는 않는다.
 
+## 16. 표 차트 서버 페이지 나눔 실측 (이슈 #47)
+
+- 확인일: 2026-11-22. 방법: 격리 테스트 스택(`dashkit-test-2021435381`, Superset 6.1.0)에 `sales-sample` 사본(`deals` 48행, `zz-pagetest`)을 적용하고, `EmbedGuest` 권한 4개·헤드리스 Chromium으로 웹앱 임베드 화면(`POST /api/v1/chart/data` 요청·응답, DOM 행, iframe 크기)과 Explore 저장 export를 실측했다.
+
+### 16-1. 화면 저장 export 키 대조 및 백엔드 상한
+
+- Explore에서 원본 행 모드 표 차트에 `server_pagination: true`, `server_page_length: 10`을 켜고 Save한 뒤 `GET /api/v1/dashboard/export/`로 내보낸 차트 YAML의 최상위 키 및 `params` 키를 `contracts/superset-6.1.0-export/charts/p_table_6.yaml`과 대조한 결과 **추가 필수 키가 없었다**(최상위·`params` 키 차이 0개).
+- [소스] 백엔드(`superset/common/query_context_factory.py:72-88`, `superset/utils/core.py:2048-2078`, `superset/config.py:1304-1308`): `form_data.server_pagination`이 참이면 `TABLE_VIZ_MAX_ROW_SERVER`(500,000), 거짓이면 `SQL_MAX_ROW`(100,000)를 행 상한으로 적용한다.
+
+### 16-2. 최소 params 번들 · guest 임베드 페이지 이동
+
+- `query_mode: raw`, `all_columns`, `server_pagination: true`, `server_page_length: 10`만 담은 최소 `params` 번들로 `EmbedGuest` 임베드 화면에서 200 응답과 렌더링이 정상 동작했다.
+- **초기 로드:** `POST /api/v1/chart/data` 1요청에 `queries` 2개가 전송된다.
+  - `queries[0]`: `row_limit: 10, row_offset: 0` → 10행(`DL-0001`~`DL-0010`).
+  - `queries[1]`: `is_rowcount: true, row_limit: 10000, row_offset: 0` → `[{'rowcount': 48}]`.
+- **페이지 이동(1→2→3→4→5):** 페이지 번호 클릭 시마다 `row_offset`이 `10, 20, 30, 40`으로 증가하며 재조회됐고(5페이지는 8행 `DL-0041`~`DL-0048`), 5개 페이지 합계 48행·고유 48행으로 중복·누락이 없었다.
+- **페이지 크기 변경 UI:** 차트 안 페이지 크기 선택(`#pageSizeSelect`, 선택지 `['10', '20']`)에서 `20` 선택 시 `row_limit: 20, row_offset: 0`으로 재조회되어 20행이 표시됐다.
+
+### 16-3. `row_limit`과 `page_size` 상호작용 (`page_size <= row_limit` 검증 근거)
+
+| 조건 | `queries[0]` (페이지 데이터) | `queries[1]` (`is_rowcount`) | 화면 표시 |
+|---|---|---|---|
+| `row_limit` 생략 (`page_size: 10`) | `row_limit: 10, row_offset: 0` | `row_limit: 10000` → `rowcount: 48` | 5페이지, 각 10·10·10·10·8행 정상 |
+| `row_limit: 25 > page_size: 10` | `row_limit: 10, row_offset: 0/10/20` | `row_limit: 25` → `rowcount: 25` | 3페이지로 표시되나 3페이지(`offset=20`)에서 10행(`DL-0021`~`DL-0030`)이 조회돼 25행을 넘겨 표시 |
+| `row_limit: 5 < page_size: 10` | `row_limit: 10, row_offset: 0` | `row_limit: 5` → `rowcount: 5` | 페이지 나눔 막대는 사라지지만 1페이지에 **10행이 그대로 표시**되는 모순 발생 |
+
+- **결정:** `row_limit < page_size`는 총 행 수(`is_rowcount`)와 실제 페이지 표시 행 수(`server_page_length`)가 모순되므로 `dashkit/config.py`에서 `page_size > row_limit`을 설정 오류로 거부한다.
+
+### 16-4. 정렬 · 검색 · 필터 연계
+
+- **정렬:** 초기 `order_by_cols`가 `queries[0].orderby`에 반영된다. 열 머리글 클릭 시 `orderby: [['amount_krw', False]]`, `row_offset: 0`으로 서버 재조회가 일어난다.
+- **검색(`include_search: true`):** 문자열 열 선택 드롭다운(`['deal_code', 'deal_label', 'region']`)과 검색 입력창이 함께 표시되며, 검색어 입력 시 `queries[0].filters`에 `{'col': 'deal_code', 'op': 'ILIKE', 'val': 'DL-001%'}` 서버 필터가 전송되고 `is_rowcount`가 `10`으로 갱신됐다.
+- **네이티브 필터(`select` · `time_range`):** 2페이지(`DL-0011`~) 상태에서 `select` 필터(`region = '경기'`) 적용 시 `row_offset: 0`(1페이지 복귀)으로 재조회되고 `is_rowcount`가 `7`로 갱신됐다. 반면 `time_range` 필터(`Last week`, `filters` 배열이 아닌 `time_range`로 전달) 적용 시에는 `is_rowcount`가 `0`으로 갱신됐으나 첫 재조회 요청이 `row_offset: 10`을 유지했다(6.1.0 `plugin-chart-table`이 `filters` 변경 시에만 `currentPage`를 0으로 초기화하는 동작).
+
+### 16-5. 임베드 레이아웃 안정성
+
+- `1280x900`(iframe 폭 `1158px`)과 `390x844`(iframe 최소 폭 `900px`) 모두에서 페이지 나눔 막대가 정상 표시됐고, `getScrollSize()` 기반 iframe 높이가 `1504px`로 2초 대기 후에도 변동 없이 안정 유지됐다.
+
 ## 16. 상태 파일 없는 프로젝트 전환 prune 실측 (이슈 #52)
 
 - 확인일: 2026-11-22. 환경: 격리 테스트 스택(`dashkit-test-<식별자>`, `origin/main` `fec2406`, Superset 6.1.0).

@@ -348,3 +348,37 @@ def test_resolve_as_of(tmp_path):
         d["app"]["as_of"] = "today"
     p2 = load_project("basic", make_project(tmp_path / "x", mutate_dash=m))
     assert config.resolve_as_of(p2, today=date(2030, 5, 1)) == date(2030, 5, 1)
+
+
+@pytest.mark.parametrize("extra", [
+    {"page_size": 1},
+    {"page_size": 1000},
+    {"page_size": 10, "row_limit": 10},
+    {"page_size": 10, "row_limit": 25},
+])
+def test_table_page_size_valid(tmp_path, extra):
+    def m(d):
+        d["dashboards"]["main"]["charts"][2].pop("row_limit", None)
+        d["dashboards"]["main"]["charts"][2].update(extra)
+    load_project("basic", make_project(tmp_path, mutate_dash=m))
+
+
+@pytest.mark.parametrize("bad_spec", [
+    {"viz": "table", "groupby": ["phase"], "metrics": ["total_score"], "page_size": 10},
+    {"viz": "table", "columns": ["id"], "page_size": 0},
+    {"viz": "table", "columns": ["id"], "page_size": -1},
+    {"viz": "table", "columns": ["id"], "page_size": 1001},
+    {"viz": "table", "columns": ["id"], "page_size": 1.5},
+    {"viz": "table", "columns": ["id"], "page_size": "10"},
+    {"viz": "table", "columns": ["id"], "page_size": True},
+])
+def test_table_page_size_rejected(tmp_path, bad_spec):
+    errs = errors_of(tmp_path, mutate_dash=_replace_line_chart(bad_spec))
+    assert errs
+
+
+def test_table_page_size_exceeds_row_limit_rejected(tmp_path):
+    def m(d):
+        d["dashboards"]["main"]["charts"][2].update({"page_size": 20, "row_limit": 10})
+    errs = errors_of(tmp_path, mutate_dash=m)
+    assert any("charts[2].page_size" in e and "row_limit" in e for e in errs), errs

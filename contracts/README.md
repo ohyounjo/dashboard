@@ -71,6 +71,7 @@
 | 차트 `key` | 프로젝트 전체에서 유일 |
 | 차트 `dataset` | `datasets`에 있음 (**없는 데이터셋 참조**) |
 | 차트 지표 문자열 | 그 데이터셋의 `metrics`에 있음(레지스트리의 `kind`가 `metric`·`metrics`인 필드) |
+| 차트 `page_size`·`row_limit` | 함께 쓰면 `page_size ≤ row_limit`([superset-notes.md](superset-notes.md) 16-3절) |
 | 차트의 열·지표 라벨 (**중복 라벨**) | 같은 쿼리에서 서로 다른 지표가 화면에 의해 제거되거나, 남은 열·지표의 서버 라벨이 겹치면 오류. 최종 `params`와 `viz_type`, 쿼리 경계 및 실제 YAML 경로를 반영한다. 지원 유형·모드와 미지원 원본 구성은 [chart-shorthand.md](chart-shorthand.md) "중복 라벨 검사", 실측은 [superset-notes.md](superset-notes.md) 14절 |
 | `layout` 항목 | 차트 항목은 같은 대시보드 `charts`에 있음 (**배치에 없는 차트 키**). 모든 차트가 대시보드 안 탭(`tabs[].rows`)을 포함해 정확히 한 번 배치됨. 행(탭 안 행 포함)의 지정 너비 합 ≤ 12, 너비 없는 항목(차트·글) 수 ≤ 남은 칸. 제목(`header`)은 한 행에 혼자. 제목·글 항목의 형식(빈 글 금지, 허용 필드)은 스키마가 본다 |
 | `filters[].key` | 대시보드 안에서 유일 |
