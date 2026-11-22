@@ -364,6 +364,58 @@ def test_export_api_streaming_limits_sensitive_and_audit(clients, monkeypatch):
     assert seen_key_cols[-1] is None
     assert json.loads(r_pk.body)["rows"] == [{"secret_id": "***", "note": "ok"}]
 
+    # 모든 열이 sensitive: true인 테이블의 조회도 상수 SELECT로 정상 동작한다
+    all_sec_schema = {
+        "tables": {
+            "all_sec_tbl": {
+                "primary_key": ["s1"],
+                "columns": {"s1": {"type": "text", "sensitive": True}, "s2": {"type": "text", "sensitive": True}},
+            }
+        }
+    }
+    monkeypatch.setattr(rows_mod, "_project", lambda: SimpleNamespace(name="p", schema=all_sec_schema))
+
+    class AllSecCur:
+        def __init__(self):
+            self.sql = ""
+
+        def execute(self, stmt, _params=None):
+            self.sql = stmt.as_string(None) if hasattr(stmt, "as_string") else str(stmt)
+
+        def fetchall(self):
+            return [(1,), (1,), (1,)]
+
+    all_sec_cur = AllSecCur()
+    monkeypatch.setattr(rows_mod, "_run", lambda work: work(all_sec_cur))
+    r_all_sec = admin_c.post("/api/manage/tables/all_sec_tbl/rows/query", json={"limit": 2}, headers=admin_h)
+    assert r_all_sec.status == 200
+    body_all_sec = json.loads(r_all_sec.body)
+    assert "s1" not in all_sec_cur.sql and "s2" not in all_sec_cur.sql
+    assert body_all_sec["rows"] == [{"s1": "***", "s2": "***"}, {"s1": "***", "s2": "***"}]
+    assert body_all_sec["next_cursor"] is not None
+
+    # 데이터셋 행 조회(/datasets/{d}/rows/query)에서도 민감 열 마스킹 및 필터/정렬 거절 검증
+    ds_project = SimpleNamespace(
+        name="p",
+        schema=fake_schema,
+        dashboard={"datasets": {"secret_ds": {"table": "secret_tbl"}}},
+    )
+    monkeypatch.setattr(rows_mod, "_project", lambda: ds_project)
+    monkeypatch.setattr(rows_mod, "_dataset", lambda _p, k: k)
+    monkeypatch.setattr(rows_mod, "_view_columns", lambda _cur, _k: [rows_mod.paging.Column("id", "text"), rows_mod.paging.Column("secret", "text")])
+    monkeypatch.setattr(rows_mod.ledger, "loaded", lambda _cur: SimpleNamespace(loaded_at=datetime.now(timezone.utc), snapshot={}))
+    monkeypatch.setattr(rows_mod.ledger, "read", lambda _cur: {})
+    monkeypatch.setattr(rows_mod.lineage, "build", lambda _p, _s: {"datasets": {"secret_ds": {"sources": ["secret_tbl"]}}})
+    assert admin_c.post(
+        "/api/manage/datasets/secret_ds/rows/query",
+        json={"filters": [{"column": "secret", "op": "eq", "value": "x"}]},
+        headers=admin_h,
+    ).status == 422
+    monkeypatch.setattr(rows_mod.paging, "fetch_page", spy_fetch_page)
+    r_ds = admin_c.post("/api/manage/datasets/secret_ds/rows/query", json={"limit": 5}, headers=admin_h)
+    assert r_ds.status == 200
+    assert json.loads(r_ds.body)["rows"] == [{"secret": "***"}]
+
 
 def test_freshness_api_app_and_manage_tables(clients, monkeypatch):
     from dashkit import db
