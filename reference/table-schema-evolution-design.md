@@ -79,10 +79,17 @@ JSON Schema 통과 후 `_check_schema_refs`에서 다음을 검사한다(오류 
   - `_rebuild()`에서 `CREATE TABLE` 직후가 아니라 **해당 테이블의 모든 데이터(`replace` CSV `COPY` 또는 `append` 배치들의 `apply_batch` 루프)를 적재한 직후**에 `CREATE INDEX`를 실행한다. 대량 행 적재 후 B-tree를 한 번에 빌드하는 편이 행마다 색인을 갱신하는 것보다 빠르고 조각화가 적다.
   - 이후 추가 적재(`dashkit/ingest/apply.py`의 온라인 `ingest`)에서는 PostgreSQL이 테이블에 이미 만들어진 색인을 자동으로 유지한다.
   - 빈 DB에 최초 `load`할 때와 `rebuild_locked`(구조 변경, 배치 되돌리기·되살리기, 재적재)로 재생성할 때 모두 같은 `_rebuild()`를 타므로 **언제나 동일한 색인 집합**이 만들어진다.
-- **결정적(deterministic) 색인 이름:**
-  - PostgreSQL 식별자 길이 한도(63바이트)를 절대 넘지 않도록 `_index_name(tname: str, i: int, cols: Sequence[str]) -> str`로 이름을 만든다.
-  - 기본 형식: `ix_{tname}_{i}_{"_".join(cols)}` (`i`는 `schema.yaml`의 `indexes` 0-기반 번호).
-  - 길이가 63자를 넘으면 앞부분을 자르고 `hashlib.sha1(f"{tname}:{i}:{','.join(cols)}".encode()).hexdigest()[:8]`을 붙여 `f"{prefix[:54]}_{digest}"`(63자 이하)로 결정적 유일성을 보장한다.
+- **결정적(deterministic)이고 충돌 없는 색인 이름:**
+  - PostgreSQL에서 색인 이름은 스키마(`raw`) 전역 이름 공간을 공유하므로, 테이블 이름·색인 번호·열 이름을 단순 `_`로만 이어 붙이면 서로 다른 테이블·열 조합(예: 테이블 `a`의 첫 색인 `[b_0_c]` vs 테이블 `a_0_b`의 첫 색인 `[c]`, 또는 테이블 `t`의 복합 색인 `[a_b, c]` vs `[a, b_c]`)이 같은 이름을 만들 수 있다.
+  - 이를 원천적으로 막고 PostgreSQL 식별자 길이 한도(63바이트)를 절대 넘지 않도록 `_index_name(tname: str, i: int, cols: Sequence[str]) -> str`은 **길이와 무관하게 항상 모호하지 않게 직렬화한 `(테이블, 번호, 열 배열)`의 해시 접미사**를 포함한다:
+    ```python
+    def _index_name(tname: str, index_no: int, cols: Sequence[str]) -> str:
+        payload = json.dumps([tname, index_no, list(cols)], separators=(",", ":"))
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
+        prefix = f"ix_{tname}_{index_no}_{'_'.join(cols)}"[:54].rstrip("_")
+        return f"{prefix}_{digest}"
+    ```
+  - `tname`과 `cols`는 `^[a-z][a-z0-9_]{0,62}$`(ASCII 소문자·숫자·`_`)이므로 `len(f"{prefix}_{digest}") <= 63`바이트가 항상 보장되며, 짧은 이름끼리의 구분자 모호성 충돌과 긴 이름 절단 충돌을 동시에 방지한다.
 - **생성 SQL (`_create_index_sql`):**
   ```python
   def _create_index_sql(tname: str, index_no: int, cols: Sequence[str]) -> sql.Composed:
@@ -372,7 +379,7 @@ JSON Schema 통과 후 `_check_schema_refs`에서 다음을 검사한다(오류 
 | 구분 | 테스트 파일 | 검증 시나리오 |
 |---|---|---|
 | **설정·검증 (단위)** | `tests/test_config.py` | - 단일 열 색인 `[[state]]`, 복합 색인 `[[state, seen_on]]` 정상 로드 및 정규화<br>- 빈 배열 `[]`, 숫자·문자열 등 잘못된 형식 JSON Schema 거부<br>- 존재하지 않는 열 `[[nope]]` → `열 'nope'가 columns에 없음`<br>- 한 색인 내 중복 열 `[[state, state]]` 거부<br>- `primary_key`와 동일한 색인(`[[id]]` 또는 복합 PK와 동일 순서) 거부<br>- 중복 색인 선언(`[[state], [state]]`) 거부, 열 순서가 다른 `[[a, b], [b, a]]`는 허용<br>- `table.add` / `table.update` 연산으로 `indexes` 추가·수정·삭제(`ops.py`)<br>- `indexes` 변경 시 `record.data_revision` 및 `table_rules_hash` 변경 확인 |
-| **로더·재생성·권한 (통합)** | `tests/test_loader.py`, `tests/test_ingest_db.py` | - 빈 DB에 `load()` 실행 시 `pg_indexes`(`schemaname = 'raw'`)에 선언된 단일·복합 색인이 정확한 열 순서로 생성됨<br>- `rebuild_locked()` 및 재적재(`load()`) 후에도 동일한 색인 이름·정의가 유지됨<br>- 색인 유무와 관계없이 행 조회(`paging.fetch_page`), `/api/data`, `checks` 결과가 100% 동일함<br>- 63자를 넘는 긴 테이블·열 이름 조합에서도 색인 이름이 63자 이하로 결정적으로 생성됨<br>- 읽기 경로(`dash_inspect`, `dash_reader`)에서 조회·정렬·필터 실행 시 새 색인이 자동 생성되지 않고 `dash_owner`가 열리지 않음(`test_read_paths_never_open_the_owner_account`)<br>- 대표 필터·정렬 쿼리에 대해 `EXPLAIN (FORMAT JSON)`에서 선언한 색인(`Index Scan` / `Bitmap Index Scan`)이 사용 가능한 구조인지 확인 및 기존 `apply` 회귀 통과 |
+| **로더·재생성·권한 (통합)** | `tests/test_loader.py`, `tests/test_ingest_db.py` | - 빈 DB에 `load()` 실행 시 `pg_indexes`(`schemaname = 'raw'`)에 선언된 단일·복합 색인이 정확한 열 순서로 생성됨<br>- `rebuild_locked()` 및 재적재(`load()`) 후에도 동일한 색인 이름·정의가 유지됨<br>- 색인 유무와 관계없이 행 조회(`paging.fetch_page`), `/api/data`, `checks` 결과가 100% 동일함<br>- 짧은 이름 사이의 구분자 모호성 조합(예: 테이블 `a`의 `[b_0_c]`와 테이블 `a_0_b`의 `[c]`, 복합 색인 `[a_b, c]`와 `[a, b_c]`) 및 63자를 넘는 긴 테이블·열 이름 조합에서도 색인 이름이 충돌 없이 63자 이하로 결정적으로 생성됨<br>- 읽기 경로(`dash_inspect`, `dash_reader`)에서 조회·정렬·필터 실행 시 새 색인이 자동 생성되지 않고 `dash_owner`가 열리지 않음(`test_read_paths_never_open_the_owner_account`)<br>- 대표 필터·정렬 쿼리에 대해 `EXPLAIN (FORMAT JSON)`에서 선언한 색인(`Index Scan` / `Bitmap Index Scan`)이 사용 가능한 구조인지 확인 및 기존 `apply` 회귀 통과 |
 
 ### 5-2. 이슈 #43 (열 이름 변경·삭제·유형 좁히기) 검증
 
