@@ -19,7 +19,7 @@ ohyounjo/dashboard의 이슈 #34(`[4+] 장시간 작업의 잠금 대기와 대�
    - `dashkit/manage/context.py`: `Limits`에 `job_lock_wait_ms` 추가.
    - `dashkit/manage/routes/tables.py`·`structure.py`: 모든 202 작업(`ingest`, `remove`, `restore`, `config`, `create`, `compact`, `restore_config`)에 `limits.job_lock_wait_ms` 전달. 즉시 응답(JSON `rows` 직접 입력·붙여넣기, 빠른 취소 `fast_only=True`)은 `limits.lock_wait_ms` 유지.
    - `delete_batch`: 잠금 전 폴더 목록과 `dash_inspect`(`_recorded()`) 기반 사전 판별로 빠른 길 비후보(이전 배치 또는 `inserted != rows` / `updated`·`skipped`·`unchanged > 0`)는 `fast_only` 5초 대기 없이 바로 202 `remove` 작업으로 진입하게 한다(없는 배치 404·합친 배치 409 즉시 응답은 유지).
-   - `dashkit/ingest/structure.py` `change_config`: `locked(..., wait_ms=wait_ms)` 확보 후 `store.project_lock(project.name)`에 진입하도록 잠금 순서를 정리한다.
+   - `dashkit/ingest/structure.py` `change_config`: `locked(..., wait_ms=wait_ms)` 확보 후 `store.project_lock(project.name)`에 진입하도록 잠금 순서를 정리하되, `store.project_lock`을 획득한 직후 파일을 읽거나 변경하기 전에 `store.revision(project.root) != revision`을 다시 검사해 어긋나면 409 `stale_config`로 거절한다.
 2. 대기 중 진행 단계 `lock` 통일:
    - `dashkit/ingest/operation.py` `locked()`에 `on_acquired` 콜백을 추가하고, `remove_batch`, `restore_batch`, `compact`, `change_config`에 `progress` 콜백을 연결한다.
    - 모든 202 작업이 잠금 대기 중 `{"step": "lock"}`("다른 쓰기가 끝나기를 기다리는 중…")을 보고하고, 잠금 획득 직후 본 작업 단계(`remove`·`restore`는 `"rebuild"`, `config`·`create`·`compact`·`restore_config`는 `"apply"`, `ingest`는 기존 계약대로 `"lock"` 유지)로 전이한다.

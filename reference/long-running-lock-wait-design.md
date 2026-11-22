@@ -65,6 +65,7 @@
 
 - `POST /tables/{t}/aliases`는 `store.project_lock`만 사용하고 DB 쓰기 잠금을 잡지 않으므로 잠금 순서 역전에 따른 교착 위험이 없다.
 - 구조 변경 작업이 DB 쓰기 잠금을 최대 10분 기다리는 동안에도 `aliases` 저장이 불필요하게 차단되지 않는다.
+- `locked()`의 `revision` 검사는 `store.project_lock` 밖에서 실행되므로, `post_aliases`가 프로젝트 잠금을 보유한 채 `schema.yaml`을 갱신하는 경쟁을 막기 위해 **`store.project_lock(project.name)`을 획득한 직후(파일을 읽거나 `plan_files`·`history_files`를 실행하기 전) `store.revision(project.root) != revision`을 다시 검사해 어긋나면 `StaleConfig`(409 `stale_config`)로 거절**한다.
 
 ### 2. 진행 단계(`step: "lock"`)와 한도 초과 409 처리
 
@@ -112,7 +113,7 @@
 1. **백엔드 설정·잠금·라우트**
    - `dashkit/manage/context.py`: `Limits.job_lock_wait_ms` 추가 (`MANAGE_JOB_LOCK_WAIT_MS`, 기본 `600000`).
    - `dashkit/ingest/operation.py`: `locked()`에 `on_acquired` 콜백 지원.
-   - `dashkit/ingest/remove.py`, `dashkit/ingest/compact.py`, `dashkit/ingest/structure.py`: `progress` 콜백 수용, 잠금 대기 전 `"lock"` 및 획득 직후 본 단계(`"rebuild"`/`"apply"`) 보고, `change_config`의 `locked()` → `store.project_lock` 순서 조정.
+   - `dashkit/ingest/remove.py`, `dashkit/ingest/compact.py`, `dashkit/ingest/structure.py`: `progress` 콜백 수용, 잠금 대기 전 `"lock"` 및 획득 직후 본 단계(`"rebuild"`/`"apply"`) 보고, `change_config`의 `locked()` → `store.project_lock` 순서 조정 및 프로젝트 잠금 획득 직후 `revision` 재검사 추가.
    - `dashkit/manage/routes/tables.py`: `_ingest_job`, `delete_batch`(rebuild 경로 + 읽기 전용 빠른 길 사전 판별), `post_restore`에 `limits.job_lock_wait_ms` 및 `progress` 연결. `rows` 즉시 입력과 `fast_only=True`는 `limits.lock_wait_ms` 유지.
    - `dashkit/manage/routes/structure.py`: `_config_job`의 `change_config`·`compact`에 `limits.job_lock_wait_ms` 및 `progress` 연결, 초기 단계를 `"lock"`으로 변경.
 2. **프런트엔드**
