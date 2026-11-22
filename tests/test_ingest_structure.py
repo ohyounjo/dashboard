@@ -523,12 +523,17 @@ def test_replace_csv_strips_header_whitespace_and_rejects_on_conflict_change_wit
     change(root, scratch_db, [{"op": "column.rename", "table": "groups", "column": "label", "to": "title"}])
     assert sorted(rows(scratch_db, "groups")) == [("g1", "important"), ("g2", "second"), ("g3", "third")]
 
-    # 2) append 테이블에서 on_conflict 변경과 열 이름 변경·삭제·유형 좁히기를 함께 요청하면 거절한다
+    # 2) append 테이블에서 on_conflict·default 변경과 열 이름 변경·삭제·유형 좁히기를 함께 요청하면 거절한다
     err = pytest.raises(IngestError, change, root, scratch_db, [
         {"op": "table.update", "table": "entries", "set": {"on_conflict": "skip"}},
         {"op": "column.rename", "table": "entries", "column": "memo", "to": "details"},
     ]).value
     assert (err.status, err.detail) == (422, "invalid_op")
+    err_def = pytest.raises(IngestError, change, root, scratch_db, [
+        {"op": "column.update", "table": "entries", "column": "qty", "set": {"default": 9}},
+        {"op": "column.rename", "table": "entries", "column": "memo", "to": "details"},
+    ]).value
+    assert (err_def.status, err_def.detail) == (422, "invalid_op")
 
     # 3) 미적용 데이터 설정 변경(예: Studio에서 on_conflict만 YAML에 저장)이 있으면 배치 합치기를 거절한다
     schema_p.write_text(schema_p.read_text(encoding="utf-8").replace("on_conflict: update", "on_conflict: skip"), encoding="utf-8")

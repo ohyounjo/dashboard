@@ -647,10 +647,10 @@ def _staged(project: config.Project, changes: Mapping[str, tuple[bytes | None, b
 
 def check_conflict_policy_with_rewrite(project: config.Project, new_project: config.Project,
                                        op_list: list[Mapping[str, Any]] | None) -> None:
-    """append 테이블의 충돌 정책(on_conflict) 변경과 배치 재작성(열 이름 변경·삭제·유형 좁히기)은 함께 실행하지 않는다."""
+    """append 테이블의 충돌 정책(on_conflict)·기존 열 기본값(default) 변경과 배치 재작성은 함께 실행하지 않는다."""
     if not op_list:
         return
-    _col_plans, needs_rewrite = _table_evolution_plans(project, op_list)
+    col_plans, needs_rewrite = _table_evolution_plans(project, op_list)
     for tname, rewrite in needs_rewrite.items():
         if not rewrite:
             continue
@@ -661,6 +661,14 @@ def check_conflict_policy_with_rewrite(project: config.Project, new_project: con
         if (old_t.get("on_conflict") or "error") != (new_t.get("on_conflict") or "error"):
             raise IngestError(422, "invalid_op",
                               f"충돌 정책(on_conflict) 변경과 배치 재작성은 함께 실행할 수 없습니다({tname}). 먼저 충돌 정책을 적용한 뒤 실행하세요")
+        for entry in col_plans[tname]:
+            if entry["is_new"]:
+                continue
+            old_col = old_t["columns"].get(entry["source"]) or {}
+            new_col = new_t["columns"].get(entry["name"]) or {}
+            if old_col.get("default") != new_col.get("default"):
+                raise IngestError(422, "invalid_op",
+                                  f"기존 열의 기본값(default) 변경과 배치 재작성은 함께 실행할 수 없습니다({tname}). 먼저 기본값 변경을 적용한 뒤 실행하세요")
 
 
 def validate(project_name: str, op_list: list[Mapping[str, Any]],
