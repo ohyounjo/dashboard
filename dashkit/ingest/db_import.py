@@ -70,10 +70,12 @@ class CursorParser(Parser):
     encoding = "db"
     delimiter = None
 
-    def __init__(self, cursor: Any, name: str = "db", *, itersize: int = DEFAULT_ITERSIZE):
+    def __init__(self, cursor: Any, name: str = "db", *, itersize: int = DEFAULT_ITERSIZE,
+                 owns_cursor: bool = False):
         self._cursor = cursor
         self.name = name
         self._itersize = max(int(itersize), 1)
+        self._owns_cursor = owns_cursor
         self._header: list[str] | None = None
         self._prefetched: list[Any] | None = None
 
@@ -153,6 +155,14 @@ class CursorParser(Parser):
 
     def where(self, at: int, column: str) -> str:
         return f"{self.name}:{at}:{column}"
+
+    def close(self) -> None:
+        if self._owns_cursor and self._cursor is not None and hasattr(self._cursor, "close"):
+            try:
+                self._cursor.close()
+            except Exception:
+                pass
+            self._cursor = None
 
 
 def validate_dsn_env(env_name: str) -> str:
@@ -366,27 +376,54 @@ def ingest_from_db(
             _audit_db(project_name, table, label, detail_code="db_unavailable")
         raise IngestError(503, "db_unavailable", msg) from None
 
+    active_cursors: list[Any] = []
     try:
         try:
             ext_conn.read_only = True
             with ext_conn.cursor() as cfg_cur:
                 cfg_cur.execute("SELECT set_config('default_transaction_read_only', 'on', false)")
                 cfg_cur.execute("SELECT set_config('statement_timeout', %s, false)", (str(timeout_ms),))
-            cur_name = f"dashkit_src_{secrets.token_hex(4)}"
-            with ext_conn.cursor(name=cur_name) as cur:
-                cur.itersize = max(int(itersize), 1)
-                cur.execute(stmt)
-                item = Item(table, {"kind": "cursor", "cursor": cur, "name": label, "itersize": cur.itersize}, columns=columns)
-                result = ingest(
-                    project_name,
-                    [item],
-                    dry_run=dry_run,
-                    force=force,
-                    skip_invalid=skip_invalid,
-                    projects_dir=projects_dir,
-                    dbname=dbname,
-                    wait_ms=wait_ms,
-                )
+            ext_conn.commit()
+            batch_size = max(int(itersize), 1)
+
+            def _open_cursor() -> Any:
+                # 이전 시도의 서버사이드 커서가 남아 있으면 정리하고 읽기 전용 트랜잭션을 새로 시작한다
+                while active_cursors:
+                    prev = active_cursors.pop()
+                    try:
+                        prev.close()
+                    except Exception:
+                        pass
+                try:
+                    ext_conn.rollback()
+                except Exception:
+                    pass
+                cur_name = f"dashkit_src_{secrets.token_hex(4)}"
+                cur = ext_conn.cursor(name=cur_name)
+                cur.itersize = batch_size
+                try:
+                    cur.execute(stmt)
+                except Exception:
+                    try:
+                        cur.close()
+                    except Exception:
+                        pass
+                    raise
+                active_cursors.append(cur)
+                return cur
+
+            item = Item(table, {"kind": "cursor", "cursor_factory": _open_cursor, "name": label, "itersize": batch_size},
+                        columns=columns)
+            result = ingest(
+                project_name,
+                [item],
+                dry_run=dry_run,
+                force=force,
+                skip_invalid=skip_invalid,
+                projects_dir=projects_dir,
+                dbname=dbname,
+                wait_ms=wait_ms,
+            )
         except IngestError as exc:
             if not dry_run:
                 _audit_db(project_name, table, label, detail_code=exc.detail)
@@ -400,6 +437,12 @@ def ingest_from_db(
                 _audit_db(project_name, table, label, detail_code="invalid_query")
             raise IngestError(422, "invalid_query", f"원본 DB 쿼리 오류: {sanitize_db_error(exc, dsn)}") from None
     finally:
+        while active_cursors:
+            prev = active_cursors.pop()
+            try:
+                prev.close()
+            except Exception:
+                pass
         if ext_conn is not None:
             try:
                 ext_conn.close()

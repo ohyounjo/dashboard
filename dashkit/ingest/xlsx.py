@@ -22,6 +22,7 @@ from .intake import MAX_CELL_CHARS, IntakeError, Parser, RowError
 MAX_XLSX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_XLSX_COMPRESSION_RATIO = 100
 MAX_SHARED_STRINGS_BYTES = 128 * 1024 * 1024
+MAX_XLSX_COLUMNS = 16_384
 
 _OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 _CELL_REF_RE = re.compile(r"([A-Za-z]+)\d+")
@@ -38,6 +39,7 @@ class XlsxLimits:
     max_compression_ratio: int = MAX_XLSX_COMPRESSION_RATIO
     max_shared_strings_bytes: int = MAX_SHARED_STRINGS_BYTES
     max_cell_chars: int = MAX_CELL_CHARS
+    max_columns: int = MAX_XLSX_COLUMNS
 
 
 def _local(tag: str) -> str:
@@ -57,8 +59,11 @@ def _col_index(ref: str) -> int | None:
     m = _CELL_REF_RE.fullmatch(ref.strip())
     if not m:
         return None
+    letters = m.group(1).upper()
+    if len(letters) > 4:
+        return MAX_XLSX_COLUMNS
     idx = 0
-    for ch in m.group(1).upper():
+    for ch in letters:
         idx = idx * 26 + (ord(ch) - ord("A") + 1)
     return idx - 1
 
@@ -515,6 +520,12 @@ class XlsxParser(Parser):
                         r_attr = elem.attrib.get("r")
                         parsed_col = _col_index(r_attr) if r_attr else None
                         c_col = parsed_col if parsed_col is not None else (prev_col + 1)
+                        if c_col < 0 or c_col >= self.limits.max_columns:
+                            raise IntakeError(
+                                "invalid_csv",
+                                f"xlsx 열 번호가 허용 한도({self.limits.max_columns}열)를 초과했습니다",
+                                [f"{self.name}:{max(cur_row_num, 1)}:-: 열 참조 '{r_attr or c_col + 1}'가 허용 범위를 넘음"],
+                            )
                         prev_col = c_col
                         c_v = ""
                         c_inline = []
@@ -539,11 +550,16 @@ class XlsxParser(Parser):
                         in_c = False
                     elif tag == "row" and in_row:
                         if row_cells:
-                            max_col = max(idx for idx, _ in row_cells)
-                            dense = [""] * (max_col + 1)
+                            max_col = -1
                             for idx, val in row_cells:
-                                dense[idx] = val
-                            yield cur_row_num, dense
+                                if val != "" and idx > max_col:
+                                    max_col = idx
+                            if max_col >= 0:
+                                dense = [""] * (max_col + 1)
+                                for idx, val in row_cells:
+                                    if idx <= max_col:
+                                        dense[idx] = val
+                                yield cur_row_num, dense
                         in_row = False
                         row_cells = []
                         elem.clear()

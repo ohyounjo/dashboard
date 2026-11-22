@@ -62,8 +62,18 @@ def make_parser(source: Mapping[str, Any], *, strict: bool) -> Parser:
     if kind == "rows":
         return PARSERS["rows"](source.get("rows"), str(source.get("name") or "rows"))
     if kind == "cursor":
-        return PARSERS["cursor"](source["cursor"], str(source.get("name") or "db"),
-                                itersize=int(source.get("itersize") or 2000))
+        factory = source.get("cursor_factory")
+        if callable(factory):
+            cur = factory()
+            owns = True
+        else:
+            cur = source.get("cursor")
+            owns = callable(cur)
+            if owns:
+                cur = cur()
+        return PARSERS["cursor"](cur, str(source.get("name") or "db"),
+                                itersize=int(source.get("itersize") or 2000),
+                                owns_cursor=owns)
     raise IngestError(400, "bad_request", f"알 수 없는 입력 종류 '{kind}'")
 
 

@@ -418,6 +418,50 @@ def test_xlsx_security_defenses_and_filename_checks(tmp_path):
         XlsxParser(bomb, "bomb.xlsx", limits=XlsxLimits(max_uncompressed_bytes=10_000)).header()
     assert exc.value.detail == "invalid_csv"
 
+    # 5-b) 희소 셀 열 참조 상한 초과(r="ZZZZZZ1" 등) → 거대한 배열 할당 없이 즉시 거절
+    huge_header = tmp_path / "huge_col_header.xlsx"
+    with zipfile.ZipFile(huge_header, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml",
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                    '<Default Extension="xml" ContentType="application/xml"/>'
+                    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                    '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                    '</Types>')
+        zf.writestr("xl/workbook.xml",
+                    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                    '<sheets><sheet name="S1" sheetId="1" r:id="rId1"/></sheets></workbook>')
+        zf.writestr("xl/_rels/workbook.xml.rels",
+                    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                    '</Relationships>')
+        zf.writestr("xl/worksheets/sheet1.xml",
+                    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+                    '<row r="1"><c r="ZZZZZZ1" t="inlineStr"><is><t>x</t></is></c></row>'
+                    '</sheetData></worksheet>')
+    with pytest.raises(IntakeError) as col_exc:
+        XlsxParser(huge_header, "huge_col_header.xlsx").header()
+    assert col_exc.value.detail == "invalid_csv"
+
+    huge_row = tmp_path / "huge_col_row.xlsx"
+    with zipfile.ZipFile(huge_row, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(huge_header, "r") as src_zf:
+            for item in src_zf.infolist():
+                if item.filename != "xl/worksheets/sheet1.xml":
+                    zf.writestr(item.filename, src_zf.read(item.filename))
+        zf.writestr("xl/worksheets/sheet1.xml",
+                    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+                    '<row r="1"><c r="A1" t="inlineStr"><is><t>id</t></is></c></row>'
+                    '<row r="2"><c r="ZZZZZZ2" t="inlineStr"><is><t>bad</t></is></c></row>'
+                    '</sheetData></worksheet>')
+    rp = XlsxParser(huge_row, "huge_col_row.xlsx")
+    assert rp.header() == ["id"]
+    bad_rows = list(rp.rows())
+    rp.close()
+    assert len(bad_rows) == 1 and isinstance(bad_rows[0][1], RowError) and bad_rows[0][1].fatal is True
+
     # 6) 파일 이름 검증 분리: Studio(check_filename)는 .csv만, 관리 서비스(check_ingest_filename)는 .csv·.xlsx 허용
     assert upload.check_ingest_filename("orders.xlsx") == "orders.xlsx"
     assert upload.check_ingest_filename("orders.CSV") == "orders.CSV"
@@ -502,6 +546,35 @@ def test_cursor_parser_streaming_types_and_non_scalar_errors():
     assert isinstance(out[2004][1], RowError) and out[2004][1].where == "db:orders.sql:2005:bad"
     assert isinstance(out[2005][1], RowError) and out[2005][1].where == "db:orders.sql:2006:bad"
     assert out[2006][1][3] == "nan"
+
+    # cursor_factory는 호출할 때마다 새 커서를 만들고 close()로 소유한 커서를 닫는다
+    closed: list[int] = []
+
+    class FactoryCur:
+        description = [("id",)]
+
+        def __init__(self, idx: int):
+            self.idx = idx
+            self.done = False
+
+        def fetchmany(self, n):
+            if self.done:
+                return []
+            self.done = True
+            return [(self.idx,)]
+
+        def close(self):
+            closed.append(self.idx)
+
+    seq = iter([1, 2])
+    src = {"kind": "cursor", "cursor_factory": lambda: FactoryCur(next(seq)), "name": "db:re"}
+    p1 = make_parser(src, strict=False)
+    assert list(p1.rows()) == [(1, ["1"])]
+    p1.close()
+    p2 = make_parser(src, strict=False)
+    assert list(p2.rows()) == [(1, ["2"])]
+    p2.close()
+    assert closed == [1, 2]
 
 
 def test_dsn_env_validation_sql_guard_and_error_sanitization(monkeypatch, tmp_path):

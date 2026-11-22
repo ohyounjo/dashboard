@@ -945,3 +945,50 @@ def test_watch_processing_recovery_transient_retry_and_sensitive_redaction(tmp_p
         assert doc["detail"] == "invalid_rows"
 
     rebuilt_equals_current(root, scratch_db)
+
+
+def test_ingest_from_db_recreates_cursor_on_stale_config_retry(tmp_path, scratch_db, monkeypatch):
+    """설정 변경(StaleConfig)으로 재시도할 때 원본 DB 커서를 새로 열어 전체 행을 다시 적재한다."""
+    import dashkit.ingest.add as ingest_add
+    from dashkit.ingest.db_import import ingest_from_db
+    from dashkit.ingest.operation import StaleConfig
+
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+
+    with db.owner_conn(scratch_db) as conn:
+        conn.execute("CREATE SCHEMA IF NOT EXISTS src_stale")
+        conn.execute("DROP TABLE IF EXISTS src_stale.ext_entries")
+        conn.execute("CREATE TABLE src_stale.ext_entries (id text, group_id text, state text, amount numeric)")
+        conn.execute(
+            "INSERT INTO src_stale.ext_entries VALUES "
+            "('E970', 'g1', 'open', 11.5), ('E971', 'g2', 'done', 22.0)"
+        )
+        conn.commit()
+
+    monkeypatch.setenv("TEST_STALE_DSN", _source_dsn(scratch_db))
+
+    real_commit = ingest_add._commit
+    attempts = 0
+
+    def fail_once_then_commit(session, prepared, *, force, dry_run):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise StaleConfig("설정 변경 재시도 모의")
+        return real_commit(session, prepared, force=force, dry_run=dry_run)
+
+    monkeypatch.setattr(ingest_add, "_commit", fail_once_then_commit)
+
+    res = ingest_from_db(
+        "ledger",
+        "entries",
+        dsn_env="TEST_STALE_DSN",
+        source_table="src_stale.ext_entries",
+        projects_dir=root,
+        dbname=scratch_db,
+    )
+    assert attempts == 2
+    assert res["ok"] is True
+    assert res["batches"][0]["rows"]["inserted"] == 2
+    rebuilt_equals_current(root, scratch_db)
