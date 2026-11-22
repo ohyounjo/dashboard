@@ -818,6 +818,14 @@ def test_additional_intake_xlsx_db_import_watch_equivalence_and_readonly(tmp_pat
     assert wexc.value.detail == "invalid_query"
     assert dsn not in wexc.value.message
 
+    lit_sql = tmp_path / "lit.sql"
+    lit_sql.write_text("SELECT 'customer-secret'::integer AS id", encoding="utf-8")
+    with pytest.raises(IngestError) as lexc:
+        ingest_from_db("ledger", "entries", dsn_env="TEST_SOURCE_DSN", query_file=lit_sql,
+                       projects_dir=root, dbname=scratch_db)
+    assert lexc.value.detail == "invalid_query"
+    assert "customer-secret" not in lexc.value.message
+
     # 2) 원본 DB 가져오기 (dry_run → 확정)
     r_db = ingest_from_db("ledger", "entries", dsn_env="TEST_SOURCE_DSN", source_table="src_ext.ext_entries",
                           projects_dir=root, dbname=scratch_db, dry_run=True)
@@ -944,13 +952,24 @@ def test_watch_processing_recovery_transient_retry_and_sensitive_redaction(tmp_p
         doc = _json.loads(raw_txt)
         assert doc["detail"] == "invalid_rows"
 
-    # 5) 손상된 .csv.gz 격리 후 다음 정상 파일 계속 처리
+    # 5) 손상된 .csv.gz 및 CRC 손상 .xlsx 격리 후 다음 정상 파일 계속 처리
+    import io as _io
+    import zipfile as _zipfile
+    from test_additional_intake_unit import make_xlsx_bytes as _make_xlsx
+
+    crc_buf = bytearray(_make_xlsx([{"name": "S1", "rows": [["id", "group_id", "state"], ["E999", "g1", "open"]]}]))
+    with _zipfile.ZipFile(_io.BytesIO(crc_buf), "r") as _zf:
+        _sh = _zf.getinfo("xl/worksheets/sheet1.xml")
+        _pos = _sh.header_offset + 30 + len(_sh.filename.encode("utf-8")) + max(_sh.compress_size - 2, 0)
+    crc_buf[_pos] ^= 0xFF
     (inbox / "01_bad.csv.gz").write_bytes(b"not-a-valid-gzip-stream")
+    (inbox / "01_bad_crc.xlsx").write_bytes(bytes(crc_buf))
     (inbox / "02_ok.csv").write_text("id,group_id,state\nE962,g1,open\n", encoding="utf-8")
     st_corrupt = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db)
-    assert st_corrupt["failed"] == 1 and st_corrupt["succeeded"] == 1
+    assert st_corrupt["failed"] == 2 and st_corrupt["succeeded"] == 1
     assert not list(proc.iterdir())
     assert any(p.name.endswith("-01_bad.csv.gz.error.json") for p in (inbox / "_failed").iterdir())
+    assert any(p.name.endswith("-01_bad_crc.xlsx.error.json") for p in (inbox / "_failed").iterdir())
     assert any(p.name.endswith("-02_ok.csv") for p in (inbox / "_done").iterdir())
 
     rebuilt_equals_current(root, scratch_db)

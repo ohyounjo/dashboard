@@ -493,6 +493,18 @@ def test_xlsx_security_defenses_and_filename_checks(tmp_path):
         CsvParser(trunc_gz, "trunc.csv.gz").header()
     assert gz_exc2.value.detail == "invalid_csv"
 
+    # 5-e) CRC/압축 손상 xlsx 시트 엔트리 → BadZipFile 대신 IntakeError('invalid_xlsx')
+    good_bytes = bytearray(make_xlsx_bytes([{"name": "S1", "rows": [["id", "v"], ["1", "hello world"]]}]))
+    with zipfile.ZipFile(io.BytesIO(good_bytes), "r") as zf_ok:
+        sh_info = zf_ok.getinfo("xl/worksheets/sheet1.xml")
+        corrupt_pos = sh_info.header_offset + 30 + len(sh_info.filename.encode("utf-8")) + max(sh_info.compress_size - 2, 0)
+    good_bytes[corrupt_pos] ^= 0xFF
+    bad_crc_xlsx = tmp_path / "bad_crc.xlsx"
+    bad_crc_xlsx.write_bytes(bytes(good_bytes))
+    with pytest.raises(IntakeError) as crc_exc:
+        XlsxParser(bad_crc_xlsx, "bad_crc.xlsx").header()
+    assert crc_exc.value.detail == "invalid_xlsx"
+
     # 6) 파일 이름 검증 분리: Studio(check_filename)는 .csv만, 관리 서비스(check_ingest_filename)는 .csv·.xlsx 허용
     assert upload.check_ingest_filename("orders.xlsx") == "orders.xlsx"
     assert upload.check_ingest_filename("orders.CSV") == "orders.CSV"
@@ -624,6 +636,18 @@ def test_dsn_env_validation_sql_guard_and_error_sanitization(monkeypatch, tmp_pa
     assert "svc_user" not in sanitized
     assert "internal-db.example" not in sanitized
     assert secret_dsn not in sanitized
+
+    # SQLSTATE 및 서버 오류 메시지 내 SQL 리터럴/값 비노출 확인
+    class FakePgErr(Exception):
+        sqlstate = "22P02"
+        diag = SimpleNamespace(message_primary='invalid input syntax for type integer: "customer-secret"')
+
+    sanitized_pg = sanitize_db_error(FakePgErr("raw"))
+    assert "customer-secret" not in sanitized_pg
+    assert "22P02" in sanitized_pg
+    sanitized_lit = sanitize_db_error(RuntimeError("bad value 'customer-secret' near \"col-secret\""))
+    assert "customer-secret" not in sanitized_lit
+    assert "col-secret" not in sanitized_lit
 
     qfile = tmp_path / "q.sql"
     qfile.write_text("SELECT 1; DROP TABLE users;", encoding="utf-8")

@@ -34,6 +34,24 @@ _URI_CRED_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://)([^/@\s]+)@")
 _KV_PW_RE = re.compile(r"(password\s*=\s*)(?:'[^']*'|\"[^\"]*\"|\S+)", re.IGNORECASE)
 _KV_USER_RE = re.compile(r"(user\s*=\s*)(?:'[^']*'|\"[^\"]*\"|\S+)", re.IGNORECASE)
 _KV_HOST_RE = re.compile(r"(host(?:addr)?\s*=\s*)(?:'[^']*'|\"[^\"]*\"|\S+)", re.IGNORECASE)
+_SQL_LITERAL_RE = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|\$[A-Za-z_0-9]*\$.*?\$[A-Za-z_0-9]*\$", re.DOTALL)
+
+_SQLSTATE_EXACT = {
+    "25006": "읽기 전용 세션 제약 위반",
+    "57014": "쿼리 제한 시간 초과(statement_timeout)",
+}
+_SQLSTATE_CLASSES = {
+    "08": "DB 연결 오류",
+    "22": "값 변환 또는 데이터 형식 오류",
+    "23": "무결성 제약 위반",
+    "25": "읽기 전용 또는 트랜잭션 상태 오류",
+    "28": "DB 인증 실패",
+    "3D": "지정된 DB를 찾을 수 없음",
+    "42": "SQL 구문 또는 조회 대상 오류",
+    "53": "DB 자원 한도 초과",
+    "57": "쿼리 제한 시간 초과 또는 작업 취소",
+    "XX": "원본 DB 내부 오류",
+}
 
 
 def _db_cell(val: Any, where: str) -> str | RowError:
@@ -202,10 +220,18 @@ def _dsn_secrets(dsn_value: str) -> list[str]:
 
 
 def sanitize_db_error(exc: BaseException, dsn_value: str | None = None) -> str:
-    """외부 DB 오류 메시지에서 DSN 원문·URI 자격 증명·호스트·비밀번호를 마스킹한다."""
+    """외부 DB 오류 메시지에서 DSN·자격 증명과 서버가 되돌린 SQL 리터럴/값을 제거한다."""
+    kind = type(exc).__name__
+    sqlstate = getattr(exc, "sqlstate", None)
+    if isinstance(sqlstate, str) and sqlstate:
+        desc = _SQLSTATE_EXACT.get(sqlstate) or _SQLSTATE_CLASSES.get(sqlstate[:2], "원본 DB 쿼리/접속 오류")
+        return f"{kind} [{sqlstate}]: {desc}"
+
     diag = getattr(exc, "diag", None)
-    primary = diag.message_primary if diag and getattr(diag, "message_primary", None) else None
-    text = str(primary or exc).strip()
+    if diag is not None and getattr(diag, "message_primary", None):
+        return f"{kind}: 원본 DB 쿼리/접속 오류"
+
+    text = str(exc).strip()
     if dsn_value:
         for secret in _dsn_secrets(dsn_value):
             text = text.replace(secret, "***")
@@ -213,11 +239,10 @@ def sanitize_db_error(exc: BaseException, dsn_value: str | None = None) -> str:
     text = _KV_PW_RE.sub(r"\1***", text)
     text = _KV_USER_RE.sub(r"\1***", text)
     text = _KV_HOST_RE.sub(r"\1***", text)
-    sqlstate = getattr(exc, "sqlstate", None)
-    kind = type(exc).__name__
+    text = _SQL_LITERAL_RE.sub("***", text)
     if not text:
         text = kind
-    return f"{kind} [{sqlstate}]: {text}" if sqlstate else f"{kind}: {text}"
+    return f"{kind}: {text}"
 
 
 def _prepare_import_sql(raw_sql: str) -> str:

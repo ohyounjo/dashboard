@@ -11,6 +11,7 @@ import posixpath
 import re
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -31,6 +32,7 @@ _BUILTIN_TIME_FMTS = frozenset(range(18, 23)) | frozenset(range(32, 37)) | froze
 _BUILTIN_DATETIME_FMTS = _BUILTIN_DATE_FMTS | _BUILTIN_TIME_FMTS
 _PROLOG_ENTITY_RE = re.compile(rb"<!(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
 _ROOT_START_RE = re.compile(rb"<[A-Za-z_]")
+_ZIP_CORRUPT_ERRORS = (zipfile.BadZipFile, zlib.error, EOFError, KeyError, OSError)
 
 
 @dataclass(frozen=True)
@@ -300,8 +302,11 @@ class XlsxParser(Parser):
 
     def _open_entry(self, entry: str) -> _BoundedStream:
         assert self._zf is not None
-        zinfo = self._zf.getinfo(entry)
-        raw = self._zf.open(zinfo, "r")
+        try:
+            zinfo = self._zf.getinfo(entry)
+            raw = self._zf.open(zinfo, "r")
+        except _ZIP_CORRUPT_ERRORS as exc:
+            raise self._reject_xlsx(f"손상되었거나 읽을 수 없는 xlsx 엔트리({entry})입니다: {exc}") from None
         return _BoundedStream(raw, self.name, zinfo.compress_size, self._total_read, self.limits)
 
     def _check_archive(self) -> None:
@@ -359,6 +364,8 @@ class XlsxParser(Parser):
                         elem.clear()
         except ET.ParseError as exc:
             raise IntakeError("invalid_csv", "xlsx XML을 읽을 수 없습니다", [f"{self.name}:1:-: XML 오류: {exc}"]) from None
+        except _ZIP_CORRUPT_ERRORS as exc:
+            raise self._reject_xlsx(f"손상된 xlsx ZIP 엔트리입니다 ({exc})") from None
 
         sheets: list[tuple[str, str, str]] = []
         try:
@@ -378,6 +385,8 @@ class XlsxParser(Parser):
                         elem.clear()
         except ET.ParseError as exc:
             raise IntakeError("invalid_csv", "xlsx XML을 읽을 수 없습니다", [f"{self.name}:1:-: XML 오류: {exc}"]) from None
+        except _ZIP_CORRUPT_ERRORS as exc:
+            raise self._reject_xlsx(f"손상된 xlsx ZIP 엔트리입니다 ({exc})") from None
 
         if not sheets:
             raise IntakeError("invalid_csv", "시트가 없습니다", [f"{self.name}:1:-: 워크북에 시트가 없음"])
@@ -433,6 +442,8 @@ class XlsxParser(Parser):
                             elem.clear()
         except ET.ParseError as exc:
             raise IntakeError("invalid_csv", "xlsx 공유 문자열 XML 오류", [f"{self.name}:1:-: XML 오류: {exc}"]) from None
+        except _ZIP_CORRUPT_ERRORS as exc:
+            raise self._reject_xlsx(f"손상된 xlsx 공유 문자열 엔트리입니다 ({exc})") from None
 
     def _parse_styles(self) -> None:
         assert self._zf is not None
@@ -475,6 +486,8 @@ class XlsxParser(Parser):
                             elem.clear()
         except ET.ParseError as exc:
             raise IntakeError("invalid_csv", "xlsx 스타일 XML 오류", [f"{self.name}:1:-: XML 오류: {exc}"]) from None
+        except _ZIP_CORRUPT_ERRORS as exc:
+            raise self._reject_xlsx(f"손상된 xlsx 스타일 엔트리입니다 ({exc})") from None
 
     def _cell_value(self, ctype: str, style_idx: int | None, raw_v: str, inline_parts: list[str]) -> str:
         if ctype == "s":
@@ -592,6 +605,9 @@ class XlsxParser(Parser):
         except ET.ParseError as exc:
             raise IntakeError("invalid_csv", "xlsx 시트 XML을 읽을 수 없습니다",
                               [f"{self.name}:{max(cur_row_num, 1)}:-: XML 오류: {exc}"]) from None
+        except _ZIP_CORRUPT_ERRORS as exc:
+            raise IntakeError("invalid_xlsx", "손상된 xlsx 시트 ZIP 데이터를 읽을 수 없습니다",
+                              [f"{self.name}:{max(cur_row_num, 1)}:-: ZIP 무결성/압축 오류 ({exc})"]) from None
         finally:
             if self._sheet_stream is not None:
                 self._sheet_stream.close()

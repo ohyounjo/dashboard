@@ -18,6 +18,7 @@ import os
 import re
 import signal
 import time
+import zipfile
 import zlib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -287,7 +288,7 @@ def _process_one(
         )
         stats["failed"] += 1
         return
-    except (gzip.BadGzipFile, EOFError, zlib.error, UnicodeError) as exc:
+    except (gzip.BadGzipFile, EOFError, zipfile.BadZipFile, zlib.error, UnicodeError) as exc:
         _audit_watch(project.name, tname, orig_name, detail_code="invalid_csv")
         _quarantine(
             folder, proc_path, orig_name, tname, table_spec,
