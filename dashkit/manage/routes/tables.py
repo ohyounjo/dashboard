@@ -31,6 +31,7 @@ from ..uploads import uploads
 router = APIRouter()
 MAX_JSON_BYTES = 10 * 1024 * 1024
 METHODS = ("form", "paste")
+FAST_CHECK_LOCK_TIMEOUT_MS = 200
 
 
 # ---------------------------------------------------------------- 공통
@@ -51,12 +52,19 @@ def _table(project: config.Project, table: str) -> str:
     raise IngestError(404, "unknown_table", "schema.yaml에 없는 테이블입니다")
 
 
-def _recorded() -> dict[str, dict[str, ledger.Recorded]]:
+def _recorded(*, lock_timeout_ms: int | None = None, raise_on_lock: bool = False) -> dict[str, dict[str, ledger.Recorded]]:
     """배치 기록(dash_inspect로 읽는다). 읽지 못하면 빈 dict(아직 적용하지 않은 DB 등)."""
     try:
         with db.inspect_conn() as conn:
             with conn.cursor() as cur:
+                if lock_timeout_ms is not None:
+                    # PostgreSQL에서 lock_timeout=0은 무제한 대기이므로 최소 1ms로 제한한다
+                    cur.execute("SELECT set_config('lock_timeout', %s, true)", (f"{max(int(lock_timeout_ms), 1)}ms",))
                 return ledger.read(cur)
+    except psycopg.errors.LockNotAvailable:
+        if raise_on_lock:
+            raise
+        return {}
     except (psycopg.Error, RuntimeError):
         return {}
 
@@ -200,7 +208,7 @@ def _ingest_job(project_name: str, entries: list[dict[str, Any]], principal: Pri
                  for e in entries]
         result = ingest(project_name, items, dry_run=dry_run, force=force, strict=strict, skip_invalid=skip_invalid,
                         max_rows=limits.max_rows, rejects_dir=rejects_dir,
-                        progress=lambda step, info: ctx.progress(step, **dict(info)), wait_ms=limits.lock_wait_ms)
+                        progress=lambda step, info: ctx.progress(step, **dict(info)), wait_ms=limits.job_lock_wait_ms)
         if dry_run:
             result["upload_id"] = upload_id
         else:
@@ -391,6 +399,27 @@ def _may_change(project: config.Project, table: str, file: str, principal: Princ
         raise IngestError(403, "forbidden", "자기가 더한 배치만 되돌릴 수 있습니다(admin은 모두)")
 
 
+def _is_fast_remove_candidate(project: config.Project, table: str, file: str, *,
+                              lock_timeout_ms: int = FAST_CHECK_LOCK_TIMEOUT_MS) -> bool:
+    """잠금 전 읽기 전용 사전 판별: 빠른 길 비후보(이전 배치·수정/건너뜀 포함)는 5초 대기 없이 바로 202 작업으로 넘긴다.
+
+    없는 배치(404)와 합친 배치(409)는 기존 즉시 응답 경로를 타도록 True를 돌려준다.
+    배치 기록 조회가 SQL 잠금 대기에 걸리면(다시 만들기 진행 중 등) 비동기 202 작업으로 넘겨 쓰기 잠금 안에서 판별한다.
+    """
+    files = batches.list_batches(project.data_dir, table)[0]
+    if not any(f.name == file for f in files) or batches.is_merged(file):
+        return True
+    if max(files, key=lambda f: f.number or 0).name != file:
+        return False
+    try:
+        rec = _recorded(lock_timeout_ms=lock_timeout_ms, raise_on_lock=True).get(table, {}).get(file)
+    except psycopg.errors.LockNotAvailable:
+        return False
+    if rec is not None and (rec.inserted != rec.rows or rec.updated or rec.skipped or rec.unchanged):
+        return False
+    return True
+
+
 @router.delete("/tables/{table}/batches/{file}")
 async def delete_batch(table: str, file: str, request: Request, principal: Principal = Depends(require_operator)):
     project = _project()
@@ -399,6 +428,9 @@ async def delete_batch(table: str, file: str, request: Request, principal: Princ
     limits = context.limits()
 
     def fast() -> dict[str, Any] | None:
+        if not _is_fast_remove_candidate(project, name, file,
+                                         lock_timeout_ms=max(1, min(limits.lock_wait_ms, FAST_CHECK_LOCK_TIMEOUT_MS))):
+            return None
         try:
             result = remove_batch(project.name, name, file, fast_only=True, wait_ms=limits.lock_wait_ms)
         except NeedsRebuild:
@@ -411,8 +443,9 @@ async def delete_batch(table: str, file: str, request: Request, principal: Princ
         return result
 
     def work(ctx) -> dict[str, Any]:
-        ctx.progress("rebuild")
-        return remove_batch(project.name, name, file, wait_ms=limits.lock_wait_ms)
+        ctx.progress("lock")
+        return remove_batch(project.name, name, file, wait_ms=limits.job_lock_wait_ms,
+                            progress=lambda step, info: ctx.progress(step, **dict(info)))
 
     def done(run) -> None:
         if run.status == "succeeded":
@@ -431,8 +464,9 @@ async def post_restore(table: str, file: str, request: Request, principal: Princ
     limits = context.limits()
 
     def work(ctx) -> dict[str, Any]:
-        ctx.progress("rebuild")
-        return restore_batch(project.name, name, file, wait_ms=limits.lock_wait_ms)
+        ctx.progress("lock")
+        return restore_batch(project.name, name, file, wait_ms=limits.job_lock_wait_ms,
+                             progress=lambda step, info: ctx.progress(step, **dict(info)))
 
     def done(run) -> None:
         if run.status == "succeeded":

@@ -19,7 +19,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import psycopg
 from psycopg import sql
@@ -35,7 +35,8 @@ from .operation import IngestError, Session, _resolve_or_raise, locked
 
 
 def compact(project_name: str, table: str, *, projects_dir: Path | None = None, dbname: str | None = None,
-            wait_ms: int | None = None) -> dict[str, Any]:
+            wait_ms: int | None = None,
+            progress: Callable[[str, Mapping[str, Any]], None] | None = None) -> dict[str, Any]:
     project, revision = load_stable(project_name, projects_dir, dbname=dbname)
     tname = check_table(project, table)
     try:
@@ -43,7 +44,10 @@ def compact(project_name: str, table: str, *, projects_dir: Path | None = None, 
     except (psycopg.Error, RuntimeError) as exc:
         raise IngestError(503, "db_unavailable", f"DB 접속 실패: {exc}") from None
     try:
-        with locked(project, conn, revision=revision, wait_ms=wait_ms) as session:
+        if progress:
+            progress("lock", {})
+        with locked(project, conn, revision=revision, wait_ms=wait_ms,
+                    on_acquired=(lambda: progress("apply", {})) if progress else None) as session:
             diff = session.diff.get(tname)
             if diff is not None and not diff.clean:
                 raise IngestError(409, "rebuild_required", "반영되지 않았거나 바뀐 배치 파일이 있어 합치지 않습니다. 먼저 적용하세요",

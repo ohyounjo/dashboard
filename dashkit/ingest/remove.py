@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import psycopg
 from psycopg import sql
@@ -73,14 +73,18 @@ def _number(name: str) -> int:
 
 
 def remove_batch(project_name: str, table: str, name: str, *, fast_only: bool = False,
-                 projects_dir: Path | None = None, dbname: str | None = None, wait_ms: int | None = None
+                 projects_dir: Path | None = None, dbname: str | None = None, wait_ms: int | None = None,
+                 progress: Callable[[str, Mapping[str, Any]], None] | None = None
                  ) -> dict[str, Any]:
     """배치를 되돌린다. 빠른 길이면 {"fast": true, …}, 아니면 다시 만든다(fast_only면 NeedsRebuild)."""
     project, revision = load_stable(project_name, projects_dir, dbname=dbname)
     tname = check_table(project, table)
     conn = _connect(dbname)
     try:
-        with locked(project, conn, revision=revision, wait_ms=wait_ms) as session:
+        if progress:
+            progress("lock", {})
+        with locked(project, conn, revision=revision, wait_ms=wait_ms,
+                    on_acquired=(lambda: progress("rebuild", {})) if progress else None) as session:
             target = _target(project, tname, name, removed=False)     # 복구가 파일을 제자리로 돌린 뒤에 본다
             reason = _fast_blocker(session, target)
             if reason is None:
@@ -97,13 +101,17 @@ def remove_batch(project_name: str, table: str, name: str, *, fast_only: bool = 
 
 
 def restore_batch(project_name: str, table: str, name: str, *, projects_dir: Path | None = None,
-                  dbname: str | None = None, wait_ms: int | None = None) -> dict[str, Any]:
+                  dbname: str | None = None, wait_ms: int | None = None,
+                  progress: Callable[[str, Mapping[str, Any]], None] | None = None) -> dict[str, Any]:
     """`_removed/`의 배치를 되살린다(다시 만든다)."""
     project, revision = load_stable(project_name, projects_dir, dbname=dbname)
     tname = check_table(project, table)
     conn = _connect(dbname)
     try:
-        with locked(project, conn, revision=revision, wait_ms=wait_ms) as session:
+        if progress:
+            progress("lock", {})
+        with locked(project, conn, revision=revision, wait_ms=wait_ms,
+                    on_acquired=(lambda: progress("rebuild", {})) if progress else None) as session:
             target = _target(project, tname, name, removed=True)      # 복구가 파일을 제자리로 돌린 뒤에 본다
             if target.folder_path.exists():
                 raise IngestError(409, "batch_exists", "같은 이름의 배치가 이미 폴더에 있습니다")

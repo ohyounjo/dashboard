@@ -251,3 +251,71 @@ def test_template_and_alias_saving(who):
     # 저장한 머리글이 다음 파일에서 저절로 맞고, aliases는 DB와 상관없어 적용하지 않아도 더할 수 있다
     code, b, _h = call("POST", "/tables/entries/batches", who["operator1"], {"rows": [{"id": "E720", "분류": "done"}], "dry_run": True})
     assert code == 200 and b["batches"][0]["columns"]["matched"] == {"분류": "state"}, b
+
+
+def test_lock_wait_separation_and_step_lock(who):
+    """선행 쓰기 잠금 중 즉시 응답은 5초 뒤 409, 202 작업은 step: lock으로 기다렸다가 성공한다."""
+    from dashkit.project import locks
+
+    before = view_count()
+    lock_conn = db.owner_conn()
+    created_file = None
+    try:
+        locks.acquire(lock_conn, 0)
+        # 1) 즉시 입력(rows)은 MANAGE_LOCK_WAIT_MS(5초) 초과 시 409 apply_running
+        code, body, _h = call("POST", "/tables/entries/batches", who["operator1"],
+                              {"rows": [{"id": "E790", "state": "open"}]})
+        assert code == 409 and body["detail"] == "apply_running", body
+
+        # 2) 파일 적재(202)는 step: lock으로 대기하다가 잠금 해제 후 성공
+        ctype, raw = multipart({}, ("wait.csv", b"id,state\nE791,open\n"))
+        code, body, _h = call("POST", "/tables/entries/batches", who["operator1"], raw=raw, ctype=ctype)
+        assert code == 202, body
+        job = body["job"]
+        seen_lock = False
+        for _ in range(40):
+            state = call("GET", f"/jobs/{job['id']}", who["operator1"])[1]
+            if state["progress"].get("step") == "lock":
+                seen_lock = True
+                break
+            time.sleep(0.05)
+        assert seen_lock, state
+        locks.release(lock_conn)
+        done = wait_job(job, who["operator1"])
+        assert done["status"] == "succeeded", done
+        created_file = done["result"]["batches"][0]["file"]
+
+        # 3) 빠른 취소 후보(방금 넣은 배치)는 잠금 중 5초 뒤 409 apply_running
+        locks.acquire(lock_conn, 0)
+        code, body, _h = call("DELETE", f"/tables/entries/batches/{created_file}", who["operator1"])
+        assert code == 409 and body["detail"] == "apply_running", body
+
+        # 4) 이전 배치(비후보)는 5초 대기 없이 즉시 202 remove 작업으로 진입하고 step: lock 후 성공
+        t0 = time.monotonic()
+        code, body, _h = call("DELETE", "/tables/entries/batches/000001-20261120T0910Z.csv", who["admin1"])
+        assert code == 202 and (time.monotonic() - t0) < 3.0, (code, body)
+        rm_job = body["job"]
+        seen_lock = False
+        for _ in range(40):
+            state = call("GET", f"/jobs/{rm_job['id']}", who["admin1"])[1]
+            if state["progress"].get("step") == "lock":
+                seen_lock = True
+                break
+            time.sleep(0.05)
+        assert seen_lock, state
+        locks.release(lock_conn)
+        assert wait_job(rm_job, who["admin1"])["status"] == "succeeded"
+    finally:
+        try:
+            locks.release(lock_conn)
+        except Exception:
+            pass
+        lock_conn.close()
+
+    # 되돌린 000001 배치 복원 및 테스트용 created_file 정리
+    code, body, _h = call("POST", "/tables/entries/batches/000001-20261120T0910Z.csv/restore", who["admin1"], {})
+    assert code == 202 and wait_job(body["job"], who["admin1"])["status"] == "succeeded"
+    if created_file:
+        code, body, _h = call("DELETE", f"/tables/entries/batches/{created_file}", who["operator1"])
+        assert code == 200 and body["fast"]
+    assert view_count() == before

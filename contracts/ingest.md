@@ -107,7 +107,7 @@ projects/<프로젝트>/data/
 
 ## 쓰기 잠금
 
-쓰기는 한 번에 하나다. 잠금은 **데이터 DB에 하나**뿐인 세션 단위 advisory lock이다(`dashkit/project/locks.py`, 고정 키). 배치 폴더나 `raw`를 바꾸는 모든 작업(더하기, 되돌리기, 합치기, load·apply, 구조 변경)이 잡는다. 잠금은 작업의 DB 접속에 묶여 접속이 끊기면 DB가 푼다. 관리 서비스는 `MANAGE_LOCK_WAIT_MS`(기본 5000)까지 기다리고 못 잡으면 409 `apply_running`, CLI·Studio의 load는 10초까지 기다리고 못 잡으면 load 오류다.
+쓰기는 한 번에 하나다. 잠금은 **데이터 DB에 하나**뿐인 세션 단위 advisory lock이다(`dashkit/project/locks.py`, 고정 키). 배치 폴더나 `raw`를 바꾸는 모든 작업(더하기, 되돌리기, 합치기, load·apply, 구조 변경)이 잡는다. 잠금은 작업의 DB 접속에 묶여 접속이 끊기면 DB가 푼다. 관리 서비스의 즉시 요청(직접 입력·붙여넣기, 빠른 취소 후보)은 `MANAGE_LOCK_WAIT_MS`(기본 5000)까지 기다리고 못 잡으면 409 `apply_running`, 202 비동기 작업은 `MANAGE_JOB_LOCK_WAIT_MS`(기본 600000)까지 기다리고 못 잡으면 작업 결과에 409 `apply_running`을 남긴다. CLI·Studio의 load는 10초까지 기다리고 못 잡으면 load 오류다.
 
 ## 공통 순서
 

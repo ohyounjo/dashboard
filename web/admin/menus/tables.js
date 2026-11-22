@@ -436,7 +436,7 @@ function bulkResult(r, src, { preview, actions }) {
         b.file ? h("small", { class: "a-key mono", text: ` ${b.file}` }) : null);
     return h("section", { class: "d-file-result" }, label, batchBody(b));
   });
-  const notes = runNotes(r);
+  const notes = runNotes(r, { preview });
   return box(ok ? (preview ? "primary" : "good") : "bad", title, {
     body: h("div", { class: "d-stack gap" }, notes.length ? h("ul", { class: "d-lines" }, notes.map((n) => h("li", { text: n }))) : null, parts),
     actions: (actions || []).filter(Boolean),
@@ -940,15 +940,16 @@ function resultBox(r, { preview, actions }) {
   const ok = r.ok !== false;
   const title = preview ? (ok ? D.previewOk : D.previewBad) : D.doneTitle(b.file || "");
   return box(ok ? (preview ? "primary" : "good") : "bad", title, {
-    body: batchBody(b, runNotes(r)),
+    body: batchBody(b, runNotes(r, { preview })),
     actions: (actions || []).filter(Boolean),
   });
 }
 
-/** 요청 전체에 붙는 안내(먼저 반영한 손 파일, 끊긴 작업 복구) */
-function runNotes(r) {
+/** 요청 전체에 붙는 안내(먼저 반영한 손 파일, 끊긴 작업 복구, 대용량 미리보기 안내) */
+function runNotes(r, { preview = false } = {}) {
   const notes = (r.applied_first || []).map((f) => D.appliedFirst(f.file, f.rows));
   if (r.recovered && r.recovered.length) notes.push(D.recovered(r.recovered.length));
+  if (preview && I.isLargeBatchPreview(r.batches)) notes.push(D.largeBatchHint);
   return notes;
 }
 
