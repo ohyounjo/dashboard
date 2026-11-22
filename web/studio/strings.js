@@ -125,6 +125,7 @@ export default {
   planRowsKeyOnly: (a, r, m) => `+${n(a)}행 −${n(r)}행 · 유지 ${n(m)}행(값 미비교)`,
   planBatches: (a, r, c) => `배치 +${n(a)} −${n(r)} ~${n(c)}`,
   planPending: "끝나지 않은 폴더 작업이 있음: 배치를 비교하지 않음",
+  planRulesChanged: "테이블 규칙(충돌 정책·default·검증 규칙)이 바뀜: 다시 만든 결과가 달라질 수 있음",
   planNoChange: "변경 없음",
   planUnrecorded: (rows) => `지난 적재 기록 없음: 비교할 수 없음(한 번 적용하면 생김) · ${n(rows)}행`,
   planUnrecordedReason: (rows, reason) => (reason ? `${reason} · ${n(rows)}행` : `비교할 수 없음 · ${n(rows)}행`),

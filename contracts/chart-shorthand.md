@@ -100,9 +100,16 @@
 | 데이터셋 지표 이름 | 데이터셋 `labels`에 표시 이름이 있으면 **표시 이름**, 없으면 이름 |
 | `{ sql, label }` 지표 | `label` |
 
-- 화면이 먼저 정리하는 것은 겹침이 아니다: 같은 지표(이름이 같거나 adhoc `label`이 같음)는 하나만 보낸다. `merge_columns` 유형은 같은 열도 하나만 보낸다.
-- 예: `bar`의 `x: region`, `groupby: [region]`(열 겹침), `metrics: [{ sql: "COUNT(*)", label: region }]`(지표 라벨이 열 이름), 표시 이름이 같은 두 지표 `metrics: [a, b]`(`labels: { a: 건수, b: 건수 }`).
-- 차트의 `params`가 축약 필드의 파라미터를 덮어쓰면 그 값으로 본다. 원본(`viz_type`) 차트는 `viz_type`이 레지스트리 유형 하나와 같고 그 유형에 `hook`이 없을 때만 그 유형의 파라미터 이름으로 `params`를 읽어 본다(예: `echarts_timeseries_bar`, `pie`). 그 밖의 원본 차트는 보지 않는다.
+- 같은 저장 지표 반복과 같은 라벨·동일 SQL 정의의 adhoc 지표 반복은 허용한다. 같은 라벨에 서로 다른 SQL 정의 또는 저장 지표와 adhoc 지표가 있으면 화면이 뒤의 지표를 보내지 않으므로, 제거될 항목의 YAML 경로와 두 자리를 `ConfigError`로 보고한다. SQL 정의 비교는 전달되는 식 문자열을 기준으로 하며 SQL의 의미상 동등성은 추론하지 않는다. 확인하지 않은 SIMPLE 등 원본 객체의 서로 다른 정의는 제거 오류로 판정하지 않는다.
+- 제거 후에도 서버 라벨이 겹치면 별도로 위의 `Duplicate column/metric labels` 오류를 보고한다. `mixed`의 두 묶음은 각각 검사하며 묶음 사이의 같은 라벨은 허용한다.
+- `params`는 번들과 같이 마지막에 얕게 덮어쓰고, 최종 `viz_type`을 기준으로 검사한다. 값이 `params`에서 왔으면 오류 경로도 `params`를 가리킨다. 지원되지 않는 구성은 검사를 생략하며, `make check` 성공은 모든 원본 차트의 정상 동작을 보장하지 않는다.
+
+| 원본 유형 | 검사 범위 |
+|---|---|
+| 레지스트리에서 유일하며 hook이 없는 `viz_type` | 해당 유형의 쿼리 선언과 파라미터. 예: `echarts_timeseries_bar`, `pie`, `mixed_timeseries` |
+| `table` | `query_mode: raw`는 `all_columns`, `aggregate`는 `groupby`, `metrics`, `percent_metrics`; 생략은 `groupby`, `all_columns`, `metrics`, `percent_metrics`. 문자열 열과 저장 지표 또는 라벨이 있는 SQL 지표만 확인한다. 같은 열은 합치고 정렬은 라벨에 넣지 않는다. 알 수 없는 모드와 그 밖의 객체는 검사하지 않는다 |
+| `graph_chart`, `tree_chart`, `gantt_chart` | 갤러리와 같은 문자열 열과 저장 지표 또는 라벨이 있는 SQL 단일 지표 구성. 같은 열은 합친다. 다른 형태는 검사하지 않는다 |
+| `chord`, `world_map`, `country_map` 및 그 밖의 유형 | 검사하지 않는다. 앞의 세 유형은 웹앱 guest 임베드 미지원으로 확정됐으므로 `graph_chart`·`sankey`·`heatmap`·`pivot_table` 또는 `bar`·`treemap`·`table`로 대체한다([카탈로그](../reference/chart-catalog.md#4-3-웹앱-화면에서-그려지지-않는-원본-유형)) |
 
 `time_grain`은 x 열이 date/timestamp일 때만 의미가 있다. 범주 열(text)이면 쓰지 않는다(쓰면 `make check`가 경고하지 않고 Superset이 무시한다).
 

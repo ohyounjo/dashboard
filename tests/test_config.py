@@ -221,9 +221,10 @@ def test_duplicate_label_message_names_display_label_source(tmp_path):
 
 @pytest.mark.parametrize("spec", [
     {"viz": "bar", "x": "phase", "groupby": ["id"], "metrics": ["total_score"]},
-    # 같은 지표 두 번, 라벨이 같은 adhoc 지표 둘: 화면이 하나로 합쳐 보낸다(오류 없음)
+    # 같은 저장 지표 또는 동일 정의의 adhoc 지표 반복은 허용한다
     {"viz": "bar", "x": "phase", "metrics": ["total_score", "total_score"]},
-    {"viz": "line", "x": "begins", "metrics": [S("COUNT(*)", "n"), S("SUM(score)", "n")]},
+    {"viz": "line", "x": "begins", "metrics": [S("COUNT(*)", "n"), S("COUNT(*)", "n")]},
+    {"viz": "line", "x": "begins", "metrics": [S("COUNT(*)", "n")], "params": {"metrics": [{"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "n", "optionName": "a"}, {"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "n", "optionName": "b"}]}},
     # 합치는 유형(query.merge_columns): 같은 열 두 번, 행·열에 같은 열
     {"viz": "pie", "groupby": ["phase", "phase"], "metric": "total_score"},
     {"viz": "pivot_table", "rows": ["phase"], "columns": ["phase"], "metrics": ["total_score"]},
@@ -238,13 +239,81 @@ def test_duplicate_label_message_names_display_label_source(tmp_path):
     {"viz": "bar", "x": "phase", "metrics": ["total_score"], "_labels": {"phase": "점수", "total_score": "점수"}},
     # 판단할 수 없는 원본 차트(레지스트리에 없는 viz_type, hook 유형)는 보지 않는다
     {"viz_type": "graph_chart", "params": {"source": "phase", "target": "phase", "metric": "total_score"}},
-    {"viz_type": "table", "params": {"query_mode": "aggregate", "groupby": ["phase"],
+    {"viz_type": "table", "params": {"query_mode": "raw", "all_columns": ["phase"],
                                      "metrics": [{"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "phase"}]}},
 ])
 def test_query_labels_that_superset_accepts(tmp_path, spec):
     spec = dict(spec)
     labels = spec.pop("_labels", None)
     load_project("basic", make_project(tmp_path, mutate_dash=_replace_line_chart(spec, labels)))
+
+
+@pytest.mark.parametrize("spec, path", [
+    ({"viz": "bar", "x": "phase", "metrics": [S("COUNT(*)", "n"), S("SUM(score)", "n")]}, "metrics[1]"),
+    ({"viz": "mixed", "x": "phase", "metrics": ["total_score"], "metrics_b": [S("COUNT(*)", "n"), S("SUM(score)", "n")]}, "metrics_b[1]"),
+    ({"viz": "mixed", "x": "phase", "metrics": [S("COUNT(*)", "n"), S("SUM(score)", "n")], "metrics_b": ["total_score"]}, "metrics[1]"),
+    ({"viz": "bar", "x": "phase", "metrics": ["total_score"], "params": {"metrics": ["total_score", {"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "total_score"}]}}, "params.metrics[1]"),
+    ({"viz_type": "table", "params": {"query_mode": "aggregate", "groupby": ["phase"], "metrics": [{"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "phase"}]}}, "params.metrics[0]"),
+    ({"viz": "table", "columns": ["id"], "params": {"query_mode": "aggregate", "groupby": ["phase"], "metrics": [{"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "phase"}]}}, "params.metrics[0]"),
+])
+def test_query_collision_reports_yaml_path(tmp_path, spec, path):
+    errs = errors_of(tmp_path, mutate_dash=_replace_line_chart(spec))
+    assert any(e.startswith(f"dashboard.yaml:dashboards.main.charts[1].{path}:") for e in errs), errs
+
+
+@pytest.mark.parametrize("viz_type, params, path", [
+    ("graph_chart", {"source": "phase", "target": "id", "metric": {"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "phase"}}, "params.metric"),
+    ("tree_chart", {"id": "phase", "parent": "id", "name": "score", "metric": {"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "phase"}}, "params.metric"),
+])
+def test_native_chart_collision(tmp_path, viz_type, params, path):
+    errs = errors_of(tmp_path, mutate_dash=_replace_line_chart({"viz_type": viz_type, "params": params}))
+    assert any(path in e and "Duplicate column/metric labels" in e for e in errs), errs
+
+
+@pytest.mark.parametrize("metrics", [
+    ["total_score", {"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "total_score"}],
+    [{"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "total_score"}, "total_score"],
+])
+def test_stored_and_adhoc_metric_conflict_in_either_order(tmp_path, metrics):
+    spec = {"viz_type": "echarts_timeseries_bar", "params": {"x_axis": "phase", "metrics": metrics}}
+    errs = errors_of(tmp_path, mutate_dash=_replace_line_chart(spec))
+    assert len(errs) == 1 and "params.metrics[1]" in errs[0] and "첫 지표만" in errs[0], errs
+
+
+def test_table_percent_metric_collision_and_omitted_mode(tmp_path):
+    sql = lambda expression: {"expressionType": "SQL", "sqlExpression": expression, "label": "n"}
+    spec = {"viz_type": "table", "params": {"groupby": ["id"], "all_columns": ["phase"], "metrics": [sql("COUNT(*)")], "percent_metrics": [sql("SUM(score)")]}}
+    errs = errors_of(tmp_path, mutate_dash=_replace_line_chart(spec))
+    assert any("params.percent_metrics[0]" in e and "params.metrics[0]" in e for e in errs), errs
+
+
+def test_metric_removal_message_names_both_yaml_paths(tmp_path):
+    errs = errors_of(tmp_path, mutate_dash=_replace_line_chart(
+        {"viz": "bar", "x": "phase", "metrics": [S("COUNT(*)", "n"), S("SUM(score)", "n")]}))
+    assert errs == ["dashboard.yaml:dashboards.main.charts[1].metrics[1]: 지표 라벨 'n'로 서로 다른 지표가 겹침(metrics[0], metrics[1]). Superset이 첫 지표만 보내므로 각 지표에 고유한 라벨을 쓰세요."]
+
+
+@pytest.mark.parametrize("spec", [
+    {"viz": "bar", "x": "phase", "metrics": [S("COUNT(*)", "n"), S("SUM(score)", "n")], "params": {"metrics": ["total_score"]}},
+    {"viz": "mixed", "x": "phase", "metrics": [S("COUNT(*)", "n")], "metrics_b": [S("SUM(score)", "n")]},
+    {"viz_type": "table", "params": {"query_mode": "raw", "all_columns": ["phase"], "groupby": ["id"], "metrics": [{"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "phase"}]}},
+    {"viz_type": "table", "params": {"query_mode": "unknown", "groupby": ["phase"], "metrics": [{"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "phase"}]}},
+    {"viz_type": "table", "params": {"query_mode": "aggregate", "groupby": [{"sqlExpression": "phase", "label": "phase"}], "metrics": [{"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "phase"}]}},
+])
+def test_query_override_and_separate_queries_are_allowed(tmp_path, spec):
+    load_project("basic", make_project(tmp_path, mutate_dash=_replace_line_chart(spec)))
+
+
+def test_shorthand_override_to_native_uses_params(tmp_path):
+    spec = {"viz": "sankey", "source": "phase", "target": "id", "metric": "total_score", "params": {"viz_type": "graph_chart", "metric": {"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "phase"}}}
+    errs = errors_of(tmp_path, mutate_dash=_replace_line_chart(spec))
+    assert any("params.metric" in e and "Duplicate column/metric labels" in e for e in errs), errs
+
+
+def test_overridden_viz_type_uses_final_query(tmp_path):
+    spec = {"viz_type": "unknown", "params": {"viz_type": "pie", "groupby": ["phase"], "metric": {"expressionType": "SQL", "sqlExpression": "COUNT(*)", "label": "phase"}}}
+    errs = errors_of(tmp_path, mutate_dash=_replace_line_chart(spec))
+    assert any("params.metric" in e and "Duplicate column/metric labels" in e for e in errs), errs
 
 
 # ---------------------------------------------------------------- 도구 함수

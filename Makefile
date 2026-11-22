@@ -264,7 +264,7 @@ ingest: dirs
 plan: env-secrets
 	$(TOOLS) python -m dashkit plan
 
-# 설정 파일을 최신 설정 버전 형식으로 고친다. CHECK=1이면 고칠 것이 있는지만 본다(있으면 종료 코드 1)
+# 설정 파일을 최신 설정 버전 형식으로 고친다. CHECK=1이면 필수 버전 변환만 확인한다.
 migrate:
 	$(TOOLS) python -m dashkit migrate $(if $(CHECK),--check)
 

@@ -3,7 +3,7 @@
 `dashboard.yaml`에서 쓸 수 있는 차트 유형과 추가 방법을 모았다. **지금 구현 그대로** 쓸 수 있는 내용이다.
 
 - **근거:** 유형 이름과 파라미터 이름은 이 저장소가 쓰는 `apache/superset:6.1.0` 이미지 안의 예제 차트(`/app/superset/examples/**/charts/*.yaml`)에서 읽었다.
-- **확인 범위:** 축약 유형 전부와 4절의 원본 유형은 갤러리 프로젝트(`projects/chart-gallery/`)로 데이터 조회와 화면 렌더링을 확인했다. 유형별 최소 파라미터와 결과는 `contracts/superset-notes.md` 10절에 있다. `chord`, `world_map`, `country_map`은 관리자 화면에서는 그려지지만 웹앱(guest) 화면에서는 권한이 없어 그려지지 않는다(4-3절).
+- **확인 범위:** 축약 유형 전부와 4-1절의 원본 유형(`graph_chart`, `tree_chart`, `gantt_chart`)은 갤러리 프로젝트(`projects/chart-gallery/`)로 데이터 조회(`POST /api/v1/chart/data`)와 웹앱(guest) 임베드 화면 렌더링을 확인했다. 유형별 최소 파라미터와 결과는 `contracts/superset-notes.md` 10절에 있다. `chord`, `world_map`, `country_map`은 웹앱(guest) 임베드 미지원으로 확정됐으며 대체 차트 안내와 사유는 4-3절에 있다.
 - **견본:** `PROJECT=chart-gallery make apply`로 갤러리를 띄우면 유형을 화면에서 고르고 `projects/chart-gallery/dashboard.yaml`에서 같은 차트의 설정을 베껴 올 수 있다.
 
 ## 1. 차트를 쓰는 두 가지 방법
@@ -42,11 +42,11 @@ metric: { expressionType: SQL, sqlExpression: "SUM(amount)", label: 매출 }   #
 | 두 수치의 관계 | `bubble` | 축약 |
 | 여러 지표를 항목별로 | `radar` | 축약 |
 | 흐름 | `sankey` | 축약 |
-| 관계 | `chord`, `graph_chart` | 원본 |
+| 관계 | `sankey` / `graph_chart` | 축약 / 원본 |
 | 계층 구조 | `sunburst` / `tree_chart` | 축약 / 원본 |
 | 일정 막대 | `gantt_chart` (또는 웹앱 `gantt` 위젯) | 원본 |
 | 단어 빈도 | `word_cloud` | 축약 |
-| 나라별·지역별 값 | `world_map`, `country_map` | 원본 |
+| 나라별·지역별 값 | `bar`, `treemap`, `table` (지도 미지원, [4-3절](#4-3-웹앱-화면에서-그려지지-않는-원본-유형)) | 축약 |
 | 행 목록, 집계 표 | `table` | 축약 |
 
 ## 3. 축약 유형
@@ -330,18 +330,14 @@ metric: { expressionType: SQL, sqlExpression: "SUM(amount)", label: 매출 }   #
 
 ## 4. 원본 유형 조각
 
-축약에 없는 유형이다. 아래 조각은 `charts:` 목록에 그대로 넣고 `dataset`, 열, 지표 이름을 자기 것으로 바꾼다. 갤러리(`projects/chart-gallery/dashboard.yaml`의 `shelf_native`)에 같은 차트가 있다.
+축약에 없는 유형이다. 4-1절의 조각은 `charts:` 목록에 그대로 넣고 `dataset`, 열, 지표 이름을 자기 것으로 바꾼다. 갤러리(`projects/chart-gallery/dashboard.yaml`의 `shelf_native`)에 같은 차트가 있으며 모두 `POST /api/v1/chart/data`를 사용해 웹앱(guest) 임베드 렌더링을 통과했다.
+
+라벨 정적 검사는 갤러리와 같은 `graph_chart`, `tree_chart`, `gantt_chart`의 문자열 열과 저장 지표 또는 라벨이 있는 SQL 단일 지표 구성에 적용한다. 4-3절에서 웹앱 미지원으로 확정된 `chord`, `world_map`, `country_map`과 다른 형태의 원본 설정은 검사하지 않는다. 지원 범위와 오류 규칙은 [차트 계약](../contracts/chart-shorthand.md#중복-라벨-검사)을 따른다.
 
 ### 4-1. 관계, 계층, 일정
 
 ```yaml
-- key: chord_flow                    # 코드. groupby, columns는 목록이 아니라 열 하나
-  title: 창고 사이 이동
-  viz_type: chord
-  dataset: hauls
-  params: { groupby: from_site, columns: to_site, metric: pallet_sum }
-
-- key: graph_flow                    # 관계망
+- key: graph_flow                    # 관계망 (chord 대체)
   title: 창고 관계망
   viz_type: graph_chart
   dataset: hauls
@@ -362,33 +358,34 @@ metric: { expressionType: SQL, sqlExpression: "SUM(amount)", label: 매출 }   #
 
 간트는 두 가지가 있다. Superset `gantt_chart`는 대시보드 안에서 필터와 함께 움직인다. 웹앱 `gantt` 위젯(`tabs`의 섹션)은 진척률 채움, 상태 이모지, 오늘 선을 그린다. `gantt_chart`의 `y_axis_title_margin`은 왼쪽 항목 이름이 잘릴 때 넓힌다.
 
-### 4-2. 지도
+### 4-2. 지도 (웹앱 임베드 미지원)
 
-```yaml
-- key: world                         # 세계 지도. country_fieldtype: name | cca2 | cca3 | cioc
-  title: 나라별 물량
-  viz_type: world_map
-  dataset: exports
-  params: { entity: country_code, country_fieldtype: cca3, metric: tonnes_sum, show_bubbles: false }
-
-- key: country                       # 한 나라의 지역 지도. entity는 ISO 3166-2 지역 코드(예: KR-11)
-  title: 시도별 판매액
-  viz_type: country_map
-  dataset: sales_by_area
-  params: { select_country: korea, entity: area_code, metric: sold_sum }
-```
-
-`select_country`에 쓸 수 있는 나라 이름은 Superset 화면의 Country Map 차트 설정에서 확인한다.
+지도 시각화 요구가 없고 `world_map`·`country_map`(4-3절)과 외부 타일 지도(4-4절)를 지원하지 않으므로 지도 원본 조각은 제공하지 않는다. 국가·지역 단위 수치 비교가 필요하면 3절의 축약 `bar`, `treemap`, `table`을 사용한다.
 
 ### 4-3. 웹앱 화면에서 그려지지 않는 원본 유형
 
-`chord`, `world_map`, `country_map`은 Superset의 예전 조회 경로(`POST /superset/explore_json/`)를 쓴다. 웹앱은 guest token으로 대시보드를 임베드하고 guest 역할(`EmbedGuest`)에는 이 경로의 권한(`can_explore_json on Superset`)이 없어서, 차트 자리에 "Data error: Access is Denied"가 보인다. Superset 관리자 화면(http://localhost:8088)에서는 그려진다. 권한을 더하면 웹앱에서도 그려지는 것은 확인했다(`contracts/superset-notes.md` 10절). 기본 구성은 최소 권한을 지키려고 이 권한을 주지 않으며, 그래서 이 세 유형은 갤러리 프로젝트에도 넣지 않았다. 꼭 써야 하면 `superset/init_guest_role.py`의 권한 목록에 더하되, guest가 그 경로로 조회할 수 있는 범위를 먼저 확인한다.
+`chord`, `world_map`, `country_map`은 Superset의 예전 조회 경로(`POST /superset/explore_json/`)를 쓴다. 웹앱은 guest token으로 대시보드를 임베드하고 guest 역할(`EmbedGuest`, 최소 권한 4개)에는 이 경로의 권한(`can_explore_json on Superset`)이 없어 `403`으로 차단되며, 차트 자리에 `"Data error: Access is Denied"`가 보인다. 이슈 #50 검토에서 이 세 유형은 **웹앱 guest 임베드 미지원으로 확정**했고 `EmbedGuest`에 `can_explore_json on Superset`을 부여하지 않기로 결정했다(`tests/test_api.py`에서 `POST /superset/explore_json/` `403` 거부를 회귀 검증한다).
+
+미지원 확정 사유는 다음과 같다.
+
+1. **생성 SQL 문 전체 노출:** `POST /api/v1/chart/data`는 guest 응답에서 SQL을 제거하지만, `explore_json`은 기본 JSON 응답의 `query` 필드, `?query=true`, 오류 응답에 생성 SQL 문 전체(`dash.<뷰>`, 데이터셋 지표 SQL 식, 조회 조건)를 그대로 노출한다.
+2. **`@deprecated(eol_version="5.0.0")` 업그레이드 위험과 래퍼 유지보수 비용:** 곧 제거될 레거시 경로에 의존하게 된다. Superset 내부 뷰(`views/core.py`, `viz.py`)를 래핑해 `query`만 가리는 방식도 deprecated 경로 의존과 변조 검사 부재가 남고 Superset 버전 업그레이드마다 깨질 유지보수 비용이 커서 채택하지 않았다.
+3. **payload 변조 검사 부재:** viz 경로에는 `query_context_modified` 변조 검사가 없다.
+
+Superset 관리자 화면(`http://localhost:8088`)이나 `POST /api/v1/chart/data` 데이터 API에서는 동작할 수 있으나 웹앱 임베드에서는 실패하므로 `dashboard.yaml`에서는 아래 기존 지원 차트로 대체한다. 상세 비교와 검증 기록은 [Superset 계약 13절](../contracts/superset-notes.md#13-guest-권한-추가-실측timerange-explore_json)과 [설계 기록](legacy-chart-embed-design.md)에 있다.
+
+| 미지원 레거시 유형 | 대체 유형 | 방법 | 권장 설정 / 비고 |
+|---|---|---|---|
+| `chord` (쌍별 관계·원형 배치) | `graph_chart` | 원본 (4-1절) | `params: { source, target, metric, layout: circular }` (`POST /api/v1/chart/data`, 정적 중복 라벨 검사 통과) |
+| `chord` (출발→도착 흐름) | `sankey` | 축약 (3절) | `source`, `target`, `metric` |
+| `chord` (쌍별 교차 행렬) | `heatmap`, `pivot_table` | 축약 (3절) | `heatmap`(`x`, `y`, `metric`), `pivot_table`(`rows`, `columns`, `metrics`) |
+| `world_map`, `country_map` (국가·지역 수치 비교) | `bar`, `treemap`, `table` | 축약 (3절) | 지도 시각화 요구 없음. 범주 열 기준 비교(`bar`)·구성비(`treemap`)·상세 표(`table`) |
 
 ### 4-4. 기본 구성에서 권하지 않는 유형
 
 | 유형 | 이유 |
 |---|---|
-| `deck_arc`, `deck_grid`, `deck_hex`, `deck_path`, `deck_polygon`, `deck_scatter`, `deck_screengrid` | 지도 타일을 외부 출처에서 받아야 한다. 이 템플릿은 CORS를 끄고 CSP를 좁혀 두었으므로 `superset/superset_config.py`에서 타일 출처를 허용해야 쓸 수 있다. |
+| `deck_arc`, `deck_grid`, `deck_hex`, `deck_path`, `deck_polygon`, `deck_scatter`, `deck_screengrid`, `mapbox` | 지도 타일을 외부 출처에서 받아야 한다. 지도 시각화 요구가 없고 이 템플릿은 CORS를 끄고 CSP를 좁혀 두었으므로 외부 타일 지도를 채택하지 않는다. |
 | `bubble`, `para`, `horizon` | 예전 방식 차트다. `bubble`은 `bubble_v2`를 쓴다. |
 
 ## 5. 차트 말고 대시보드에 쓸 수 있는 것

@@ -29,7 +29,7 @@
 
   | 파일의 버전 | 결과 |
   |---|---|
-  | 없음, 또는 `CONFIG_VERSION`과 같음 | 통과 |
+  | `CONFIG_VERSION`과 같음(생략은 버전 1로 판단) | 통과 |
   | 더 큼 | `<파일>:version: 이 dashkit은 설정 버전 1까지 지원함(파일은 버전 2). dashkit을 업그레이드하세요` |
   | 더 작음(버전이 올라간 뒤) | `<파일>:version: 설정 버전 1은 더 이상 그대로 읽지 않음(현재 버전 2). `python -m dashkit migrate`(make migrate)로 파일을 고치세요` |
   | 1 이상의 정수가 아님 | JSON Schema 오류(`<파일>:version: …`) |
@@ -44,9 +44,9 @@
 
 - 텍스트 수준에서 고친다(YAML을 읽어 다시 쓰지 않는다). 주석·순서·따옴표·줄 끝 문자가 그대로 남는다.
 - `version` 키가 없으면 `version: 1` 줄을 맨 위에 넣는다(BOM과 `---` 표시가 있으면 그 뒤. 다음 줄이 비어 있지 않으면 빈 줄 하나를 둔다). 그다음 등록된 변환을 버전 순서대로 적용한다. 지금은 버전이 1뿐이라 변환이 없다.
-- 이미 최신이면 아무것도 쓰지 않는다(다시 실행해도 같다).
+- 명시적 버전이 이미 최신이면 아무것도 쓰지 않는다(일반 migrate는 생략된 키를 추가하고, 다시 실행하면 변경하지 않는다).
 - 두 파일을 모두 변환해 본 뒤에 쓴다. 한 파일이라도 실패하면(YAML 문법 오류, 지원보다 높은 버전, 등록되지 않은 변환) 아무 파일도 바꾸지 않고 종료 코드 1. 쓰기는 임시 파일 뒤 `os.replace`다.
-- `--check`: 파일을 바꾸지 않는다. 고칠 것이 있으면 무엇을 고칠지 출력하고 종료 코드 1, 없으면 0.
+- `--check`: 파일을 바꾸지 않고 두 파일의 실제 버전 변환 필요 여부를 확인한다. 생략된 버전은 1로 보며 현재 버전이면 키 삽입을 요구하지 않고 명시적 현재 버전과 같이 종료 코드 0이다. 구버전이면 파일과 등록된 변환 단계를 출력하고 1이다. 잘못된 버전(1 미만, 정수가 아닌 값, bool, 지원보다 높은 값), YAML 오류, 누락 파일 또는 미등록 변환은 오류를 보고하고 1이다. 하나라도 변환이 필요하거나 오류이면 전체 검사는 실패한다.
 - migrate는 형식 버전만 다룬다. 내용 검사는 `dashkit check`가 한다.
 
 ## 참조 검사 (`dashkit/config.py`, JSON Schema 다음 단계)
@@ -71,7 +71,7 @@
 | 차트 `key` | 프로젝트 전체에서 유일 |
 | 차트 `dataset` | `datasets`에 있음 (**없는 데이터셋 참조**) |
 | 차트 지표 문자열 | 그 데이터셋의 `metrics`에 있음(레지스트리의 `kind`가 `metric`·`metrics`인 필드) |
-| 차트의 열·지표 라벨 (**중복 라벨**) | Superset이 보내는 한 쿼리 안에서 열·지표의 Superset 라벨이 겹치지 않음(열은 이름, 데이터셋 지표는 `labels`의 표시 이름 또는 이름, `{sql, label}`은 `label`). 쿼리의 모양은 레지스트리의 `kind`(`column`·`columns`·`metric`·`metrics`)와 유형 파일의 `query` 선언(`groups`, `merge_columns`)이 정한다. 같은 지표 두 번과 `merge_columns` 유형의 같은 열 두 번은 Superset 화면이 합치므로 오류가 아니다. `params`가 덮어쓴 값도 보고, 원본 차트는 `viz_type`이 `hook` 없는 레지스트리 유형과 같을 때만 본다. 메시지 `dashboard.yaml:<차트>.<필드>: 열·지표 라벨 '<라벨>'가 한 쿼리에서 겹침(<자리들>). Superset이 차트 자리에 "Duplicate column/metric labels" 오류를 냄`. 규칙은 [chart-shorthand.md](chart-shorthand.md) "중복 라벨 검사", 실측은 [superset-notes.md](superset-notes.md) 14절 |
+| 차트의 열·지표 라벨 (**중복 라벨**) | 같은 쿼리에서 서로 다른 지표가 화면에 의해 제거되거나, 남은 열·지표의 서버 라벨이 겹치면 오류. 최종 `params`와 `viz_type`, 쿼리 경계 및 실제 YAML 경로를 반영한다. 지원 유형·모드와 미지원 원본 구성은 [chart-shorthand.md](chart-shorthand.md) "중복 라벨 검사", 실측은 [superset-notes.md](superset-notes.md) 14절 |
 | `layout` 항목 | 차트 항목은 같은 대시보드 `charts`에 있음 (**배치에 없는 차트 키**). 모든 차트가 대시보드 안 탭(`tabs[].rows`)을 포함해 정확히 한 번 배치됨. 행(탭 안 행 포함)의 지정 너비 합 ≤ 12, 너비 없는 항목(차트·글) 수 ≤ 남은 칸. 제목(`header`)은 한 행에 혼자. 제목·글 항목의 형식(빈 글 금지, 허용 필드)은 스키마가 본다 |
 | `filters[].key` | 대시보드 안에서 유일 |
 | `filters[].type` | 생략하면 `select`. 유형별 필수 필드(스키마): `select`·`number_range`는 `dataset`·`column`, `time_grain`은 `dataset`. 유형에 없는 필드 금지: `time_range`에는 `dataset`·`column`·`multi`·`parent`, `number_range`에는 `multi`·`parent`, `time_grain`에는 `column`·`multi`·`parent` |

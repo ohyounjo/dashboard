@@ -95,7 +95,7 @@ Codex는 푸시만으로는 다시 리뷰하지 않아서, 고친 뒤에는 PR�
 **3단계**
 - 위젯 매니페스트 표시 `x-unique`, `x-date-range`를 새로 정의했다(기존 검사와 오류 문구 유지). `dataset` 없는 위젯을 허용했다.
 - prune 식별 규칙과 시간 조건 자동 추가(4절 표).
-- **guest 권한을 넓히지 않았다**(`can_read on TimeRange`).
+- **당시 guest 권한을 넓히지 않았다.** 이후 필요한 권한이 `can_time_range on Api`로 확인되어 이슈 #49에서 확대를 승인했다.
 
 **4단계**
 - plan은 차이가 있어도 종료 코드 0이다(검증·설정·접속 실패만 1).
@@ -127,14 +127,14 @@ Codex는 푸시만으로는 다시 리뷰하지 않아서, 고친 뒤에는 PR�
 
 ## 7. 남은 한계
 
-- **guest 권한을 넓히지 않아서 생긴 것:** 임베드 화면에서 기간(`time_range`) 필터는 기본값만 적용되고 값을 바꿀 수 없다. `chord`, `world_map`, `country_map`은 임베드 화면에서 그려지지 않는다(갤러리에서 뺌). 각각 `can_read on TimeRange`, `can_explore_json on Superset`을 `superset/init_guest_role.py`에 더하면 될 것으로 보이지만 그 경로로 guest가 조회할 수 있는 범위는 실측하지 않았다.
+- **guest 권한 제한:** 이후 이슈 #49에서 기간 변경을 위한 `can_time_range on Api`를 승인했다. `chord`, `world_map`, `country_map`은 `can_explore_json on Superset`을 부여하지 않아 여전히 임베드에서 그려지지 않는다. 권한별 실측과 SQL 노출 등은 [Superset 계약 13절](../contracts/superset-notes.md)을 따른다.
 - **prune:** 프로젝트를 전환했을 때 이전 프로젝트의 Superset 객체를 지우는 일은 여전히 `.state/managed.json`이 필요하다(같은 프로젝트 안의 이전 객체는 상태 파일 없이 지워진다).
 - **plan:** `sql:` 데이터셋은 `dash_inspect`의 `PQprepare`·`PQdescribePrepared`와 `sources`로 적용 전 열을 예측하고, 비키 열 변경은 `key_only`로 추가·삭제·유지 행을 분리하며, 행 지문은 `PLAN_FINGERPRINT_KEY` 기반 HMAC-SHA256과 `dash_reader` 권한 회수로 보호된다(#56). 다만 `raw`·선행 `dash` 구조가 함께 바뀌는 경우·빈 DB·`dash_inspect` 미연결 시에는 `unknown`으로 남고, 기본 키 변경·중복 키 시에는 전체 교체(`none`)로 센다. 구버전 스냅샷·키 회전 시에는 오탐 없이 1회 `make apply`를 안내한다.
-- **설정 검사:** 막대·선 차트에서 `x`와 `groupby`에 같은 열을 넣으면 `make check`는 통과하지만 Superset이 차트 자리에 "Duplicate column/metric labels" 오류를 그린다(5b 통합 확인에서 발견, 고치지 않음).
+- **설정 검사:** 5b 통합 확인 당시에는 막대·선 차트의 `x`와 `groupby`에 같은 열을 넣어도 검사를 통과했지만, 이후 [PR #31](https://github.com/ohyounjo/dashboard/pull/31)에서 적용 전에 YAML 경로와 함께 충돌을 보고하도록 고쳤다. [PR #60](https://github.com/ohyounjo/dashboard/pull/60)은 자동 제거되는 서로 다른 지표와 일부 원본 유형 검사도 보완했다. 확인 범위 밖 원본 설정과 일부 지표 객체는 검사를 보장하지 않는다. 현재 지원 범위는 [차트 계약](../contracts/chart-shorthand.md#중복-라벨-검사)을 따른다.
 - **`make apply`:** backend 이미지를 다시 만들지 않는다. 템플릿 코드(`dashkit/`, `web/widgets/*/widget.json`)를 바꿨으면 `make up`이 필요하다.
 - **위젯:** 새 위젯의 고정 문구(`web/strings.js`)와 전용 CSS(`web/styles.css`)는 아직 위젯 폴더 밖이다.
 - **Studio:** Chromium 헤드리스로만 확인했다. Firefox·Safari, 터치 끌기(좁은 화면은 버튼으로 조작), 실제 OS 파일 드래그, 스크린 리더는 확인하지 않았다. 적용 중에 열려 있던 미리보기가 prune된 차트를 조회해 Superset 404·400이 콘솔에 한 번 찍힌다(적용 뒤 새로 고쳐짐). `ruamel` 예비 경로(앵커·별칭 등이 있는 파일)에서는 주석과 값은 남지만 파일 모양이 표준 꼴로 바뀐다.
-- **`make migrate CHECK=1`**은 `version` 키가 없는 예시 프로젝트에서 종료 코드 1이다(키가 없어도 버전 1로 유효).
+- 당시 **`make migrate CHECK=1`**은 `version` 키가 없는 예시 프로젝트에서 종료 코드 1이었다. 이슈 #57에서 계약을 변경하여 생략된 현재 버전은 검사에 통과한다(일반 migrate는 여전히 키를 삽입한다).
 - **Superset 격자**는 390px에서 행을 접지 않아 차트가 좁게 나온다(기존 동작).
 - 6단계(테마·언어, 위젯 후보, `make pull`, 설정 파일 분할, 원본 어댑터, 여러 프로젝트 동시 운영)는 하지 않았다.
 
@@ -145,7 +145,7 @@ Codex는 푸시만으로는 다시 리뷰하지 않아서, 고친 뒤에는 PR�
 3. **갤러리 화면:** `PROJECT=chart-gallery make apply` 후 탭 7개(축약 22종, 원본 유형, 배치·필터 견본). 확인 뒤 `PROJECT=devtracker make apply`. (Studio에서 프로젝트를 골라 "적용"해도 된다.)
 4. **Superset 화면 편집 차단:** http://localhost:8088 에서 sync가 만든 차트·대시보드를 직접 고칠 수 없다(D3). 필요하면 `.env`에 `SYNC_LOCK_UI=0`.
 5. **backend의 현재 프로젝트 규칙:** `.env`의 `PROJECT`가 아니라 마지막으로 적용한 프로젝트를 보여 준다. 의도와 맞는지.
-6. **guest 권한 두 가지**(7절 첫 항목)를 넓힐지.
+6. **guest 권한:** 기간 해석 권한은 이슈 #49에서 승인했다. 레거시 차트 권한은 별도 판단이다.
 7. **작업 트리:** 내 worktree(`git worktree list`로 보이는 스크래치 경로)는 작업이 끝나면 지워도 된다(`git worktree remove <경로>`). 원래 체크아웃에서 내가 되돌린 것은 내 미커밋 변경 4개 파일뿐이다.
 
 ## 9. 후속: 여러 작업 폴더에서 동시에 작업하기

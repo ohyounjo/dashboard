@@ -86,14 +86,16 @@ def set_version(text: str, version: int) -> str:
     return out
 
 
-def migrate_text(file: str, text: str) -> tuple[str, int, list[str]]:
+def migrate_text(file: str, text: str, *, check: bool = False) -> tuple[str, int, list[str]]:
     """텍스트를 최신 버전으로 고친다. (새 텍스트, 고치기 전 버전, 한 일 목록). 이미 최신이면 한 일이 비어 있다."""
     doc = _top_level(text, file)
     steps: list[str] = []
-    if "version" not in doc:
+    inserted = "version" not in doc
+    if inserted:
         before = 1
         text = insert_version(text, before)
-        steps.append(f"`version: {before}`을 맨 위에 넣음")
+        if not check:
+            steps.append(f"`version: {before}`을 맨 위에 넣음")
     else:
         before = doc["version"]
         if isinstance(before, bool) or not isinstance(before, int) or before < 1:
@@ -109,7 +111,7 @@ def migrate_text(file: str, text: str) -> tuple[str, int, list[str]]:
         text = set_version(step(file, text), current + 1)
         steps.append(f"버전 {current} → {current + 1}")
         current += 1
-    if steps:
+    if steps or inserted:
         # 고친 결과가 여전히 YAML이고 버전이 맞는지 확인한다(변환 함수의 실수를 파일에 쓰기 전에 잡는다)
         after = _top_level(text, file).get("version")
         if after != CONFIG_VERSION:
@@ -130,7 +132,7 @@ def _write_atomic(path: Path, text: str) -> None:
 
 
 def migrate_project(root: Path, *, check: bool = False) -> list[FileResult]:
-    """projects/<이름>/의 두 설정 파일을 고친다. check=True면 파일을 쓰지 않고 무엇이 바뀔지만 돌려준다.
+    """두 설정 파일을 고친다. check=True면 쓰지 않고 필수 버전 변환만 돌려준다.
 
     두 파일을 모두 변환해 본 뒤에 쓴다(한 파일이 실패하면 아무것도 쓰지 않는다).
     """
@@ -145,7 +147,7 @@ def migrate_project(root: Path, *, check: bool = False) -> list[FileResult]:
         try:
             with open(path, encoding="utf-8", newline="") as f:
                 text = f.read()
-            new_text, before, steps = migrate_text(file, text)
+            new_text, before, steps = migrate_text(file, text, check=check)
         except ConfigError as exc:
             errors += exc.errors
             continue

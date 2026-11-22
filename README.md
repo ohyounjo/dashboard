@@ -199,7 +199,7 @@ make apply
 - 설정에서 지운 차트는 Superset에서도 지워집니다(prune). sync가 만든 객체에는 "외부에서 관리됨" 표식이 붙어서, `.state/`를 지운 뒤에도 이 프로젝트의 이전 객체를 찾아 지웁니다. 화면에서 직접 만든 객체는 지우지 않습니다.
 - sync가 만든 대시보드·차트·데이터셋은 Superset 화면에서 고칠 수 없습니다(편집 버튼이 없거나 저장이 막힙니다). 화면에서 고친 내용이 다음 `make apply`에서 말없이 사라지는 일을 막기 위해서입니다. 막지 않으려면 `SYNC_LOCK_UI=0`으로 sync합니다.
 - 배치에는 차트 말고도 제목 `[{ header: 글 }]`, 글 `{ markdown: "글", width: 4 }`, 대시보드 안 탭 `- tabs: [{ label, rows: [[…]] }]`을 놓을 수 있고, `cross_filters: true`면 차트를 눌러 다른 차트를 거를 수 있습니다.
-- 필터는 `type`으로 네 가지를 씁니다: `select`(기본), `time_range`(기간), `number_range`(숫자 범위), `time_grain`(시간 단위). `default`(기본값), `parent`(상위 필터에 따라 선택지가 줄어드는 연쇄), `charts`(적용할 차트)를 줄 수 있습니다. 문법은 [contracts/chart-shorthand.md](contracts/chart-shorthand.md)의 "대시보드와 필터", 견본은 `projects/chart-gallery/`의 `shelf_blocks` 대시보드입니다. 임베드 화면에서는 기간 필터의 값을 바꿀 수 없고 `default`만 적용됩니다(guest 권한 제한).
+- 필터는 `type`으로 네 가지를 씁니다: `select`(기본), `time_range`(기간), `number_range`(숫자 범위), `time_grain`(시간 단위). `default`(기본값), `parent`(상위 필터에 따라 선택지가 줄어드는 연쇄), `charts`(적용할 차트)를 줄 수 있습니다. 문법은 [contracts/chart-shorthand.md](contracts/chart-shorthand.md)의 "대시보드와 필터", 견본은 `projects/chart-gallery/`의 `shelf_blocks` 대시보드입니다. 임베드 화면에서 기본 기간을 적용하고 기간을 변경할 수 있습니다. 차트에 시간 조건이 필요하며 기존 설치에는 변경된 guest 역할 초기화를 적용해야 합니다.
 - 생성된 asset 번들은 `.build/<이름>/bundle/`에 남아 diff로 볼 수 있습니다.
 
 ## 3. 탭과 위젯 바꾸기

@@ -1,6 +1,6 @@
 dashboard_title: 기존 6종
 description: null
-css: null
+css: 'html:has(#app[data-bootstrap*=''"embedded":'']), html:has(#app[data-bootstrap*=''"embedded":'']) body { height: auto !important; min-height: 0 !important; } #app[data-bootstrap*=''"embedded":''] [data-test="dashboard-filters-panel"] > div { height: 100%; } #app[data-bootstrap*=''"embedded":''] [data-test="filter-bar"] > .open:not([data-test]) { height: 100%; max-height: 100vh; min-height: 0; overflow: auto; }'
 slug: chart-gallery-shelf-basic
 certified_by: null
 certification_details: null

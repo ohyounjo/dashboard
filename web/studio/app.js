@@ -434,7 +434,8 @@ function planBody(plan) {
       const text = [
         S.planBatches((b.added || []).length, (b.removed || []).length, (b.changed || []).length),
         d.added != null && d.removed != null ? S.planRowsNoChanged(d.added, d.removed) : null,
-        d.status === "new" ? S.planStatus.new : null,
+        S.planStatus[d.status] || d.status,
+        d.rules_changed ? S.planRulesChanged : null,
         ...cols(d.columns),
       ].filter(Boolean).join(" · ");
       row(S.planData, d.table, text, "primary");

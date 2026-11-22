@@ -359,16 +359,123 @@ def _raw_types() -> dict[str, ChartType]:
     return {vt: ts[0] for vt, ts in seen.items() if len(ts) == 1 and ts[0].hook is None}
 
 
+def _table_label_values(chart: Mapping[str, Any], params: Mapping[str, Any], original: ChartType | None) -> tuple[ChartType, dict[str, tuple[Any, list]]] | None:
+    generated = build_params(chart) if original else {"viz_type": chart.get("viz_type")}
+    final = {**generated, **params}
+    mode = final.get("query_mode")
+    if mode not in (None, "raw", "aggregate"):
+        return None
+    names = (("all_columns",) if mode == "raw" else
+             ("groupby", "metrics", "percent_metrics") if mode == "aggregate" else
+             ("groupby", "all_columns", "metrics", "percent_metrics"))
+    fields = tuple(Field(name, "metrics" if name in ("metrics", "percent_metrics") else "columns") for name in names)
+    t = ChartType("table-query", "table", "표", fields, query_groups=(names,), merge_columns=True)
+    values = {}
+    for name in names:
+        value = final.get(name)
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            return None
+        if name in ("all_columns", "groupby"):
+            if any(not isinstance(item, str) for item in value):
+                return None
+        elif any(not (isinstance(item, str) or (isinstance(item, Mapping)
+                     and item.get("expressionType") == "SQL" and isinstance(item.get("sqlExpression"), str)
+                     and isinstance(item.get("label"), str))) for item in value):
+            return None
+        if name in params:
+            path = ["params", name]
+        elif original and original.viz == "table":
+            path = [{"all_columns": "columns"}.get(name, name)]
+        elif original and original.hook is None:
+            source = next((f for f in original.fields if f.emit and f.param_name == name and chart.get(f.name) is not None), None)
+            if source is None:
+                continue
+            path = [source.name]
+        else:
+            continue
+        values[name] = (value, path)
+    return t, values
+
+
+def _native_label_values(chart: Mapping[str, Any], params: Mapping[str, Any], original: ChartType | None) -> tuple[ChartType, dict[str, tuple[Any, list]]] | None:
+    # 갤러리의 문자열 열과 단일 지표 구성만 실측했다.
+    generated = build_params(chart) if original else {}
+    final = {**generated, **params}
+    shapes = {
+        "graph_chart": (("source", "target"), ("metric",)),
+        "tree_chart": (("id", "parent", "name"), ("metric",)),
+        "gantt_chart": (("start_time", "end_time", "y_axis", "series"), ()),
+    }
+    columns, metrics = shapes[final.get("viz_type", chart.get("viz_type"))]
+    if any(not isinstance(final.get(name), str) for name in columns):
+        return None
+    for name in metrics:
+        metric = final.get(name)
+        if isinstance(metric, str):
+            continue
+        if not (isinstance(metric, Mapping) and metric.get("expressionType") == "SQL"
+                and isinstance(metric.get("sqlExpression"), str) and isinstance(metric.get("label"), str)):
+            return None
+    names = (*columns, *metrics)
+    fields = tuple(Field(name, "column" if name in columns else "metric") for name in names)
+    t = ChartType("native-query", "native-query", "원본", fields, query_groups=(names,), merge_columns=True)
+    values = {}
+    for name in names:
+        if name in params:
+            path = ["params", name]
+        else:
+            source = next((f for f in original.fields if f.emit and f.param_name == name and chart.get(f.name) is not None), None) if original and not original.hook else None
+            if source is None:
+                return None
+            path = [source.name]
+        values[name] = (final[name], path)
+    return t, values
+
+
+def _query_hooks() -> dict[str, Callable]:
+    table = registry().get("table")
+    hooks: dict[str, Callable] = {name: _native_label_values for name in ("graph_chart", "tree_chart", "gantt_chart")}
+    if table:
+        hooks[table.viz_type] = _table_label_values
+    return hooks
+
+
 def _label_values(chart: Mapping[str, Any]) -> tuple[ChartType, dict[str, tuple[Any, list]]] | None:
     """(유형, {필드: (값, 차트 기준 경로)}). 라벨 kind 필드만.
 
-    축약 차트는 필드 값을 쓰되, params가 그 필드의 파라미터를 덮어쓰면 params 값을 쓴다(params가 이긴다. hook 유형은
-    파라미터와 필드가 1:1이 아니므로 필드 값만 본다). 원본 차트는 viz_type이 같은 유형의 파라미터 이름으로 params를 읽는다.
-    판단할 수 없는 원본 차트(레지스트리에 없는 viz_type, hook 유형)는 None.
+    최종 viz_type과 params의 얕은 덮어쓰기를 반영하고 원래 설정 경로를 보존한다.
+    판단할 수 없는 원본 유형은 None.
     """
     params = chart.get("params") or {}
+    original = registry().get(chart.get("viz"))
+    actual_viz = params.get("viz_type", original.viz_type if original else chart.get("viz_type"))
+    if not isinstance(actual_viz, str):
+        return None
+    hook = _query_hooks().get(actual_viz)
+    if hook is not None:
+        return hook(chart, params, original)
     if "viz" in chart:
-        t = registry()[chart["viz"]]
+        original = registry()[chart["viz"]]
+        effective_type = params.get("viz_type", original.viz_type)
+        t = original if effective_type == original.viz_type else _raw_types().get(effective_type)
+        if t is None:
+            return None
+        if t is not original:
+            generated = build_params(chart)
+            merged = {**generated, **params}
+            values = {}
+            for f in t.fields:
+                if f.kind in LABEL_KINDS and f.emit and merged.get(f.param_name) is not None:
+                    # A generated field can only be traced when its source mapping is unambiguous.
+                    if f.param_name in params:
+                        values[f.name] = (merged[f.param_name], ["params", f.param_name])
+                    else:
+                        source = next((x for x in original.fields if x.emit and x.param_name == f.param_name), None)
+                        if source and chart.get(source.name) is not None:
+                            values[f.name] = (merged[f.param_name], [source.name])
+            return t, values
         values: dict[str, tuple[Any, list]] = {}
         for f in t.fields:
             if f.kind not in LABEL_KINDS:
@@ -378,7 +485,7 @@ def _label_values(chart: Mapping[str, Any]) -> tuple[ChartType, dict[str, tuple[
             elif chart.get(f.name) is not None:
                 values[f.name] = (chart[f.name], [f.name])
         return t, values
-    raw_type = _raw_types().get(chart.get("viz_type"))
+    raw_type = _raw_types().get(actual_viz)
     if raw_type is None:
         return None
     return raw_type, {f.name: (params[f.param_name], ["params", f.param_name])
@@ -428,7 +535,7 @@ def label_conflicts(chart: Mapping[str, Any], metric_labels: Mapping[str, str] |
     for group in t.query_groups:
         entries: list[tuple[str, list, str | None]] = []   # (Superset 라벨, 경로, 표시 이름으로 바뀐 지표 이름)
         columns_seen: set[str] = set()
-        metrics_seen: set[str] = set()
+        metrics_seen: dict[str, tuple[Any, list]] = {}
         for name in group:
             if name not in values:
                 continue
@@ -444,9 +551,28 @@ def label_conflicts(chart: Mapping[str, Any], metric_labels: Mapping[str, str] |
                     entries.append((label, path, None))
                 else:
                     pair = _metric_label(item, verbose)
-                    if pair is None or pair[0] in metrics_seen:
+                    if pair is None:
                         continue
-                    metrics_seen.add(pair[0])
+                    previous = metrics_seen.get(pair[0])
+                    if previous is not None:
+                        first, first_path = previous
+                        def definition(value: Any) -> Any:
+                            if isinstance(value, str):
+                                return ("stored", value)
+                            if isinstance(value, Mapping) and set(value) == {"sql", "label"}:
+                                return ("sql", value["sql"])
+                            if isinstance(value, Mapping) and value.get("expressionType") == "SQL" and value.get("label") and isinstance(value.get("sqlExpression"), str):
+                                return ("sql", value["sqlExpression"])
+                            return None
+                        left, right = definition(first), definition(item)
+                        if left is not None and right is not None and left != right:
+                            reason = (f"지표 라벨 '{pair[0]}'로 서로 다른 지표가 겹침({_fmt_path(first_path)}, {_fmt_path(path)}). "
+                                      "Superset이 첫 지표만 보내므로 각 지표에 고유한 라벨을 쓰세요.")
+                            conflict = (path, reason)
+                            if conflict not in out:
+                                out.append(conflict)
+                        continue
+                    metrics_seen[pair[0]] = (item, path)
                     entries.append((pair[1], path, pair[0] if pair[0] != pair[1] else None))
         by_label: dict[str, list[tuple[list, str | None]]] = {}
         for label, path, renamed in entries:
