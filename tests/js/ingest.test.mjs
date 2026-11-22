@@ -2,26 +2,31 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  fileStem, pairFiles, mergeFiles, progressRatio, filesForError, aliasesToSave,
+  isSupportedIngestFile, fileStem, pairFiles, mergeFiles, progressRatio, filesForError, aliasesToSave,
   LARGE_BATCH_ROWS, previewInsertRows, isLargeBatchPreview,
+  RESUMABLE_THRESHOLD_BYTES, RESUMABLE_CHUNK_BYTES, shouldUseResumable, nextChunkRange, uploadProgressRatio,
 } from "../../web/shared/ingest.js";
 
 const TABLES = ["entries", "events", "line_items", "Marks"];
 
-test("파일 이름의 확장자와 끝의 (1)을 뺀다", () => {
+test("지원 확장자(.csv, .xlsx)와 확장자·(1) 제거", () => {
+  assert.equal(isSupportedIngestFile("entries.csv"), true);
+  assert.equal(isSupportedIngestFile("entries.XLSX"), true);
+  assert.equal(isSupportedIngestFile("entries.xls"), false);
   assert.equal(fileStem("entries.csv"), "entries");
   assert.equal(fileStem("entries.CSV"), "entries");
-  assert.equal(fileStem("entries (2).csv"), "entries");
+  assert.equal(fileStem("entries.xlsx"), "entries");
+  assert.equal(fileStem("entries (2).xlsx"), "entries");
   assert.equal(fileStem("a.b.csv"), "a.b");
 });
 
 test("짝짓기: 같은 이름이면 exact(서버가 map 없이도 받는 경우)", () => {
-  assert.deepEqual(pairFiles(["entries.csv", "events.csv"], TABLES),
-    [{ name: "entries.csv", table: "entries", how: "exact" }, { name: "events.csv", table: "events", how: "exact" }]);
+  assert.deepEqual(pairFiles(["entries.csv", "events.xlsx"], TABLES),
+    [{ name: "entries.csv", table: "entries", how: "exact" }, { name: "events.xlsx", table: "events", how: "exact" }]);
 });
 
 test("짝짓기: 대소문자·공백·_·-·(1) 차이는 loose로 맞춘다", () => {
-  assert.deepEqual(pairFiles(["Line Items.csv", "line-items (1).csv", "MARKS.csv"], TABLES).map((p) => [p.table, p.how]),
+  assert.deepEqual(pairFiles(["Line Items.csv", "line-items (1).xlsx", "MARKS.csv"], TABLES).map((p) => [p.table, p.how]),
     [["line_items", "loose"], ["line_items", "loose"], ["Marks", "loose"]]);
 });
 
@@ -74,4 +79,15 @@ test("대용량 미리보기 안내 기준(499,999 / 500,000행 경계, 여러 �
   assert.equal(isLargeBatchPreview([{ rows: { total: 250_000, invalid: 0 } }, { rows: { total: 249_999, invalid: 0 } }]), false);
   assert.equal(isLargeBatchPreview([{ rows: { total: 250_000, invalid: 0 } }, { rows: { total: 250_000, invalid: 0 } }]), true);
   assert.equal(isLargeBatchPreview(null), false);
+});
+
+test("이어 올리기 임계값·조각 범위·진행 비율 계산", () => {
+  assert.equal(shouldUseResumable(RESUMABLE_THRESHOLD_BYTES - 1), false);
+  assert.equal(shouldUseResumable(RESUMABLE_THRESHOLD_BYTES), true);
+  assert.deepEqual(nextChunkRange(0, 1000, 400), { start: 0, end: 400, isLast: false });
+  assert.deepEqual(nextChunkRange(800, 1000, 400), { start: 800, end: 1000, isLast: true });
+  assert.equal(nextChunkRange(1000, 1000, 400), null);
+  assert.equal(uploadProgressRatio(250, 1000), 0.25);
+  assert.equal(uploadProgressRatio(0, 0), 0);
+  assert.equal(RESUMABLE_CHUNK_BYTES, 4 * 1024 * 1024);
 });

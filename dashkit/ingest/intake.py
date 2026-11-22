@@ -16,8 +16,10 @@ from __future__ import annotations
 import codecs
 import csv
 import difflib
+import gzip
 import io
 import re
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, Callable, Iterator, Mapping, Sequence
@@ -84,6 +86,9 @@ def _utf8_ok(path: Path) -> bool:
             decoder.decode(b"", final=True)
     except UnicodeDecodeError:
         return False
+    except (gzip.BadGzipFile, EOFError, zlib.error, OSError) as exc:
+        raise IntakeError("invalid_csv", "CSV 파일을 읽을 수 없습니다",
+                          [f"{path.name}:1:-: 압축 해제 또는 파일 읽기 오류 ({exc})"]) from None
     return True
 
 
@@ -115,7 +120,11 @@ class CsvParser(Parser):
             self.encoding = "utf-8"
         else:
             self.encoding = "utf-8" if _utf8_ok(path) else "cp949"
-        raw = batches.open_binary(path)
+        try:
+            raw = batches.open_binary(path)
+        except (gzip.BadGzipFile, EOFError, zlib.error, OSError) as exc:
+            raise IntakeError("invalid_csv", "CSV 파일을 열 수 없습니다",
+                              [f"{name}:1:-: 압축 해제 또는 파일 열기 오류 ({exc})"]) from None
         self._raw_file = getattr(raw, "fileobj", None) or raw     # gzip이면 바깥 파일
         try:
             self._size: int | None = path.stat().st_size
@@ -135,15 +144,25 @@ class CsvParser(Parser):
         try:
             first = self._text.readline()
         except UnicodeDecodeError as exc:
+            self.close()
             raise IntakeError("invalid_csv", "CSV를 읽을 수 없습니다",
                               [f"{self.name}:1:-: UTF-8이 아님 ({exc.reason}, 바이트 위치 {exc.start})"]) from None
+        except (gzip.BadGzipFile, EOFError, zlib.error, OSError) as exc:
+            self.close()
+            raise IntakeError("invalid_csv", "CSV 파일을 읽을 수 없습니다",
+                              [f"{self.name}:1:-: 압축 해제 또는 파일 읽기 오류 ({exc})"]) from None
         self.delimiter = "," if self.strict else _sniff_delimiter(first)
         rest = self._text
         self._reader = csv.reader(_chain(first, rest), delimiter=self.delimiter)
         try:
             header = next(self._reader, None)
         except csv.Error as exc:
+            self.close()
             raise IntakeError("invalid_csv", "CSV를 읽을 수 없습니다", [f"{self.name}:1:-: CSV 문법 오류: {exc}"]) from None
+        except (gzip.BadGzipFile, EOFError, zlib.error, OSError) as exc:
+            self.close()
+            raise IntakeError("invalid_csv", "CSV 파일을 읽을 수 없습니다",
+                              [f"{self.name}:1:-: 압축 해제 또는 파일 읽기 오류 ({exc})"]) from None
         if not header or all(h.strip() == "" for h in header):
             raise IntakeError("invalid_csv", "CSV를 읽을 수 없습니다", [f"{self.name}:1:-: 머리글이 없음"])
         self._header = [h.strip() for h in header]
@@ -170,6 +189,10 @@ class CsvParser(Parser):
                 at = self._prev_end + 1
                 yield at, RowError(self.where(at, "-"), f"UTF-8이 아님 ({exc.reason}, 바이트 위치 {exc.start})",
                                    fatal=True)
+                return
+            except (gzip.BadGzipFile, EOFError, zlib.error, OSError) as exc:
+                at = self._prev_end + 1
+                yield at, RowError(self.where(at, "-"), f"압축 해제 또는 파일 읽기 오류: {exc}", fatal=True)
                 return
             line = self._prev_end + 1
             self._prev_end = reader.line_num
@@ -263,6 +286,50 @@ PARSERS: dict[str, Callable[..., Parser]] = {
     "csv": CsvParser,
     "rows": RowsParser,
 }
+
+
+_SENSITIVE_COL_PATTERNS = (
+    re.compile(r"^(?P<prefix>rows\[\d+\]\.(?P<col>[^:\s]+): )(?P<reason>.+)$", re.DOTALL),
+    re.compile(r"^(?P<prefix>.+?:(?P<col>[^:\s]+): )(?P<reason>.+)$", re.DOTALL),
+)
+_QUOTED_REASON_RE = re.compile(
+    r"^(?P<head>[^']*)'(?P<val>.*)'(?P<tail>\s+\((?:pattern [^']*|허용: [^']*)\)|가 없음)?$",
+    re.DOTALL,
+)
+
+
+def _mask_quoted_reason(reason: str) -> str:
+    m = _QUOTED_REASON_RE.match(reason)
+    if not m:
+        return reason
+    return f"{m.group('head')}'***'{m.group('tail') or ''}"
+
+
+def redact_sensitive_errors(table: Mapping[str, Any], errors: Sequence[str]) -> list[str]:
+    """schema.yaml에서 sensitive: true가 설정된 열의 오류 메시지에서 원문 값을 '***'로 마스킹한다."""
+    cols = table.get("columns") or {}
+    sensitive = {c for c, spec in cols.items() if isinstance(spec, Mapping) and spec.get("sensitive")}
+    if not sensitive:
+        return list(errors)
+    pk_sensitive = any(k in sensitive for k in (table.get("primary_key") or []))
+    out: list[str] = []
+    for err in errors:
+        text = str(err)
+        if "원래 칸:" in text:
+            head, _, _tail = text.partition("원래 칸:")
+            text = f"{head}원래 칸: ***"
+        if pk_sensitive and "기본 키 중복 (" in text:
+            text = re.sub(r"기본 키 중복 \(.*?(, 처음 나온 )", r"기본 키 중복 (***\1", text, flags=re.DOTALL)
+        if pk_sensitive and ": 이미 있는 키 " in text:
+            head, _, _tail = text.partition(": 이미 있는 키 ")
+            text = f"{head}: 이미 있는 키 ***"
+        for pat in _SENSITIVE_COL_PATTERNS:
+            m = pat.match(text)
+            if m and any(c in sensitive for c in m.group("col").split(",")):
+                text = m.group("prefix") + _mask_quoted_reason(m.group("reason"))
+                break
+        out.append(text)
+    return out
 
 
 class RowError:
@@ -435,18 +502,21 @@ class Intake:
         self.strict = strict
         self.report = Report()
         raw_header = parser.header()
+        header_row = getattr(parser, "header_row", 1)
+        is_file_like = parser.kind in ("csv", "xlsx", "cursor")
         if strict:
             dup = [h for i, h in enumerate(raw_header) if h in raw_header[:i]]
-            errs = [parser.where(1, h) + ": 머리글에 같은 열이 두 번 있음" for h in dup] if parser.kind == "csv" else []
+            errs = [parser.where(header_row, h) + ": 머리글에 같은 열이 두 번 있음" for h in dup] if is_file_like else []
         else:
             errs = []
         self.match = match_header(table, raw_header, labels=labels, overrides=overrides, strict=strict,
-                                  where=lambda h: parser.where(1, h) if parser.kind == "csv" else f"rows.{h}")
+                                  where=lambda h: parser.where(header_row, h) if is_file_like else f"rows.{h}")
         if strict and self.match.unknown:
-            errs += [parser.where(1, u["header"] or "(빈 이름)") + ": schema.yaml에 없는 열" for u in self.match.unknown]
+            errs += [parser.where(header_row, u["header"] or "(빈 이름)") + ": schema.yaml에 없는 열" for u in self.match.unknown]
         errs += self.match.errors
         if errs:
-            raise IntakeError("invalid_csv" if parser.kind == "csv" else "invalid_rows", "머리글이 올바르지 않습니다", errs)
+            detail = "invalid_csv" if parser.kind in ("csv", "xlsx") else "invalid_rows"
+            raise IntakeError(detail, "머리글이 올바르지 않습니다", errs)
         if self.match.unknown:
             raise IntakeError("unknown_columns", "스키마의 열에 맞지 않는 머리글이 있습니다",
                               columns=self.match.unknown, table=table_name)
@@ -466,12 +536,14 @@ class Intake:
         """(위치, 정규형 값, 파이썬 값). 검증 오류가 있는 행은 파이썬 값이 None이고 오류는 report에 쌓인다."""
         where = self.parser.where
         report = self.report
+        sensitive = {c for c, s in self.table["columns"].items() if isinstance(s, Mapping) and s.get("sensitive")}
         try:
             for at, record in self.parser.rows():
                 report.total += 1
                 if isinstance(record, RowError):
                     report.invalid += 1
-                    report.error(f"{record.where}: {record.reason}")
+                    redacted = redact_sensitive_errors(self.table, [f"{record.where}: {record.reason}"])[0]
+                    report.error(redacted)
                     self.last_problems = [record.reason]
                     if record.fatal:
                         report.fatal = True
@@ -480,7 +552,10 @@ class Intake:
                     if record.raw is not None:
                         # 칸을 정규형 머리글 자리에 놓고, 개수가 달라 놓지 못한 칸은 원래 줄 그대로 이유에 덧붙인다
                         values = [record.raw[i] if i < len(record.raw) else "" for i in self._take]
-                        self.last_problems = [record.reason, "원래 칸: " + " | ".join(record.raw)]
+                        if sensitive:
+                            self.last_problems = [record.reason, "원래 칸: ***"]
+                        else:
+                            self.last_problems = [record.reason, "원래 칸: " + " | ".join(record.raw)]
                     yield at, values, None
                     continue
                 values = [record[i] for i in self._take]
@@ -497,9 +572,19 @@ class Intake:
                 typed, problems = self.checker.check(values)
                 if problems:
                     report.invalid += 1
-                    self.last_problems = [f"{col}: {reason}" for col, reason in problems]
+                    self.last_problems = []
+                    value_by_col = dict(zip(self.header, values))
                     for col, reason in problems:
-                        report.error(f"{where(at, col)}: {reason}")
+                        if col in sensitive:
+                            raw_val = value_by_col.get(col, "")
+                            if raw_val and f"'{raw_val}'" in reason:
+                                shown_reason = reason.replace(f"'{raw_val}'", "'***'", 1)
+                            else:
+                                shown_reason = _mask_quoted_reason(reason)
+                        else:
+                            shown_reason = reason
+                        self.last_problems.append(f"{col}: {shown_reason}")
+                        report.error(f"{where(at, col)}: {shown_reason}")
                     yield at, values, None
                     continue
                 yield at, values, typed
@@ -509,4 +594,11 @@ class Intake:
 
     def close(self) -> None:
         self.parser.close()
+
+
+from .db_import import CursorParser  # noqa: E402
+from .xlsx import XlsxParser  # noqa: E402
+
+PARSERS["xlsx"] = XlsxParser
+PARSERS["cursor"] = CursorParser
 

@@ -4,6 +4,7 @@
 // 문구는 strings.js의 S.admin.data에만 둔다.
 import { h } from "../common.js";
 import { fileDrop, filePicker, uid } from "../shared/dom.js";
+import * as I from "../shared/ingest.js";
 import * as St from "../shared/structure.js";
 import { T, ApiFail, api, apiForm, checkbox } from "./kit.js";
 import { box, btn, pill, dataFailText, runJob, currentRevision } from "./datakit.js";
@@ -409,7 +410,7 @@ export function newTableWizard({ alive, onClose, onCreated }) {
   async function onFiles(files) {
     if (busy) return;
     const file = files[0];
-    if (!/\.csv$/i.test(file.name)) { out.replaceChildren(box("bad", D.csvOnly)); return; }
+    if (!I.isSupportedIngestFile(file.name)) { out.replaceChildren(box("bad", D.csvOnly)); return; }
     busy = true;
     out.replaceChildren(h("div", { class: "sk-note", role: "status", text: D.inferring }));
     try {

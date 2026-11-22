@@ -12,7 +12,7 @@ HOST_GID := $(shell id -g)
 TOOLS    := $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) tools
 
 .NOTPARALLEL:
-.PHONY: help info env env-secrets auth-init data-init manage manage-down ingest admin outbox up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down test-logs unit-image golden gen reset down logs dirs _test _test_run _guard_project _guard_test
+.PHONY: help info env env-secrets auth-init data-init manage manage-down ingest ingest-db ingest-watch admin outbox up check load sync apply plan migrate new studio studio-down studio-image test test-unit test-down test-logs unit-image golden gen reset down logs dirs _test _test_run _guard_project _guard_test
 
 # ---- 작업 폴더 식별자
 # 같은 컴퓨터에서 이 저장소의 복제본이나 git worktree 여러 개가 동시에 빌드·테스트할 수 있다. 브랜치는 소스 파일만
@@ -61,7 +61,7 @@ DEV_NAME := $(or $(COMPOSE_PROJECT_NAME),$(call env_value,COMPOSE_PROJECT_NAME,.
 # 폴더 이름이 같은 다른 복제본·worktree가 이미 같은 compose 프로젝트 이름으로 스택을 띄웠으면, 그 스택에 닿는 목표를
 # 모두 멈춘다(그대로 두면 그쪽 컨테이너를 이 폴더의 코드와 마운트로 다시 만들거나, 그쪽 DB에 적재하거나, 내려 버린다).
 # 각 목표의 실행부는 이 확인이 통과한 뒤에만 돈다(.env를 보충하는 env-secrets도 포함. 그 전에 도는 것은 폴더 만들기뿐이다).
-GUARDED := env-secrets up down reset logs check load sync apply plan migrate studio studio-down auth-init data-init manage manage-down ingest admin outbox
+GUARDED := env-secrets up down reset logs check load sync apply plan migrate studio studio-down auth-init data-init manage manage-down ingest ingest-db ingest-watch admin outbox
 $(GUARDED): _guard_project
 
 info:
@@ -84,7 +84,9 @@ help:
 	@echo "make load    CSV 적재"
 	@echo "make sync    Superset 반영"
 	@echo "make apply   check → load → sync (backend는 설정을 스스로 다시 읽는다)"
-	@echo "make ingest TABLE=<테이블> FILE=<CSV> [DRY_RUN=1] [SKIP_INVALID=1] [FORCE=1]   누적 테이블에 배치 하나 더하기"
+	@echo "make ingest TABLE=<테이블> FILE=<CSV|XLSX> [SHEET=<시트>] [DRY_RUN=1] [SKIP_INVALID=1] [FORCE=1]   누적 테이블에 배치 하나 더하기"
+	@echo "make ingest-db TABLE=<테이블> (SOURCE_TABLE=<원본>|QUERY_FILE=<파일>) [DSN_ENV=SOURCE_DB_DSN]   외부 원본 DB에서 가져오기"
+	@echo "make ingest-watch [DIR=<폴더>] [TABLE=<테이블>] [ONCE=1]   감시 폴더의 입고 파일 자동 적재"
 	@echo "make plan    적용 전에 바뀌는 것 보기(데이터, 뷰, Superset). 아무것도 바꾸지 않음"
 	@echo "make new NAME=<이름> FROM=<CSV 폴더>   CSV에서 프로젝트 초안 생성"
 	@echo "make migrate [CHECK=1]   설정 파일을 최신 설정 버전으로"
@@ -250,15 +252,34 @@ apply: check load sync
 	$(COMPOSE) up -d --no-deps backend
 	$(call wait_healthy,backend)
 
-# 누적(append) 테이블에 CSV 하나를 배치로 더한다(contracts/ingest.md). 파일이 있는 폴더를 읽기 전용으로 붙인다.
+# 누적(append) 테이블에 CSV 또는 xlsx 하나를 배치로 더한다(contracts/ingest.md). 파일이 있는 폴더를 읽기 전용으로 붙인다.
 # 운용 화면의 파일 적재와 같은 함수다(검증·미리보기·중복 확인·쓰기 잠금·끊김 복구가 같다)
 ingest: dirs
-	@test -n "$(TABLE)" -a -n "$(FILE)" || { echo "사용법: make ingest TABLE=<테이블> FILE=<CSV> [DRY_RUN=1] [SKIP_INVALID=1] [FORCE=1]" >&2; exit 2; }
+	@test -n "$(TABLE)" -a -n "$(FILE)" || { echo "사용법: make ingest TABLE=<테이블> FILE=<CSV|XLSX> [SHEET=<시트>] [DRY_RUN=1] [SKIP_INVALID=1] [FORCE=1]" >&2; exit 2; }
 	@dir=$$(cd -- "$$(dirname -- "$(FILE)")" 2>/dev/null && pwd) || { echo "FILE이 없음: $(FILE)" >&2; exit 2; }; \
 	base=$$(basename -- "$(FILE)"); \
 	$(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) -v "$$dir":/import:ro tools \
 	  python -m dashkit ingest --table "$(TABLE)" --file "/import/$$base" \
-	  $(if $(DRY_RUN),--dry-run) $(if $(SKIP_INVALID),--skip-invalid) $(if $(FORCE),--force)
+	  $(if $(SHEET),--sheet "$(SHEET)") $(if $(DRY_RUN),--dry-run) $(if $(SKIP_INVALID),--skip-invalid) $(if $(FORCE),--force)
+
+ingest-db: dirs
+	@test -n "$(TABLE)" || { echo "사용법: make ingest-db TABLE=<테이블> (SOURCE_TABLE=<원본>|QUERY_FILE=<파일>) [DSN_ENV=SOURCE_DB_DSN]" >&2; exit 2; }
+	@if [ -n "$(QUERY_FILE)" ]; then \
+	  qdir=$$(cd -- "$$(dirname -- "$(QUERY_FILE)")" 2>/dev/null && pwd) || { echo "QUERY_FILE이 없음: $(QUERY_FILE)" >&2; exit 2; }; \
+	  qbase=$$(basename -- "$(QUERY_FILE)"); \
+	  $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) -v "$$qdir":/import:ro tools \
+	    python -m dashkit ingest-db --table "$(TABLE)" --query-file "/import/$$qbase" \
+	    $(if $(DSN_ENV),--dsn-env "$(DSN_ENV)") $(if $(DRY_RUN),--dry-run) $(if $(SKIP_INVALID),--skip-invalid) $(if $(FORCE),--force); \
+	else \
+	  $(COMPOSE) run --rm --user $(HOST_UID):$(HOST_GID) tools \
+	    python -m dashkit ingest-db --table "$(TABLE)" \
+	    $(if $(SOURCE_TABLE),--source-table "$(SOURCE_TABLE)") \
+	    $(if $(DSN_ENV),--dsn-env "$(DSN_ENV)") $(if $(DRY_RUN),--dry-run) $(if $(SKIP_INVALID),--skip-invalid) $(if $(FORCE),--force); \
+	fi
+
+ingest-watch: dirs
+	$(TOOLS) python -m dashkit ingest-watch \
+	  $(if $(DIR),--dir "$(DIR)") $(if $(TABLE),--table "$(TABLE)") $(if $(ONCE),--once)
 
 # 적용 전에 무엇이 바뀌는지 본다(데이터, 뷰, Superset). 아무것도 바꾸지 않는다. contracts/plan.md
 plan: env-secrets

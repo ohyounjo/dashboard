@@ -10,7 +10,7 @@ import * as Q from "../../shared/query.js";
 import { rowsView } from "../rows.js";
 import { box, btn, pill, jobText, jobBox, dataFailText as failText } from "../datakit.js";
 import { newTableWizard, addColumnCard, columnRuleCard, dropColumnCard, usagePanel, dropTableCard, compactTable } from "../structure.js";
-import { T, view, session, ApiFail, api, apiForm, waitJob, notice, head, checkbox, pagedTable, detailId, isManageFeature } from "../kit.js";
+import { T, view, session, ApiFail, api, apiForm, apiPatchBytes, waitJob, notice, head, checkbox, pagedTable, detailId, isManageFeature } from "../kit.js";
 
 const D = T.data;
 const BASE = "/api/manage";
@@ -236,10 +236,10 @@ function bulkScreen(tables, alive, onClose) {
   const changed = () => { flow.reset(); draw(); };
 
   function add(list) {
-    const csv = list.filter((f) => /\.csv$/i.test(f.name));
+    const supported = list.filter((f) => I.isSupportedIngestFile(f.name));
     const notes = [];
-    if (csv.length < list.length) notes.push(D.csvOnlySkipped(list.length - csv.length));
-    const merged = I.mergeFiles(files.map((x) => x.file), csv);
+    if (supported.length < list.length) notes.push(D.csvOnlySkipped(list.length - supported.length));
+    const merged = I.mergeFiles(files.map((x) => x.file), supported);
     if (merged.replaced.length) notes.push(D.filesReplaced(merged.replaced));
     const chosen = new Map(files.map((x) => [x.name, x.table]));
     const pairs = I.pairFiles(merged.files.map((f) => f.name), targets);
@@ -874,11 +874,69 @@ function addScreen(t, alive, onClose) {
  *  src: {kind: "rows", rows, method} | {kind: "file", file}. onCells(오류 줄들)은 칸 오류를 그 칸에 보이게 한다. */
 function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFileTab }) {
   const path = `${tablePath(t.name)}/batches`;
-  let state = { src: null, opts: {}, preview: null };
+  let state = { src: null, opts: {}, preview: null, uploadSession: null };
   // 요청 세대 번호. 미리보기·넣기를 새로 시작할 때마다 오르고, 늦게 온 앞 요청의 응답은 버린다
   let gen = 0;
   const busy = (content) => out.replaceChildren(typeof content === "string" ? h("div", { class: "sk-note", role: "status", text: content }) : content);
   const settle = (el) => { out.replaceChildren(el); el.tabIndex = -1; el.focus({ preventScroll: false }); };
+
+  const uploadPath = (id) => `${BASE}/uploads/${encodeURIComponent(id)}`;
+  const uploadProgressBox = (offset, totalSize) => {
+    const ratio = I.uploadProgressRatio(offset, totalSize);
+    const pct = Math.round(ratio * 100);
+    return h("div", { class: "d-progress", role: "status" },
+      h("span", { text: D.uploadProgress(pct, D.size(offset), D.size(totalSize)) }),
+      h("progress", { max: "1000", value: String(Math.round(ratio * 1000)), "aria-label": D.progressLabel(pct) }));
+  };
+
+  async function cancelActiveUpload() {
+    const sess = state.uploadSession;
+    state.uploadSession = null;
+    if (sess && sess.upload_id) {
+      try { await api("DELETE", uploadPath(sess.upload_id), {}); } catch (e) { /* 만료·이미 삭제된 세션 무시 */ }
+    }
+  }
+
+  async function uploadResumable(file, existingSession, current, show) {
+    let sess = existingSession;
+    if (!sess || !sess.upload_id) {
+      sess = await api("POST", `${BASE}/uploads`, { table: t.name, filename: file.name, total_size: file.size });
+      state.uploadSession = sess;
+    } else {
+      sess = await api("GET", uploadPath(sess.upload_id));
+      state.uploadSession = sess;
+    }
+    const total = Number(sess.total_size || file.size);
+    const chunkLimit = Math.min(Number(sess.chunk_max_bytes || I.RESUMABLE_CHUNK_BYTES), I.RESUMABLE_CHUNK_BYTES);
+    let offset = Number(sess.offset || 0);
+    let retries = 0;
+    while (offset < total && sess.status !== "ready") {
+      if (!current()) return null;
+      show(uploadProgressBox(offset, total));
+      const range = I.nextChunkRange(offset, total, chunkLimit);
+      if (!range) break;
+      try {
+        sess = await apiPatchBytes(uploadPath(sess.upload_id), file.slice(range.start, range.end), { "Upload-Offset": String(range.start) });
+        state.uploadSession = sess;
+        offset = Number(sess.offset || 0);
+        retries = 0;
+      } catch (err) {
+        const transient = err instanceof ApiFail && (err.status === 0 || err.status >= 500 || err.detail === "offset_mismatch" || err.detail === "upload_in_progress");
+        if (!transient || retries >= 3) {
+          if (err instanceof ApiFail && err.detail !== "upload_expired") err.resumableSession = sess;
+          throw err;
+        }
+        retries += 1;
+        await new Promise((resolve) => { setTimeout(resolve, 400 * retries); });
+        if (!current()) return null;
+        sess = await api("GET", uploadPath(sess.upload_id));
+        state.uploadSession = sess;
+        offset = Number(sess.offset || 0);
+      }
+    }
+    if (current()) show(uploadProgressBox(total, total));
+    return sess;
+  }
 
   async function send(src, { dry, columns, force, skip_invalid: skip }, prev = null, my = gen) {
     // 이 요청이 아직 마지막 요청일 때만 화면을 바꾸고 작업을 지켜본다(늦게 온 앞 요청의 진행 표시가 결과를 덮지 않게)
@@ -887,23 +945,31 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
     const extra = { ...(columns ? { columns } : {}), ...(force ? { force: true } : {}), ...(skip && !dry ? { skip_invalid: true } : {}) };
     if (src.kind === "rows") return api("POST", path, { rows: src.rows, method: src.method, dry_run: dry, ...extra });
     let r = null;
-    if (!dry && prev && prev.upload_id) {
+    const heldId = (prev && prev.upload_id) || (state.uploadSession && state.uploadSession.status === "ready" ? state.uploadSession.upload_id : null);
+    if (heldId) {
       try {
-        r = await api("POST", path, { upload_id: prev.upload_id, ...extra });
+        r = await api("POST", path, { upload_id: heldId, dry_run: dry, ...extra });
       } catch (err) {
         if (!(err instanceof ApiFail && err.detail === "upload_expired")) throw err;
-        r = null;          // 잡아 둔 파일이 없어졌다 → 같은 파일을 다시 올려 넣는다(미리보기는 이미 봤다)
+        state.uploadSession = null;
+        r = null;          // 잡아 둔 파일이 없어졌다 → 같은 파일을 다시 올려 넣는다
       }
     }
     if (!r) {
-      show(D.uploading);
-      const form = new FormData();
-      form.append("file", src.file, src.file.name);
-      if (dry) form.append("dry_run", "1");
-      if (force) form.append("force", "1");
-      if (skip && !dry) form.append("skip_invalid", "1");
-      if (columns) form.append("columns", JSON.stringify(columns));
-      r = await apiForm(path, form);
+      if (I.shouldUseResumable(src.file.size) || state.uploadSession) {
+        const sess = await uploadResumable(src.file, state.uploadSession, current, show);
+        if (!sess || !current()) return null;
+        r = await api("POST", path, { upload_id: sess.upload_id, dry_run: dry, ...extra });
+      } else {
+        show(D.uploading);
+        const form = new FormData();
+        form.append("file", src.file, src.file.name);
+        if (dry) form.append("dry_run", "1");
+        if (force) form.append("force", "1");
+        if (skip && !dry) form.append("skip_invalid", "1");
+        if (columns) form.append("columns", JSON.stringify(columns));
+        r = await apiForm(path, form);
+      }
     }
     if (!r || !r.job) return r;
     show(jobBox(r.job, { keepsRunning: true }));
@@ -913,7 +979,9 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
 
   async function preview(src, opts = {}) {
     const my = ++gen;
-    state = { src, opts, preview: null };
+    const keepSess = state.src && src.kind === "file" && state.src.kind === "file" && state.src.file === src.file ? state.uploadSession : null;
+    if (state.uploadSession && !keepSess) await cancelActiveUpload();
+    state = { src, opts, preview: null, uploadSession: keepSess };
     onCells([]);
     busy(src.kind === "file" ? D.uploading : D.previewing);
     let r;
@@ -925,6 +993,9 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
     }
     if (!alive() || !r || my !== gen) return;
     state.preview = r;
+    if (r.upload_id && (!state.uploadSession || state.uploadSession.upload_id !== r.upload_id)) {
+      state.uploadSession = { upload_id: r.upload_id, status: "ready" };
+    }
     const b = (r.batches || [])[0] || {};
     onCells(b.errors || []);
     // 넣기 버튼은 이 미리보기에 쓴 입력·옵션·업로드에 묶는다(그 뒤 입력이 바뀌어도 본 것만 넣는다)
@@ -935,12 +1006,12 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
     const canSkip = !r.ok && rows.invalid > 0 && rows.total > rows.invalid
       && (src.kind === "file" ? !!r.upload_id : src.method === "paste");
     const skipBtn = canSkip ? btn(D.insertSkipping(rows.total - rows.invalid), () => commit(shown.src, { ...shown.opts, skip_invalid: true }, shown.preview), "primary") : null;
-    settle(resultBox(r, { preview: true, actions: [commitBtn, skipBtn, btn(D.cancel, () => { onCells([]); out.replaceChildren(); })] }));
+    settle(resultBox(r, { preview: true, actions: [commitBtn, skipBtn, btn(D.cancel, () => { onCells([]); cancelActiveUpload(); out.replaceChildren(); })] }));
   }
 
   async function commit(src = state.src, opts = state.opts, prev = null) {
     const my = ++gen;
-    state = { src, opts, preview: prev };
+    state = { src, opts, preview: prev, uploadSession: state.uploadSession };
     busy(D.inserting);
     let r;
     try {
@@ -950,6 +1021,7 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
       return null;
     }
     if (!alive() || !r || my !== gen) return null;
+    state.uploadSession = null;
     onCells([]);
     const b = (r.batches || [])[0] || {};
     const undo = b.file ? btn(D.undoJust, () => undoBatch(b.file, undo)) : null;
@@ -981,6 +1053,26 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
   }
 
   function failed(err, step) {
+    if (err && err.resumableSession && state.src && state.src.kind === "file") {
+      const sess = err.resumableSession;
+      const offset = Number(sess.offset || 0);
+      const total = Number(sess.total_size || state.src.file.size || 0);
+      const pct = Math.round(I.uploadProgressRatio(offset, total) * 100);
+      settle(box("warn", D.uploadPaused(pct, D.size(offset), D.size(total)), {
+        body: h("p", { text: failText(err) }),
+        actions: [
+          btn(D.resumeUpload, () => {
+            if (step === "preview") preview(state.src, state.opts);
+            else commit(state.src, state.opts, state.preview);
+          }, "primary"),
+          btn(D.cancelUpload, async () => {
+            await cancelActiveUpload();
+            if (alive()) settle(box("neutral", D.uploadCancelled));
+          }),
+        ],
+      }));
+      return;
+    }
     const body = (err instanceof ApiFail && err.body) || {};
     if (err instanceof ApiFail && err.detail === "unknown_columns" && Array.isArray(body.columns)) {
       settle(headerMatchBox(body.columns));
@@ -1021,7 +1113,7 @@ function makeFlow(t, { alive, out, onCells = () => {}, onDone = () => {}, toFile
   }
 
   // 입력을 비우거나 바꾸면 진행 중인 요청을 무효로 한다(늦게 온 응답이 비운 화면을 다시 채우지 않게)
-  return { preview, commit, reset: () => { gen += 1; state = { src: null, opts: {}, preview: null }; onCells([]); out.replaceChildren(); } };
+  return { preview, commit, reset: () => { gen += 1; cancelActiveUpload(); state = { src: null, opts: {}, preview: null, uploadSession: null }; onCells([]); out.replaceChildren(); } };
 }
 
 /** 미리보기·결과 상자(contracts/ingest.md "결과"). 한 테이블에 한 배치. */
@@ -1364,7 +1456,7 @@ function filePanel(t, { alive }) {
   const onFiles = (files) => {
     if (files.length > 1) note.set(D.oneFileOnly, "warn"); else note.set(null);
     const file = files[0];
-    if (!/\.csv$/i.test(file.name)) { note.set(D.csvOnly, "bad"); return; }
+    if (!I.isSupportedIngestFile(file.name)) { note.set(D.csvOnly, "bad"); return; }
     chosen.textContent = D.fileChosen(file.name, D.size(file.size));
     flow.preview({ kind: "file", file });
   };

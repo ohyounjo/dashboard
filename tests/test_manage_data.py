@@ -319,3 +319,93 @@ def test_lock_wait_separation_and_step_lock(who):
         code, body, _h = call("DELETE", f"/tables/entries/batches/{created_file}", who["operator1"])
         assert code == 200 and body["fast"]
     assert view_count() == before
+
+
+def test_xlsx_and_resumable_upload_end_to_end(who):
+    """통합 검증: .xlsx 업로드 및 이어 올리기(POST /uploads → PATCH → GET → 미리보기 → 확정) 결과 일치."""
+    import hashlib
+    from test_additional_intake_unit import make_xlsx_bytes
+
+    before = view_count()
+    # 1) .xlsx multipart 적재
+    xlsx_raw = make_xlsx_bytes([
+        {
+            "name": "Entries",
+            "rows": [
+                ["id", "group_id", "state", "amount", "on_day", "flag", "qty"],
+                ["E801", "g1", "open", "1,500", "2026-11-20", {"t": "b", "v": "1"}, "3"],
+            ],
+        }
+    ])
+    ctype, raw = multipart({"dry_run": "1"}, ("entries.xlsx", xlsx_raw))
+    code, body, _h = call("POST", "/tables/entries/batches", who["operator1"], raw=raw, ctype=ctype)
+    assert code == 202, body
+    job = wait_job(body["job"], who["operator1"])
+    assert job["status"] == "succeeded" and job["result"]["dry_run"]
+    assert job["result"]["batches"][0]["rows"]["inserted"] == 1
+    code, body, _h = call("POST", "/tables/entries/batches", who["operator1"], {"upload_id": job["result"]["upload_id"]})
+    assert code == 202
+    job_done = wait_job(body["job"], who["operator1"])
+    assert job_done["status"] == "succeeded"
+    xlsx_batch = job_done["result"]["batches"][0]["file"]
+    assert view_count() == before + 1
+
+    # 2) 이어 올리기: 중단 → GET 오프셋 조회 → 중복 조각 멱등 → 재개 → dry_run: true(실패 후에도 유지) → dry_run: false 확정
+    csv_bytes = b"ID,group_id,state,amount\nE802,g1,done,\"2,000\"\nE803,g2,open,500\n"
+    sha = hashlib.sha256(csv_bytes).hexdigest()
+    code, sess, _h = call("POST", "/uploads", who["operator1"], {
+        "table": "entries", "filename": "resume.csv", "total_size": len(csv_bytes), "sha256": sha,
+    })
+    assert code == 201 and sess["status"] == "receiving", sess
+    uid = sess["upload_id"]
+
+    # 1번째 조각 전송
+    p1 = csv_bytes[:20]
+    headers = {"Cookie": f"dashkit_session={who['operator1']}", "Content-Type": "application/octet-stream", "Upload-Offset": "0"}
+    code, r1, _h = http_full("PATCH", f"{WEB_URL}/api/manage/uploads/{uid}", headers=headers, raw=p1)
+    assert code == 200 and r1["offset"] == 20, r1
+
+    # 중단 후 GET 오프셋 조회
+    code, status_doc, r_hdrs = call("GET", f"/uploads/{uid}", who["operator1"])
+    assert code == 200 and status_doc["offset"] == 20 and r_hdrs.get("upload-offset") == "20"
+
+    # 중복 조각 재전송 → 200 멱등
+    code, r_dup, _h = http_full("PATCH", f"{WEB_URL}/api/manage/uploads/{uid}", headers=headers, raw=p1)
+    assert code == 200 and r_dup["offset"] == 20
+
+    # 건너뛴 오프셋 → 409 offset_mismatch
+    bad_hdrs = {"Cookie": f"dashkit_session={who['operator1']}", "Content-Type": "application/octet-stream", "Upload-Offset": "30"}
+    code, r_gap, _h = http_full("PATCH", f"{WEB_URL}/api/manage/uploads/{uid}", headers=bad_hdrs, raw=csv_bytes[30:])
+    assert code == 409 and r_gap["detail"] == "offset_mismatch" and r_gap["offset"] == 20
+
+    # 나머지 전송 → status: ready
+    hdrs2 = {"Cookie": f"dashkit_session={who['operator1']}", "Content-Type": "application/octet-stream", "Upload-Offset": "20"}
+    code, r2, _h = http_full("PATCH", f"{WEB_URL}/api/manage/uploads/{uid}", headers=hdrs2, raw=csv_bytes[20:])
+    assert code == 200 and r2["status"] == "ready" and r2["offset"] == len(csv_bytes), r2
+
+    # dry_run: true 미리보기
+    code, b_prev, _h = call("POST", "/tables/entries/batches", who["operator1"], {"upload_id": uid, "dry_run": True})
+    assert code == 202
+    j_prev = wait_job(b_prev["job"], who["operator1"])
+    assert j_prev["status"] == "succeeded" and j_prev["result"]["dry_run"]
+    assert j_prev["result"]["batches"][0]["rows"]["inserted"] == 2
+    assert view_count() == before + 1
+
+    # 미리보기 뒤에도 upload_id 유지 → 재업로드 없이 확정(dry_run: false)
+    code, b_commit, _h = call("POST", "/tables/entries/batches", who["operator1"], {"upload_id": uid, "dry_run": False})
+    assert code == 202
+    j_commit = wait_job(b_commit["job"], who["operator1"])
+    assert j_commit["status"] == "succeeded" and not j_commit["result"]["dry_run"]
+    resumed_batch = j_commit["result"]["batches"][0]["file"]
+    assert view_count() == before + 3
+
+    # 확정 후 임시 업로드 세션 삭제됨(410)
+    code, _, _ = call("GET", f"/uploads/{uid}", who["operator1"])
+    assert code == 410
+
+    # 정리(테스트 전 행 수로 복원)
+    code, body, _ = call("DELETE", f"/tables/entries/batches/{resumed_batch}", who["operator1"])
+    assert code == 200 and body["fast"]
+    code, body, _ = call("DELETE", f"/tables/entries/batches/{xlsx_batch}", who["operator1"])
+    assert code == 200 and body["fast"]
+    assert view_count() == before

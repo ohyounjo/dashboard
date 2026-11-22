@@ -184,7 +184,7 @@ def cmd_studio(args) -> int:
 
 
 def cmd_ingest(args) -> int:
-    """CSV 파일 하나를 누적 테이블에 더한다(contracts/ingest.md "더하기"). 관리 서비스의 파일 적재와 같은 함수다."""
+    """CSV 또는 xlsx 파일 하나를 누적 테이블에 더한다(contracts/ingest.md "더하기"). 관리 서비스의 파일 적재와 같은 함수다."""
     import json
     from pathlib import Path
 
@@ -195,8 +195,23 @@ def cmd_ingest(args) -> int:
     path = Path(args.file)
     if not path.is_file():
         return _fail("ingest 실패", [f"파일이 없음: {args.file}"])
+    low = path.name.lower()
+    is_xlsx = low.endswith(".xlsx")
+    source: dict[str, object] = {"kind": "xlsx" if is_xlsx else "csv", "path": path, "name": path.name}
+    if getattr(args, "sheet", None) is not None:
+        raw_sheet = str(args.sheet)
+        if raw_sheet.isdigit():
+            # 시트 이름이 숫자인 경우와 0-기반 번호를 모두 처리할 수 있도록 정수 변환은 파서 조회 전 확인한다
+            from .ingest.xlsx import XlsxParser
+            try:
+                XlsxParser(path, path.name, sheet=raw_sheet).header()
+                source["sheet"] = raw_sheet
+            except Exception:
+                source["sheet"] = int(raw_sheet)
+        else:
+            source["sheet"] = raw_sheet
     try:
-        result = ingest(name, [Item(args.table, {"kind": "csv", "path": path, "name": path.name})],
+        result = ingest(name, [Item(args.table, source)],
                         dry_run=args.dry_run, force=args.force, skip_invalid=args.skip_invalid,
                         wait_ms=LOCK_WAIT_MS)
     except IngestError as exc:
@@ -212,6 +227,89 @@ def cmd_ingest(args) -> int:
     for e in b["errors"]:
         print(f"  {e}", file=sys.stderr)
     return 0 if result["ok"] else 1
+
+
+def cmd_ingest_db(args) -> int:
+    """외부 원본 DB에서 읽기 전용 커서로 읽어 누적 테이블에 더한다(contracts/ingest.md)."""
+    import json
+    from pathlib import Path
+
+    from .ingest import IngestError
+    from .ingest.db_import import ingest_from_db
+    from .loader import LOCK_WAIT_MS
+
+    name = os.environ.get("PROJECT", "")
+    columns = None
+    if args.columns:
+        try:
+            columns = json.loads(args.columns)
+        except ValueError:
+            return _fail("ingest-db 실패", ["--columns는 JSON 객체({원본열: 대상열})여야 합니다"])
+    try:
+        result = ingest_from_db(
+            name,
+            args.table,
+            dsn_env=args.dsn_env,
+            source_table=args.source_table,
+            query_file=Path(args.query_file) if args.query_file else None,
+            columns=columns,
+            source_name=args.source_name,
+            dry_run=args.dry_run,
+            force=args.force,
+            skip_invalid=args.skip_invalid,
+            wait_ms=LOCK_WAIT_MS,
+        )
+    except IngestError as exc:
+        extra = [json.dumps(exc.extra, ensure_ascii=False, default=str)] if exc.extra and not exc.errors else []
+        return _fail(f"ingest-db 실패({exc.detail}): {exc.message}", (exc.errors or []) + extra)
+    b = result["batches"][0]
+    rows = b["rows"]
+    head = "미리보기(바꾸지 않음)" if args.dry_run else f"{args.table}/{b['file']}"
+    print(f"✔ ingest-db: {head}  +{rows.get('inserted', 0)} ~{rows.get('updated', 0)} "
+          f"건너뜀 {rows.get('skipped', 0)} 같음 {rows.get('unchanged', 0)} 오류 {rows.get('invalid', 0)}"
+          f" (읽은 행 {rows['total']})")
+    for e in b["errors"]:
+        print(f"  {e}", file=sys.stderr)
+    return 0 if result["ok"] else 1
+
+
+def cmd_ingest_watch(args) -> int:
+    """감시 폴더의 입고 파일을 읽어 누적 테이블에 더한다(contracts/ingest.md)."""
+    from pathlib import Path
+
+    from .ingest import IngestError
+    from .ingest.watch import watch_loop, watch_once
+    from .loader import LOCK_WAIT_MS
+
+    name = os.environ.get("PROJECT", "")
+    watch_dir = Path(args.dir) if args.dir else None
+    try:
+        if args.once:
+            stats = watch_once(
+                name,
+                watch_dir=watch_dir,
+                table=args.table,
+                settle_ms=args.settle_ms,
+                delete_done=args.delete_done,
+                keep_done=args.keep_done,
+                wait_ms=LOCK_WAIT_MS,
+            )
+            print(f"✔ ingest-watch --once: 처리 {stats['processed']}건 "
+                  f"(성공 {stats['succeeded']}, 실패 {stats['failed']}, 재시도 {stats['retrying']}, 건너뜀 {stats['skipped']})")
+            return 1 if stats["retrying"] > 0 else 0
+        watch_loop(
+            name,
+            watch_dir=watch_dir,
+            table=args.table,
+            interval=args.interval,
+            settle_ms=args.settle_ms,
+            delete_done=args.delete_done,
+            keep_done=args.keep_done,
+            wait_ms=LOCK_WAIT_MS,
+        )
+        return 0
+    except IngestError as exc:
+        return _fail(f"ingest-watch 실패({exc.detail}): {exc.message}", exc.errors or [])
 
 
 def _audit_cli(project: str, batch: dict, source_name: str, dry_run: bool) -> None:
@@ -270,13 +368,37 @@ def main(argv: list[str] | None = None) -> int:
     studio.add_argument("--host", default="0.0.0.0")
     studio.add_argument("--port", type=int, default=8090)
     studio.set_defaults(fn=cmd_studio)
-    ing = sub.add_parser("ingest", help="CSV 파일 하나를 누적(append) 테이블에 더한다")
+    ing = sub.add_parser("ingest", help="CSV 또는 xlsx 파일 하나를 누적(append) 테이블에 더한다")
     ing.add_argument("--table", required=True)
-    ing.add_argument("--file", required=True, help="CSV 파일(UTF-8 또는 CP949, 쉼표·탭·세미콜론)")
+    ing.add_argument("--file", required=True, help="CSV 또는 xlsx 파일")
+    ing.add_argument("--sheet", default=None, help="xlsx 시트 이름 또는 0-기반 번호")
     ing.add_argument("--dry-run", action="store_true", help="미리보기: 반영해 보고 되돌린다")
     ing.add_argument("--force", action="store_true", help="같은 내용의 배치가 있어도 넣는다")
     ing.add_argument("--skip-invalid", action="store_true", help="검증 오류가 난 행을 빼고 넣는다")
     ing.set_defaults(fn=cmd_ingest)
+
+    ing_db = sub.add_parser("ingest-db", help="외부 원본 DB에서 읽어 누적(append) 테이블에 더한다")
+    ing_db.add_argument("--table", required=True)
+    ing_db.add_argument("--dsn-env", default="SOURCE_DB_DSN", help="외부 DB 접속 문자열이 든 환경 변수 이름")
+    src_grp = ing_db.add_mutually_exclusive_group(required=True)
+    src_grp.add_argument("--source-table", help="원본 테이블([스키마.]테이블)")
+    src_grp.add_argument("--query-file", help="단일 SELECT 쿼리 SQL 파일 경로")
+    ing_db.add_argument("--columns", default=None, help='머리글 맞춤 JSON({"원본열": "대상열"})')
+    ing_db.add_argument("--source-name", default=None, help="감사 로그·오류 위치에 남길 원본 이름")
+    ing_db.add_argument("--dry-run", action="store_true", help="미리보기: 반영해 보고 되돌린다")
+    ing_db.add_argument("--force", action="store_true", help="같은 내용의 배치가 있어도 넣는다")
+    ing_db.add_argument("--skip-invalid", action="store_true", help="검증 오류가 난 행을 빼고 넣는다")
+    ing_db.set_defaults(fn=cmd_ingest_db)
+
+    ing_w = sub.add_parser("ingest-watch", help="감시 폴더의 입고 파일(.csv, .csv.gz, .xlsx)을 누적 테이블에 더한다")
+    ing_w.add_argument("--dir", default=None, help="감시할 폴더(기본 projects/<PROJECT>/data/_inbox/)")
+    ing_w.add_argument("--table", default=None, help="특정 테이블만 감시(--dir와 함께 쓰면 해당 폴더를 그 테이블용으로 감시)")
+    ing_w.add_argument("--once", action="store_true", help="1회 스캔 후 종료")
+    ing_w.add_argument("--interval", type=float, default=5.0, help="폴링 주기(초, 기본 5)")
+    ing_w.add_argument("--settle-ms", type=int, default=500, help="파일 크기·수정 시각 안정화 대기(밀리초, 기본 500)")
+    ing_w.add_argument("--delete-done", action="store_true", help="적재 성공한 파일을 _done/으로 옮기지 않고 삭제")
+    ing_w.add_argument("--keep-done", type=int, default=100, help="_done/에 보관할 최대 파일 수(기본 100)")
+    ing_w.set_defaults(fn=cmd_ingest_watch)
     manage = sub.add_parser("manage", help="관리 서비스(운용자의 데이터 운용 API, /api/manage)")
     manage.add_argument("--host", default="0.0.0.0")
     manage.add_argument("--port", type=int, default=8100)

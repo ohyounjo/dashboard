@@ -768,3 +768,332 @@ def test_rows_recorded_match_the_file_after_dropping_new_rows_without_required_c
     stored = gzip.decompress((root / "ledger" / "data" / "events" / b["file"]).read_bytes()).decode().splitlines()
     assert recorded == len(stored) - 1 == 0
     rebuilt_equals_current(root, scratch_db)
+
+
+def _source_dsn(dbname: str) -> str:
+    import os
+    from urllib.parse import quote
+
+    host = os.environ.get("DATA_DB_HOST", "data-db")
+    port = os.environ.get("DATA_DB_PORT", "5432")
+    user = quote(os.environ.get("DATA_DB_OWNER_USER", "dash_owner"), safe="")
+    password = quote(os.environ.get("DATA_DB_OWNER_PASSWORD", ""), safe="")
+    return f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
+
+
+def test_additional_intake_xlsx_db_import_watch_equivalence_and_readonly(tmp_path, scratch_db, monkeypatch):
+    """이슈 #42 통합 검증: xlsx, ingest-db(read_only=True), ingest-watch(.csv/.csv.gz/.xlsx) 적재 후
+    정규형 sha256 동등성 및 rebuilt_equals_current가 100% 일치한다.
+    """
+    from test_additional_intake_unit import make_xlsx_bytes
+    from dashkit.ingest.db_import import ingest_from_db
+    from dashkit.ingest.watch import watch_once
+
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+
+    # 별도 외부 원본 스키마/테이블 준비
+    with db.owner_conn(scratch_db) as conn:
+        conn.execute("CREATE SCHEMA src_ext")
+        conn.execute(
+            "CREATE TABLE src_ext.ext_entries ("
+            "id text, group_id text, state text, amount numeric, on_day date, flag boolean, qty integer, memo text)"
+        )
+        conn.execute(
+            "INSERT INTO src_ext.ext_entries VALUES "
+            "('E901', 'g1', 'done', 1234.50, '2026-11-20', true, 5, 'hello'),"
+            "('E902', 'g2', 'open', 0, '2026-11-21', false, 10, NULL)"
+        )
+        conn.commit()
+
+    dsn = _source_dsn(scratch_db)
+    monkeypatch.setenv("TEST_SOURCE_DSN", dsn)
+
+    # 1) read_only=True가 쓰기 쿼리/CTE를 차단하며 오류 메시지에 DSN·비밀번호가 남지 않는다
+    bad_sql = tmp_path / "write.sql"
+    bad_sql.write_text("WITH d AS (DELETE FROM src_ext.ext_entries RETURNING *) SELECT * FROM d", encoding="utf-8")
+    with pytest.raises(IngestError) as wexc:
+        ingest_from_db("ledger", "entries", dsn_env="TEST_SOURCE_DSN", query_file=bad_sql,
+                       projects_dir=root, dbname=scratch_db)
+    assert wexc.value.detail == "invalid_query"
+    assert dsn not in wexc.value.message
+
+    lit_sql = tmp_path / "lit.sql"
+    lit_sql.write_text("SELECT 'customer-secret'::integer AS id", encoding="utf-8")
+    with pytest.raises(IngestError) as lexc:
+        ingest_from_db("ledger", "entries", dsn_env="TEST_SOURCE_DSN", query_file=lit_sql,
+                       projects_dir=root, dbname=scratch_db)
+    assert lexc.value.detail == "invalid_query"
+    assert "customer-secret" not in lexc.value.message
+
+    # 2) 원본 DB 가져오기 (dry_run → 확정)
+    r_db = ingest_from_db("ledger", "entries", dsn_env="TEST_SOURCE_DSN", source_table="src_ext.ext_entries",
+                          projects_dir=root, dbname=scratch_db, dry_run=True)
+    assert r_db["ok"] and r_db["batches"][0]["rows"]["inserted"] == 2
+    r_db = ingest_from_db("ledger", "entries", dsn_env="TEST_SOURCE_DSN", source_table="src_ext.ext_entries",
+                          projects_dir=root, dbname=scratch_db)
+    db_sha = r_db["batches"][0]["sha256"]
+
+    # 3) 동일 데이터 xlsx 접수 (force=True로 sha256 비교)
+    xlsx_bytes = make_xlsx_bytes(
+        [
+            {
+                "name": "Entries",
+                "rows": [
+                    ["id", "group_id", "state", "amount", "on_day", "flag", "qty", "memo"],
+                    ["E901", "g1", "done", {"t": "n", "v": "1234.50"}, {"t": "n", "s": 1, "v": "46346"}, {"t": "b", "v": "1"}, {"t": "n", "v": "5"}, "hello"],
+                    ["E902", "g2", "open", {"t": "n", "v": "0"}, {"t": "n", "s": 1, "v": "46347"}, {"t": "b", "v": "0"}, {"t": "n", "v": "10"}, None],
+                ],
+            }
+        ],
+        num_fmts={164: "yyyy-mm-dd"},
+        cell_xfs=[0, 164],
+    )
+    xlsx_file = tmp_path / "same.xlsx"
+    xlsx_file.write_bytes(xlsx_bytes)
+    r_xlsx = ingest("ledger", [Item("entries", {"kind": "xlsx", "path": xlsx_file, "name": "same.xlsx"})],
+                    projects_dir=root, dbname=scratch_db, force=True)
+    assert r_xlsx["batches"][0]["sha256"] == db_sha
+
+    # 4) 감시 폴더 (.csv, .csv.gz, .xlsx + 무시 파일 + 실패 격리)
+    inbox = root / "ledger" / "data" / "_inbox"
+    ent_box = inbox / "entries"
+    evt_box = inbox / "events"
+    ent_box.mkdir(parents=True)
+    evt_box.mkdir(parents=True)
+    (ent_box / "01.csv").write_text("id,group_id,state,amount,on_day,flag,qty\nE910,g1,open,10,2026-11-22,Y,1\n", encoding="utf-8")
+    (ent_box / "02.csv.gz").write_bytes(gzip.compress(b"id,group_id,state,amount,on_day,flag,qty\nE911,g1,done,20,2026-11-22,N,2\n"))
+    (ent_box / "03.xlsx").write_bytes(
+        make_xlsx_bytes([{"name": "S1", "rows": [["id", "group_id", "state", "amount", "on_day", "flag", "qty"],
+                                                 ["E912", "g1", "open", "30", "2026-11-22", "true", "3"]]}])
+    )
+    (evt_box / "01.csv").write_text("id,entry_id,seen_at\n900,E910,2026-11-22T01:02:03\n", encoding="utf-8")
+    # 무시 대상(.part, _hidden)
+    (ent_box / "uploading.csv.part").write_text("id\nE999\n", encoding="utf-8")
+    (ent_box / "_draft.csv").write_text("id\nE999\n", encoding="utf-8")
+    # 실패 파일
+    (ent_box / "99_bad.csv").write_text("id,amount\nE998,not_a_number\n", encoding="utf-8")
+
+    st = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db)
+    assert st["succeeded"] == 4 and st["failed"] == 1
+    assert (ent_box / "uploading.csv.part").exists() and (ent_box / "_draft.csv").exists()
+    assert len(list((ent_box / "_done").iterdir())) == 3
+    failed_jsons = list((ent_box / "_failed").glob("*.error.json"))
+    assert len(failed_jsons) == 1
+    err_doc = __import__("json").loads(failed_jsons[0].read_text(encoding="utf-8"))
+    assert err_doc["detail"] == "invalid_rows"
+    # 재스캔 시 _failed 파일 재실행 안 함
+    st2 = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db)
+    assert st2["processed"] == 0
+
+    rebuilt_equals_current(root, scratch_db)
+
+
+def test_watch_processing_recovery_transient_retry_and_sensitive_redaction(tmp_path, scratch_db):
+    """감시 폴더의 _processing/ 재시작 복구(커밋 전/커밋 직후 duplicate_file), 일시 잠금 재시도, 민감 열 마스킹."""
+    import json as _json
+    import os
+    from datetime import datetime, timezone
+    from dashkit.ingest.watch import watch_once
+
+    def add_sensitive(doc):
+        doc["tables"]["entries"]["columns"]["phone"] = {"type": "text", "sensitive": True, "pattern": r"^\d+$"}
+
+    root = make_project(tmp_path, edit=add_sensitive)
+    load(load_project("ledger", root), dbname=scratch_db)
+
+    inbox = root / "ledger" / "data" / "_inbox" / "entries"
+    proc = inbox / "_processing"
+    proc.mkdir(parents=True)
+
+    # 1) _processing/ 중단 파일(적재 전 중단) 회수 → 정상 적재 후 _done/ 이동
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    pre_commit = proc / f"{stamp}-pre.csv"
+    pre_commit.write_text("id,group_id,state\nE950,g1,open\n", encoding="utf-8")
+    st = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db)
+    assert st["succeeded"] == 1 and not pre_commit.exists()
+    assert any(p.name.endswith("-pre.csv") for p in (inbox / "_done").iterdir())
+
+    # 2) _processing/ 중단 파일(적재 커밋 직후 종료 → duplicate_file) → _done/ 정상 마감
+    committed_src = tmp_path / "committed.csv"
+    committed_src.write_text("id,group_id,state\nE951,g1,done\n", encoding="utf-8")
+    ingest("ledger", [Item("entries", {"kind": "csv", "path": committed_src, "name": "committed.csv"})],
+           projects_dir=root, dbname=scratch_db)
+    after_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    post_commit = proc / f"{after_stamp}-committed.csv"
+    post_commit.write_bytes(committed_src.read_bytes())
+    st2 = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db)
+    assert st2["succeeded"] == 1 and st2["failed"] == 0 and not post_commit.exists()
+    assert any(p.name.endswith("-committed.csv") for p in (inbox / "_done").iterdir())
+
+    # 3) 일시 잠금(409 apply_running) 시 _failed/로 버리지 않고 재시도 보존
+    (inbox / "wait.csv").write_text("id,group_id,state\nE952,g1,open\n", encoding="utf-8")
+    lock_conn = db.owner_conn(scratch_db)
+    try:
+        locks.acquire(lock_conn, 0)
+        st_busy = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db, wait_ms=50)
+        assert st_busy["retrying"] == 1 and st_busy["failed"] == 0
+        assert any(p.name.endswith("-wait.csv") for p in proc.iterdir())
+    finally:
+        locks.release(lock_conn)
+        lock_conn.close()
+    st_retry = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db)
+    assert st_retry["succeeded"] == 1 and not list(proc.iterdir())
+
+    # 4) sensitive: true 열 검증 오류 & 열 개수 불일치 → .error.json에 민감 값 미노출
+    (inbox / "sens_bad.csv").write_text("id,phone\nE960,010-secret-1234\n", encoding="utf-8")
+    (inbox / "sens_cols.csv").write_text("id,phone\nE961,010-secret-5678,extra\n", encoding="utf-8")
+    st_sens = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db)
+    assert st_sens["failed"] == 2
+    for ej in (inbox / "_failed").glob("*.error.json"):
+        raw_txt = ej.read_text(encoding="utf-8")
+        assert "010-secret-1234" not in raw_txt
+        assert "010-secret-5678" not in raw_txt
+        doc = _json.loads(raw_txt)
+        assert doc["detail"] == "invalid_rows"
+
+    # 5) 손상된 .csv.gz 및 CRC 손상 .xlsx 격리 후 다음 정상 파일 계속 처리
+    import io as _io
+    import zipfile as _zipfile
+    from test_additional_intake_unit import make_xlsx_bytes as _make_xlsx
+
+    crc_buf = bytearray(_make_xlsx([{"name": "S1", "rows": [["id", "group_id", "state"], ["E999", "g1", "open"]]}]))
+    with _zipfile.ZipFile(_io.BytesIO(crc_buf), "r") as _zf:
+        _sh = _zf.getinfo("xl/worksheets/sheet1.xml")
+        _pos = _sh.header_offset + 30 + len(_sh.filename.encode("utf-8")) + max(_sh.compress_size - 2, 0)
+    crc_buf[_pos] ^= 0xFF
+    (inbox / "01_bad.csv.gz").write_bytes(b"not-a-valid-gzip-stream")
+    (inbox / "01_bad_crc.xlsx").write_bytes(bytes(crc_buf))
+    (inbox / "01_bad_date.xlsx").write_bytes(
+        _make_xlsx(
+            [{"name": "S1", "rows": [["id", "group_id", "state", "on_day"],
+                                     ["E997", "g1", "open", {"t": "n", "s": 1, "v": "2958466"}]]}],
+            num_fmts={164: "yyyy-mm-dd"},
+            cell_xfs=[0, 164],
+        )
+    )
+    long_row_buf = _io.BytesIO()
+    with _zipfile.ZipFile(long_row_buf, "w", compression=_zipfile.ZIP_DEFLATED) as _zf_out:
+        with _zipfile.ZipFile(_io.BytesIO(_make_xlsx([{"name": "S1", "rows": [["id"]]}])), "r") as _zf_in:
+            for _item in _zf_in.infolist():
+                if _item.filename != "xl/worksheets/sheet1.xml":
+                    _zf_out.writestr(_item.filename, _zf_in.read(_item.filename))
+        _zf_out.writestr(
+            "xl/worksheets/sheet1.xml",
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+            '<row r="1"><c r="A1" t="inlineStr"><is><t>id</t></is></c></row>'
+            f'<row r="{"9" * 5000}"><c r="A2" t="inlineStr"><is><t>E996</t></is></c></row>'
+            '</sheetData></worksheet>',
+        )
+    (inbox / "01_bad_row_num.xlsx").write_bytes(long_row_buf.getvalue())
+    zipenc_buf = bytearray(_make_xlsx([{"name": "S1", "rows": [["id"], ["E995"]]}]))
+    with _zipfile.ZipFile(_io.BytesIO(zipenc_buf), "r") as _zf_enc:
+        _rels_off = _zf_enc.getinfo("xl/_rels/workbook.xml.rels").header_offset
+    zipenc_buf[_rels_off + 6] |= 0x01
+    _cd = zipenc_buf.find(b"PK\x01\x02")
+    while _cd != -1:
+        zipenc_buf[_cd + 8] |= 0x01
+        _cd = zipenc_buf.find(b"PK\x01\x02", _cd + 4)
+    (inbox / "01_bad_zipenc.xlsx").write_bytes(bytes(zipenc_buf))
+    (inbox / "02_ok.csv").write_text("id,group_id,state\nE962,g1,open\n", encoding="utf-8")
+    st_corrupt = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db)
+    assert st_corrupt["failed"] == 5 and st_corrupt["succeeded"] == 1
+    assert not list(proc.iterdir())
+    assert any(p.name.endswith("-01_bad.csv.gz.error.json") for p in (inbox / "_failed").iterdir())
+    assert any(p.name.endswith("-01_bad_crc.xlsx.error.json") for p in (inbox / "_failed").iterdir())
+    assert any(p.name.endswith("-01_bad_date.xlsx.error.json") for p in (inbox / "_failed").iterdir())
+    assert any(p.name.endswith("-01_bad_row_num.xlsx.error.json") for p in (inbox / "_failed").iterdir())
+    assert any(p.name.endswith("-01_bad_zipenc.xlsx.error.json") for p in (inbox / "_failed").iterdir())
+    assert any(p.name.endswith("-02_ok.csv") for p in (inbox / "_done").iterdir())
+
+    rebuilt_equals_current(root, scratch_db)
+
+    # 6) 여러 줄을 포함한 민감 기본 키 중복 → _failed/*.error.json에 원문 미노출
+    def make_sensitive_pk(doc):
+        doc["tables"]["secrets"] = {
+            "mode": "append",
+            "primary_key": ["secret_id"],
+            "columns": {"secret_id": {"type": "text", "sensitive": True}},
+        }
+
+    root_pk = make_project(tmp_path / "pk_proj", edit=make_sensitive_pk)
+    load(load_project("ledger", root_pk), dbname=scratch_db)
+    pk_inbox = root_pk / "ledger" / "data" / "_inbox" / "secrets"
+    pk_inbox.mkdir(parents=True)
+    (pk_inbox / "dup_multiline.csv").write_text(
+        'secret_id\n"line1-secret\nline2-secret"\n"line1-secret\nline2-secret"\n',
+        encoding="utf-8",
+    )
+    st_pk = watch_once("ledger", settle_ms=0, projects_dir=root_pk, dbname=scratch_db)
+    assert st_pk["failed"] == 1
+    pk_err_files = list((pk_inbox / "_failed").glob("*.error.json"))
+    assert len(pk_err_files) == 1
+    pk_err_txt = pk_err_files[0].read_text(encoding="utf-8")
+    assert "line1-secret" not in pk_err_txt and "line2-secret" not in pk_err_txt
+
+    # 7) 244바이트 긴 파일 이름(NAME_MAX 경계) 정상 적재·실패 격리 + 접미사 포함 민감 값 마스킹
+    long_ok_name = ("a" * 240) + ".csv"
+    long_bad_name = ("b" * 240) + ".csv"
+    (pk_inbox / long_ok_name).write_text("secret_id\noktoken\n", encoding="utf-8")
+    (pk_inbox / long_bad_name).write_text(
+        "secret_id\noktoken\noktoken\n",
+        encoding="utf-8",
+    )
+    st_long = watch_once("ledger", settle_ms=0, projects_dir=root_pk, dbname=scratch_db)
+    assert st_long["succeeded"] == 1 and st_long["failed"] == 1
+    assert not list((pk_inbox / "_processing").iterdir())
+    assert len(list((pk_inbox / "_done").glob("*.csv"))) == 1
+    long_err_files = [p for p in (pk_inbox / "_failed").glob("*.error.json") if p not in pk_err_files]
+    assert len(long_err_files) == 1
+    long_err_doc = _json.loads(long_err_files[0].read_text(encoding="utf-8"))
+    assert long_err_doc["file"] == long_bad_name
+    assert "oktoken" not in _json.dumps(long_err_doc["errors"], ensure_ascii=False)
+
+    rebuilt_equals_current(root_pk, scratch_db)
+
+
+def test_ingest_from_db_recreates_cursor_on_stale_config_retry(tmp_path, scratch_db, monkeypatch):
+    """설정 변경(StaleConfig)으로 재시도할 때 원본 DB 커서를 새로 열어 전체 행을 다시 적재한다."""
+    import dashkit.ingest.add as ingest_add
+    from dashkit.ingest.db_import import ingest_from_db
+    from dashkit.ingest.operation import StaleConfig
+
+    root = make_project(tmp_path)
+    load(load_project("ledger", root), dbname=scratch_db)
+
+    with db.owner_conn(scratch_db) as conn:
+        conn.execute("CREATE SCHEMA IF NOT EXISTS src_stale")
+        conn.execute("DROP TABLE IF EXISTS src_stale.ext_entries")
+        conn.execute("CREATE TABLE src_stale.ext_entries (id text, group_id text, state text, amount numeric)")
+        conn.execute(
+            "INSERT INTO src_stale.ext_entries VALUES "
+            "('E970', 'g1', 'open', 11.5), ('E971', 'g2', 'done', 22.0)"
+        )
+        conn.commit()
+
+    monkeypatch.setenv("TEST_STALE_DSN", _source_dsn(scratch_db))
+
+    real_commit = ingest_add._commit
+    attempts = 0
+
+    def fail_once_then_commit(session, prepared, *, force, dry_run):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise StaleConfig("설정 변경 재시도 모의")
+        return real_commit(session, prepared, force=force, dry_run=dry_run)
+
+    monkeypatch.setattr(ingest_add, "_commit", fail_once_then_commit)
+
+    res = ingest_from_db(
+        "ledger",
+        "entries",
+        dsn_env="TEST_STALE_DSN",
+        source_table="src_stale.ext_entries",
+        projects_dir=root,
+        dbname=scratch_db,
+    )
+    assert attempts == 2
+    assert res["ok"] is True
+    assert res["batches"][0]["rows"]["inserted"] == 2
+    rebuilt_equals_current(root, scratch_db)

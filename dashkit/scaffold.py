@@ -72,8 +72,9 @@ _MAX_ERRORS_PER_FILE = 20
 class ScaffoldError(Exception):
     """초안을 만들 수 없음. errors는 한 줄에 하나씩 보여 줄 이유 목록이다."""
 
-    def __init__(self, errors: list[str]):
+    def __init__(self, errors: list[str], *, detail: str | None = None):
         self.errors = list(errors)
+        self.detail = detail
         super().__init__("\n".join(self.errors))
 
 
@@ -270,9 +271,47 @@ def _column_values(rows: list[list[str]], index: int) -> list[str]:
     return [r[index] for r in rows]
 
 
+def _read_xlsx(source: str, raw: bytes) -> tuple[list[str], list[list[str]], bool]:
+    from .ingest.intake import IntakeError, RowError
+    from .ingest.xlsx import XlsxParser
+
+    with tempfile.TemporaryDirectory(prefix="dashkit-xlsx-") as tmp:
+        src = Path(tmp) / "in.xlsx"
+        src.write_bytes(raw)
+        parser = XlsxParser(src, source)
+        try:
+            header = parser.header()
+            rows: list[list[str]] = []
+            errors: list[str] = []
+            for _at, rec in parser.rows():
+                if isinstance(rec, RowError):
+                    if len(errors) < _MAX_ERRORS_PER_FILE:
+                        errors.append(f"{rec.where}: {rec.reason}")
+                    if rec.fatal:
+                        break
+                    continue
+                rows.append(rec)
+            if errors:
+                raise ScaffoldError(errors, detail="invalid_csv")
+            return header, rows, True
+        except IntakeError as exc:
+            raise ScaffoldError(exc.errors or [exc.message], detail=exc.detail) from None
+        finally:
+            parser.close()
+
+
+def _read_source(source: str, raw: bytes) -> tuple[list[str], list[list[str]], bool, bool]:
+    """(머리글, 데이터 행, UTF-8 호환 여부, xlsx 여부)."""
+    if source.lower().endswith(".xlsx"):
+        header, rows, was_utf8 = _read_xlsx(source, raw)
+        return header, rows, was_utf8, True
+    header, rows, was_utf8 = _read_csv(source, raw)
+    return header, rows, was_utf8, False
+
+
 def _infer_table(source: str, raw: bytes, position: int, taken_tables: set[str]) -> tuple[dict, dict[str, list[str]]]:
     """표 하나의 열·유형·기본 키를 추론한다. (테이블 기록, {열 이름: 원본 값 목록})."""
-    header, rows, was_utf8 = _read_csv(source, raw)
+    header, rows, was_utf8, _is_xlsx = _read_source(source, raw)
     stem = Path(source).stem
     name, renamed = to_ident(stem, "table", position, taken_tables)
     notes: list[str] = []
@@ -770,15 +809,15 @@ def _csv_copy(table: dict, sources: Mapping[str, bytes]) -> bytes:
     if source not in sources:
         raise ScaffoldError([f"{table['name']}: 원본 CSV '{source}'가 없음"])
     raw = bytes(sources[source])
-    header, rows, was_utf8 = _read_csv(source, raw)
+    header, rows, was_utf8, is_xlsx = _read_source(source, raw)
     names = [c["name"] for c in table["columns"]]
     if len(names) != len(header):
-        raise ScaffoldError([f"{source}: 열 수가 추론 결과와 다름(CSV {len(header)}개, 추론 결과 {len(names)}개). "
-                             "열을 빼려면 CSV에서도 빼야 함"])
+        raise ScaffoldError([f"{source}: 열 수가 추론 결과와 다름(원본 {len(header)}개, 추론 결과 {len(names)}개). "
+                             "열을 빼려면 원본에서도 빼야 함"])
     for col, head in zip(table["columns"], header):
         if col.get("source", head) != head:
             raise ScaffoldError([f"{source}: 열 순서가 추론 결과와 다름('{head}' 자리에 '{col.get('source')}')"])
-    if was_utf8 and names == header:
+    if not is_xlsx and was_utf8 and names == header:
         return raw
     buf = io.StringIO(newline="")
     writer = csv.writer(buf, lineterminator="\n")

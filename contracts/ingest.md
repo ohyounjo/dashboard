@@ -55,8 +55,10 @@ projects/<프로젝트>/data/
 
 | 파서(`PARSERS`) | 받는 것 | 오류 위치 |
 |---|---|---|
-| `csv` | 디스크의 파일. 인코딩은 UTF-8(BOM 허용), 안 되면 CP949. 구분자는 머리글 줄에서 쉼표·탭·세미콜론 가운데 가장 많은 것 | `<파일 이름>:<줄>:<열>`(레코드가 시작한 줄, 머리글 = 1행) |
+| `csv` | 디스크의 파일(`.csv`, `.csv.gz`). 인코딩은 UTF-8(BOM 허용), 안 되면 CP949. 구분자는 머리글 줄에서 쉼표·탭·세미콜론 가운데 가장 많은 것 | `<파일 이름>:<줄>:<열>`(레코드가 시작한 줄, 머리글 = 1행) |
 | `rows` | JSON 행 목록. 모든 행이 같은 열 집합이어야 한다(아니면 422 `invalid_rows`). 값은 문자열로 바꾼다: `null`·`""`는 NULL("일부러 비움"), 키가 없으면 "보내지 않음", 참거짓은 `true`/`false` | `rows[<번호>].<열>` |
+| `xlsx` | 디스크의 엑셀 통합 문서(`.xlsx`). 외부 패키지 없이 표준 라이브러리(`zipfile`, `xml.etree.ElementTree.iterparse`)로 스트리밍하며 비압축 크기(512MiB)·압축률(100배)·공유 문자열(128MiB)·`<!DOCTYPE`/`<!ENTITY`를 제한한다. 기본 첫 가시 시트(`sheet`로 이름/0-기반 번호 지정), 공유/인라인/서식 문자열·부울·1900/1904 날짜·소수 초 시각(`Decimal` 마이크로초 정밀도)·희소 셀(`r="C5"`)을 정규형 문자열로 복원한다. 암호화 문서·`.xls`·`.xlsm`·비-ZIP은 422 `invalid_xlsx` | `<파일 이름>:<엑셀 1-기반 행 번호>:<열>` |
+| `cursor` | 외부 DB 읽기 전용 서버사이드 커서(`itersize=2000`). `None`→`""`, `bool`→`true`/`false`, `int`/`Decimal`→정규 문자열, `date`/`datetime`→`isoformat()`, `UUID`→`str`, 비유한 `float` 통과 후 검증 거절, `bytea`·`list`·`dict`는 `RowError` | `<원본 이름>:<1-기반 행 번호>:<열>` |
 
 머리글 → 열은 차례로 맞춘다: ① 열 이름 ② 그 열의 `aliases` ③ 그 테이블을 그대로 보는(`table:`) 데이터셋의 `labels` ④ 대소문자·공백·`_`·`-`를 무시한 비교. 한 단계에서 두 열에 맞으면 맞추지 않는다. 요청의 `columns`(`{"<머리글>": "<열>" 또는 null}`)가 있으면 그 머리글은 그대로 따른다(`null`은 버린다). 이름이 빈 머리글(엑셀이 끝에 남기는 빈 열)은 버리고 `columns.dropped`에 `""`로 알린다(`strict`면 오류). 머리글 두 개가 같은 열에 맞거나 기본 키 열이 없으면 오류다. 맞지 않은 머리글이 남으면 422 `unknown_columns`와 `columns: [{"header", "candidates"}]`, `table`(파일이면 `file`: 올린 파일 이름).
 
@@ -133,7 +135,16 @@ projects/<프로젝트>/data/
 
 ## 더하기
 
-`dashkit.ingest.ingest(project, items, *, dry_run, force, strict, skip_invalid, max_rows)`. 관리 서비스([manage.md](manage.md))와 CLI(`make ingest TABLE=<테이블> FILE=<CSV> [DRY_RUN=1] [SKIP_INVALID=1] [FORCE=1]` = `python -m dashkit ingest --table … --file …`. 감사 로그에 `method: cli`로 남는다)가 부른다. 한 행도 배치이고 여러 항목은 한 트랜잭션이다(참조 순서대로 넣고, 하나라도 실패하면 아무것도 들어가지 않는다).
+`dashkit.ingest.ingest(project, items, *, dry_run, force, strict, skip_invalid, max_rows)`. 관리 서비스([manage.md](manage.md))와 CLI(`make ingest TABLE=<테이블> FILE=<CSV|XLSX> [SHEET=<시트>] [DRY_RUN=1] [SKIP_INVALID=1] [FORCE=1]` = `python -m dashkit ingest --table … --file …`. 감사 로그에 `method: cli`로 남는다)가 부른다. 한 행도 배치이고 여러 항목은 한 트랜잭션이다(참조 순서대로 넣고, 하나라도 실패하면 아무것도 들어가지 않는다).
+
+- **원본 DB에서 가져오기 (`ingest-db`):** `python -m dashkit ingest-db` (`make ingest-db TABLE=<테이블> (SOURCE_TABLE=<원본>|QUERY_FILE=<파일>) [DSN_ENV=SOURCE_DB_DSN]`).
+  - 외부 DB 접속 문자열(DSN)과 비밀번호는 CLI 인자로 받지 않고 환경 변수 이름(`--dsn-env`, 기본 `SOURCE_DB_DSN`, 형식 `^[A-Z_][A-Z0-9_]{0,127}$`)으로만 받는다.
+  - 접속 직후 `conn.read_only = True`(`default_transaction_read_only=on`)와 `statement_timeout`(`SOURCE_DB_TIMEOUT_MS`, 기본 `300000`ms)을 강제하며, `--query-file`은 단일 조회 문장 확인 후 `SELECT * FROM (<쿼리>) AS _dashkit_src`로 감싸 실행한다.
+  - 오류 메시지·로그(`sanitize_db_error`)와 감사 로그(`method: db`)에는 DSN·자격 증명·SQL 리터럴을 남기지 않는다.
+- **감시 폴더 (`ingest-watch`):** `python -m dashkit ingest-watch` (`make ingest-watch [DIR=<폴더>] [TABLE=<테이블>] [ONCE=1]`).
+  - 기본 경로 `projects/<PROJECT>/data/_inbox/<테이블>/`(또는 `--dir` + `--table`)에서 `.`·`_` 시작 이름 및 `.tmp`·`.part`·`.crdownload`·`.error.json`·`.lock`을 제외한 `.csv`·`.csv.gz`·`.xlsx` 파일을 소비한다. 심볼릭 링크와 `INGEST_MAX_UPLOAD_MB` 초과는 즉시 `_failed/`로 격리한다.
+  - `.watch.lock` 배타 잠금 획득 후 매 스캔 시작 시 `_processing/`에 남은 중단 파일을 먼저 회수한다(이전 실행이 적재 커밋 직후 종료되어 `409 duplicate_file`이 나면 `_done/`으로 마감). 크기·수정 시각이 `settle_ms`(기본 500ms) 동안 변하지 않은 파일만 `_processing/`으로 원자적 이동 후 `ingest()`에 넘긴다.
+  - 성공 시 `_done/` 보관(최대 `--keep-done`, 기본 100개; `--delete-done` 시 삭제) 및 감사 로그(`method: watch`), 실패 시 `_failed/` 이동 + `<이름>.error.json` 기록(`sensitive: true` 열의 인용 값·원래 칸은 `redact_sensitive_errors`로 `'***'` 마스킹). 일시 오류(`409 apply_running`, `503 db_unavailable`)는 다음 주기에 재시도한다.
 
 - 대상이 `replace` 테이블이면 409 `not_append`, 없는 테이블이면 404 `unknown_table`.
 - **같은 내용 다시 올리기:** 그 테이블에 같은 내용 해시의 배치가 있으면(같은 요청 안의 두 항목도) 409 `duplicate_file`, `duplicates: [{"table", "file"}]`. `force`면 진행한다. 견주는 일은 잠금 안에서 한다(동시에 두 번 보내도 뒤의 것이 거절된다).

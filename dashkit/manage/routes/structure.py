@@ -231,20 +231,30 @@ def _action(op_list: list[dict[str, Any]]) -> str:
 
 @router.post("/tables/infer")
 async def post_infer(request: Request, principal: Principal = Depends(require_admin)):
-    """multipart `file`(CSV 하나) → 200 {"upload_id", "table": 추론, "mode", "dataset", "suggest"}. 파일은 쓰지 않고 1시간 잡아 둔다."""
-    folder, files, _fields = await _receive(request, "file", single=True)
-    source_name, path = files[0]
+    """multipart `file`(CSV 또는 xlsx 하나) 또는 {"upload_id"} → 200 {"upload_id", "table": 추론, "mode", "dataset", "suggest"}."""
     project = _project()
+    ctype = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
 
-    def infer() -> dict[str, Any]:
+    def infer(path, source_name: str) -> dict[str, Any]:
         content = path.read_bytes()
         table = newtable.infer_one(project, source_name, content)
         if int(table.get("rows") or 0) > MAX_INFER_ROWS:
             raise IngestError(413, "too_many_rows", f"새 테이블의 첫 파일은 {MAX_INFER_ROWS}행까지입니다")
         return table
 
+    if ctype == "application/json":
+        body = await _json(request)
+        held = uploads.get(body.get("upload_id"), "*", principal.id)
+        source_name, path = held.files[0]
+        table = await run_in_threadpool(infer, path, source_name)
+        held.table = "+new"
+        return {"upload_id": held.id, "source_name": source_name, "table": table, "mode": "append",
+                "on_conflict": "error", "dataset": True, "suggest": False}
+
+    folder, files, _fields = await _receive(request, "file", single=True)
+    source_name, path = files[0]
     try:
-        table = await run_in_threadpool(infer)
+        table = await run_in_threadpool(infer, path, source_name)
     except BaseException:
         shutil.rmtree(folder, ignore_errors=True)
         raise

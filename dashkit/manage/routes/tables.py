@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
 import zipfile
@@ -22,18 +23,20 @@ from ...auth import store as auth_store
 from ...auth.routes import Principal, client_ip, require_admin, require_operator
 from ...features import has_manage_feature
 from ...ingest import Item, IngestError, batches, ingest, ledger, lineage
+from ...ingest.add import check_table
 from ...ingest.batches import REMOVED_DIR
 from ...ingest.remove import NeedsRebuild, remove_batch, restore_batch
 from ...project import store, upload
 from .. import context
 from ..auth import ManageActor, require_ingest_actor
 from ..runs_state import runs
-from ..uploads import uploads
+from ..uploads import chunk_max_bytes, uploads
 
 router = APIRouter()
 MAX_JSON_BYTES = 10 * 1024 * 1024
 METHODS = ("form", "paste")
 FAST_CHECK_LOCK_TIMEOUT_MS = 200
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 # ---------------------------------------------------------------- 공통
@@ -215,7 +218,7 @@ def _columns(value: Any) -> dict[str, Any] | None:
 
 def _ingest_job(project_name: str, entries: list[dict[str, Any]], actor: Principal | ManageActor, *, dry_run: bool,
                 force: bool, skip_invalid: bool, strict: bool, upload_id: str | None,
-                folder: Path) -> JSONResponse:
+                folder: Path, keep_on_preview_fail: bool = False) -> JSONResponse:
     """파일 적재(하나 또는 여럿, 한 트랜잭션)를 작업으로 돌린다(202). entries는 [{table, path, name, columns}].
 
     미리보기면 결과에 upload_id를 싣고 파일을 잡아 둔다. 오류 행을 빼고 넣으면 빠진 행 파일을 작업에 붙인다
@@ -227,8 +230,14 @@ def _ingest_job(project_name: str, entries: list[dict[str, Any]], actor: Princip
 
     def work(ctx) -> dict[str, Any]:
         ctx.progress("read")
-        items = [Item(e["table"], {"kind": "csv", "path": e["path"], "name": e["name"]}, e.get("columns"))
-                 for e in entries]
+        items = [
+            Item(
+                e["table"],
+                {"kind": "xlsx" if str(e["name"]).lower().endswith(".xlsx") else "csv", "path": e["path"], "name": e["name"]},
+                e.get("columns"),
+            )
+            for e in entries
+        ]
         result = ingest(project_name, items, dry_run=dry_run, force=force, strict=strict, skip_invalid=skip_invalid,
                         max_rows=limits.max_rows, rejects_dir=rejects_dir,
                         progress=lambda step, info: ctx.progress(step, **dict(info)), wait_ms=limits.job_lock_wait_ms)
@@ -248,7 +257,7 @@ def _ingest_job(project_name: str, entries: list[dict[str, Any]], actor: Princip
         if rejects_dir is not None and run.rejects is None:
             shutil.rmtree(rejects_dir, ignore_errors=True)
         if dry_run:
-            if run.status != "succeeded" and upload_id:
+            if run.status != "succeeded" and upload_id and not keep_on_preview_fail:
                 uploads.drop(upload_id)      # 결과에 upload_id가 없으니 화면은 다시 올린다. 잡아 둘 까닭이 없다
             return
         if upload_id and run.status == "succeeded":
@@ -301,7 +310,7 @@ async def _receive(request: Request, field: str, *, single: bool) -> tuple[Path,
         fields = {p.name: p.value or "" for p in parts if p.filename is None}
         if not files or (single and len(files) != 1):
             raise IngestError(400, "bad_request", f"multipart에 `{field}` 파일을 " + ("하나 " if single else "") + "보냅니다")
-        names = [upload.check_filename(p.filename) for p in files]
+        names = [upload.check_ingest_filename(p.filename) for p in files]
         if len(set(names)) != len(names):
             raise IngestError(400, "invalid_filename", "같은 이름의 파일이 두 번 있습니다")
         return folder, [(n, p.path) for n, p in zip(names, files)], fields   # type: ignore[misc]
@@ -333,10 +342,13 @@ async def post_batches(table: str, request: Request, actor: ManageActor = Depend
         held = uploads.get(body.get("upload_id"), name, actor.upload_actor_id)
         source_name, path = held.files[0]
         columns = _columns(body.get("columns")) if "columns" in body else (held.columns or {}).get(source_name)
+        dry_run = _flag(body.get("dry_run"))
+        if dry_run and "columns" in body:
+            held.columns[source_name] = columns
         return _ingest_job(project.name, [{"table": name, "path": path, "name": source_name, "columns": columns}],
-                           actor, dry_run=False, force=_flag(body.get("force")),
+                           actor, dry_run=dry_run, force=_flag(body.get("force")),
                            skip_invalid=_flag(body.get("skip_invalid")), strict=_flag(body.get("strict")),
-                           upload_id=held.id, folder=path.parent)
+                           upload_id=held.id, folder=path.parent, keep_on_preview_fail=held.resumable)
     rows = body.get("rows")
     if isinstance(rows, list) and len(rows) > limits.inline_max_rows:
         raise IngestError(413, "too_many_rows",
@@ -560,10 +572,110 @@ async def post_many(request: Request, principal: Principal = Depends(require_ope
     held = uploads.get(body.get("upload_id"), "*", principal.id)
     mapping = _map_files(project, [n for n, _p in held.files], body.get("map", held.map))
     columns = _columns_map(body["columns"]) if "columns" in body else held.columns
+    dry_run = _flag(body.get("dry_run"))
+    if dry_run:
+        if "map" in body:
+            held.map = mapping
+        if "columns" in body:
+            held.columns = columns
     entries = [{"table": mapping[n], "path": p, "name": n, "columns": columns.get(n)} for n, p in held.files]
-    return _ingest_job(project.name, entries, principal, dry_run=False, force=_flag(body.get("force")),
+    return _ingest_job(project.name, entries, principal, dry_run=dry_run, force=_flag(body.get("force")),
                        skip_invalid=_flag(body.get("skip_invalid")), strict=_flag(body.get("strict")),
-                       upload_id=held.id, folder=held.files[0][1].parent)
+                       upload_id=held.id, folder=held.files[0][1].parent, keep_on_preview_fail=held.resumable)
+
+
+# ---------------------------------------------------------------- 중단된 업로드 이어 올리기
+
+@router.post("/uploads")
+async def post_upload_session(request: Request, actor: ManageActor = Depends(require_ingest_actor)):
+    """이어 올리기 세션을 시작한다(201 Created). contracts/manage.md "이어 올리기"."""
+    body = await _json(request)
+    project = _project()
+    table = body.get("table")
+    if not isinstance(table, str) or not table:
+        raise IngestError(400, "invalid_request", "table이 필요합니다")
+    if table != "*":
+        table = check_table(project, table)
+        if actor.token is not None and (actor.token.project != project.name or table not in actor.token.tables):
+            raise IngestError(403, "forbidden", "이 API 토큰으로 적재할 수 없는 프로젝트 또는 테이블입니다")
+    elif actor.token is not None:
+        raise IngestError(403, "forbidden", "API 토큰은 대상 테이블을 지정해야 합니다")
+    info = uploads.start_resumable(table, body.get("filename"), body.get("total_size"), actor.upload_actor_id,
+                                   sha256=body.get("sha256"))
+    return JSONResponse(info, status_code=201)
+
+
+@router.get("/uploads/{upload_id}")
+def get_upload_status(upload_id: str, actor: ManageActor = Depends(require_ingest_actor)):
+    """이어 올리기 세션의 현재 오프셋과 상태를 돌려준다(owner 계정을 열지 않는다)."""
+    info = uploads.status(upload_id, actor.upload_actor_id)
+    return JSONResponse(
+        info,
+        status_code=200,
+        headers={"Upload-Offset": str(info["offset"]), "Upload-Length": str(info["total_size"])},
+    )
+
+
+@router.patch("/uploads/{upload_id}")
+async def patch_upload_chunk(upload_id: str, request: Request, actor: ManageActor = Depends(require_ingest_actor)):
+    """조각(Chunk) 바이트 스트림을 이어 기록한다(Content-Type: application/octet-stream, Upload-Offset 필수)."""
+    raw_offset = request.headers.get("upload-offset")
+    if raw_offset is None:
+        raise IngestError(400, "bad_request", "Upload-Offset 헤더가 필요합니다")
+    try:
+        req_offset = int(raw_offset.strip())
+    except ValueError:
+        raise IngestError(400, "bad_request", "Upload-Offset은 0 이상의 정수여야 합니다") from None
+
+    raw_sha = request.headers.get("content-sha256")
+    content_sha256: str | None = None
+    if raw_sha is not None and raw_sha.strip():
+        cand = raw_sha.strip().lower()
+        if not _SHA256_RE.fullmatch(cand):
+            raise IngestError(400, "invalid_request", "Content-Sha256은 64자리 16진수 문자열이어야 합니다")
+        content_sha256 = cand
+
+    raw_len = request.headers.get("content-length")
+    content_length: int | None = None
+    if raw_len is not None:
+        try:
+            content_length = int(raw_len.strip())
+        except ValueError:
+            raise IngestError(400, "bad_request", "Content-Length 형식 오류") from None
+
+    held = await run_in_threadpool(uploads.begin_chunk, upload_id, actor.upload_actor_id, req_offset,
+                                   content_length=content_length)
+    try:
+        cmax = chunk_max_bytes()
+        buf = bytearray()
+        async for piece in request.stream():
+            if not piece:
+                continue
+            if len(buf) + len(piece) > cmax:
+                raise IngestError(413, "upload_too_large", f"조각이 너무 큽니다(상한 {cmax // (1024 * 1024)}MB)")
+            if req_offset + len(buf) + len(piece) > held.total_size:
+                raise IngestError(413, "upload_too_large", "전체 파일 크기를 초과했습니다")
+            buf.extend(piece)
+        if content_length is not None and len(buf) != content_length:
+            raise IngestError(400, "bad_request", "조각 전송이 도중에 중단되었습니다")
+        info = await run_in_threadpool(uploads.commit_chunk, held, req_offset, bytes(buf),
+                                       content_sha256=content_sha256)
+    finally:
+        uploads.end_chunk(held)
+
+    return JSONResponse(
+        info,
+        status_code=200,
+        headers={"Upload-Offset": str(info["offset"]), "Upload-Length": str(info["total_size"])},
+    )
+
+
+@router.delete("/uploads/{upload_id}")
+async def delete_upload_session(upload_id: str, request: Request, actor: ManageActor = Depends(require_ingest_actor)):
+    """진행 중이거나 보관 중인 업로드 세션을 즉시 취소하고 임시 파일을 삭제한다."""
+    await upload.read_body(request.stream(), request.headers.get("content-length"), MAX_JSON_BYTES)
+    uploads.cancel(upload_id, actor.upload_actor_id)
+    return {"ok": True, "upload_id": upload_id}
 
 
 def _columns_map(value: Any) -> dict[str, Any]:

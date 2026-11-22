@@ -194,6 +194,27 @@ class ManageGuard(Guard):
             await self.app(scope, receive, send)
             return
 
+        if method == "PATCH" and RESUMABLE_PATCH_PATH.fullmatch(path):
+            origins = [v for k, v in raw_headers if k.lower() == b"origin"]
+            ctypes = [v for k, v in raw_headers if k.lower() == b"content-type"]
+            if len(origins) > 1 or len(ctypes) > 1:
+                await send_rejection(send, (400, "bad_request", "Origin 또는 Content-Type 헤더가 여러 개입니다"))
+                return
+            checked = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in raw_headers}
+            checked["content-type"] = "application/json"
+            rejected = check("PATCH", checked, self.origins)
+            if rejected is not None:
+                await send_rejection(send, rejected)
+                return
+            ctype = (ctypes[0].split(b";", 1)[0].strip().lower()) if ctypes else b""
+            if ctype != b"application/octet-stream":
+                await send_rejection(
+                    send, (415, "unsupported_media_type", "Content-Type은 application/octet-stream이어야 합니다")
+                )
+                return
+            await self.app(scope, receive, send)
+            return
+
         if method == "POST" and UPLOAD_PATHS.fullmatch(path):
             ctypes = [v for k, v in raw_headers if k.lower() == b"content-type"]
             if len(ctypes) == 1 and ctypes[0].split(b";", 1)[0].strip().lower() == b"multipart/form-data":
@@ -211,6 +232,7 @@ class ManageGuard(Guard):
 
 TOKEN_INGEST_PATH = re.compile(r"/api/manage/tables/[a-z][a-z0-9_]{0,62}/batches")
 UPLOAD_PATHS = re.compile(r"/api/manage/(?:tables/[a-z][a-z0-9_]{0,62}/batches|batches|tables/infer)")
+RESUMABLE_PATCH_PATH = re.compile(r"/api/manage/uploads/[A-Za-z0-9_-]+")
 
 # 요청 보호를 씌운 ASGI 앱. uvicorn은 이것을 띄운다
 app = ManageGuard(api)

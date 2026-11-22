@@ -169,3 +169,88 @@ def test_202_job_waits_with_lock_step_and_fails_409_on_timeout(client, monkeypat
             break
         time.sleep(0.05)
     assert state["status"] == "succeeded", state
+
+
+def test_resumable_upload_guard_owner_isolation_and_concurrency(client, monkeypatch):
+    """이어 올리기 경로의 ManageGuard, 타인 410, 동시 PATCH 409, DELETE 정리, GET 읽기 경로 owner 미사용."""
+    import hashlib
+    from dashkit import config, db
+    from dashkit.auth import passwords, sessions, store
+    from dashkit.manage import context
+    from dashkit.manage.app import app
+    from dashkit.manage.uploads import uploads
+
+    c, headers = client
+    table = next(iter(config.load_project(context.current_project()).schema["tables"]))
+
+    # replace 테이블은 세션 시작 단계에서 즉시 409 not_append
+    r_rep = c.post("/api/manage/uploads", json={"table": table, "filename": "a.csv", "total_size": 10}, headers=headers)
+    assert r_rep.status == 409 and json.loads(r_rep.body)["detail"] == "not_append"
+
+    # "*" 는 여러 파일/추론 세션으로 생성 가능
+    payload = b"id,name\n1,alpha\n2,beta\n"
+    sha = hashlib.sha256(payload).hexdigest()
+    r_create = c.post(
+        "/api/manage/uploads",
+        json={"table": "*", "filename": "items.csv", "total_size": len(payload), "sha256": sha},
+        headers=headers,
+    )
+    assert r_create.status == 201, r_create.body
+    uid = json.loads(r_create.body)["upload_id"]
+    try:
+        # GET /uploads/{id} 는 dash_owner를 열지 않는다
+        monkeypatch.setattr(db, "owner_conn", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("owner_conn 금지")))
+        r_get = c.get(f"/api/manage/uploads/{uid}", headers=headers)
+        assert r_get.status == 200
+        assert r_get.headers.get("upload-offset") == "0" and r_get.headers.get("upload-length") == str(len(payload))
+
+        # ManageGuard: PATCH /uploads/{id}는 application/octet-stream만 허용, cross-site 출처 거절
+        r_bad_ctype = c.request("PATCH", f"/api/manage/uploads/{uid}", body=payload[:5],
+                                headers={**headers, "content-type": "text/plain", "upload-offset": "0"})
+        assert r_bad_ctype.status == 415
+        r_csrf = c.request("PATCH", f"/api/manage/uploads/{uid}", body=payload[:5],
+                           headers={**headers, "content-type": "application/octet-stream",
+                                    "origin": "https://evil.example", "upload-offset": "0"})
+        assert r_csrf.status == 403 and json.loads(r_csrf.body)["detail"] == "forbidden_origin"
+
+        # 1번째 조각 전송
+        r_p1 = c.request("PATCH", f"/api/manage/uploads/{uid}", body=payload[:10],
+                         headers={**headers, "content-type": "application/octet-stream", "upload-offset": "0"})
+        assert r_p1.status == 200 and json.loads(r_p1.body)["offset"] == 10
+
+        # 다른 사용자 접근 → 410 upload_expired
+        h2 = passwords.hash_password(secrets.token_urlsafe(12))
+        u2 = store.create_user(f"other-{secrets.token_hex(4)}@example.com", role="operator", status="active",
+                               source="invite", password_hash=h2, email_verified=True)
+        tok2 = sessions.new_token()
+        store.start_session(u2.id, h2, sessions.token_hash(tok2),
+                            datetime.now(timezone.utc) + timedelta(hours=1), None, None)
+        try:
+            c2 = Client(app, host="localhost")
+            r_other = c2.get(f"/api/manage/uploads/{uid}", headers={"cookie": f"dashkit_session={tok2}"})
+            assert r_other.status == 410 and json.loads(r_other.body)["detail"] == "upload_expired"
+        finally:
+            store.delete_user(u2.id)
+
+        # 미완료 업로드 확정 시도 → 409 upload_incomplete
+        r_inc = c.post("/api/manage/batches", json={"upload_id": uid}, headers=headers)
+        assert r_inc.status == 409 and json.loads(r_inc.body)["detail"] == "upload_incomplete"
+
+        # 동시 PATCH 잠금 시 409 upload_in_progress
+        held = uploads._items[uid]
+        assert held.chunk_lock.acquire(blocking=False)
+        try:
+            r_busy = c.request("PATCH", f"/api/manage/uploads/{uid}", body=payload[10:],
+                               headers={**headers, "content-type": "application/octet-stream", "upload-offset": "10"})
+            assert r_busy.status == 409 and json.loads(r_busy.body)["detail"] == "upload_in_progress"
+        finally:
+            held.chunk_lock.release()
+
+        # DELETE 취소 시 디스크 즉시 삭제
+        folder = held.files[0][1].parent
+        r_del = c.request("DELETE", f"/api/manage/uploads/{uid}", json={}, headers=headers)
+        assert r_del.status == 200 and json.loads(r_del.body)["ok"] is True
+        assert not folder.exists()
+        assert c.get(f"/api/manage/uploads/{uid}", headers=headers).status == 410
+    finally:
+        uploads.drop(uid)

@@ -21,19 +21,20 @@ from ..config import Project, table_order
 from . import batches, ledger, pending
 from .apply import RejectWriter, StagedBatch, apply_batch, drop_stage, pg_message, stage_batch, stage_source
 from .batches import CanonicalWriter
-from .intake import PARSERS, Intake, IntakeError, Parser, table_labels
+from .intake import PARSERS, Intake, IntakeError, Parser, redact_sensitive_errors, table_labels
 from .operation import IngestError, Move, StaleConfig, Session, after_ingest, finish, locked
 
 log = logging.getLogger("dashkit.ingest")
 
 CHANGES_SHOWN = 20
-METHODS = ("form", "paste", "upload", "api", "cli")
+METHODS = ("form", "paste", "upload", "api", "cli", "db", "watch")
 
 
 @dataclass
 class Item:
-    """더할 입력 하나. source는 파서를 만드는 정보: {"kind": "csv", "path": Path, "name": str} 또는
-    {"kind": "rows", "rows": [...]}. columns는 사람이 정한 머리글 맞춤({머리글: 열 또는 None})."""
+    """더할 입력 하나. source는 파서를 만드는 정보: {"kind": "csv"|"xlsx", "path": Path, "name": str} 또는
+    {"kind": "rows", "rows": [...]} 또는 {"kind": "cursor", "cursor": ..., "name": str}.
+    columns는 사람이 정한 머리글 맞춤({머리글: 열 또는 None})."""
     table: str
     source: Mapping[str, Any]
     columns: Mapping[str, Any] | None = None
@@ -51,10 +52,28 @@ class _Prepared:
 
 def make_parser(source: Mapping[str, Any], *, strict: bool) -> Parser:
     kind = source.get("kind")
-    if kind == "csv":
-        return PARSERS["csv"](Path(source["path"]), str(source.get("name") or Path(source["path"]).name), strict=strict)
+    if kind in ("csv", "file", "xlsx"):
+        path = Path(source["path"])
+        name = str(source.get("name") or path.name)
+        is_xlsx = kind == "xlsx" or (not strict and (name.lower().endswith(".xlsx") or path.name.lower().endswith(".xlsx")))
+        if is_xlsx and not strict:
+            return PARSERS["xlsx"](path, name, strict=strict, sheet=source.get("sheet"))
+        return PARSERS["csv"](path, name, strict=strict)
     if kind == "rows":
         return PARSERS["rows"](source.get("rows"), str(source.get("name") or "rows"))
+    if kind == "cursor":
+        factory = source.get("cursor_factory")
+        if callable(factory):
+            cur = factory()
+            owns = True
+        else:
+            cur = source.get("cursor")
+            owns = callable(cur)
+            if owns:
+                cur = cur()
+        return PARSERS["cursor"](cur, str(source.get("name") or "db"),
+                                itersize=int(source.get("itersize") or 2000),
+                                owns_cursor=owns)
     raise IngestError(400, "bad_request", f"알 수 없는 입력 종류 '{kind}'")
 
 
@@ -192,7 +211,7 @@ def _prepare(conn: psycopg.Connection, project: Project, items: list[Item], tabl
                                 overrides=item.columns, strict=strict)
             except IntakeError as exc:
                 extra = dict(exc.extra)
-                if item.source.get("kind") == "csv":
+                if item.source.get("kind") in ("csv", "xlsx", "file") and item.source.get("name"):
                     extra["file"] = str(item.source.get("name"))     # 여러 파일일 때 어느 파일인지
                 raise IngestError(422, exc.detail, exc.message, exc.errors or None, **extra) from None
             path = pending.incoming_path(project.data_dir)

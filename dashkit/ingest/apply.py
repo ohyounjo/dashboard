@@ -22,7 +22,7 @@ from psycopg import sql
 
 from ..loader.validate import _parse
 from . import policies
-from .intake import CsvParser, Intake, IntakeError, MAX_REPORTED
+from .intake import CsvParser, Intake, IntakeError, MAX_REPORTED, redact_sensitive_errors
 from .batches import CanonicalWriter, SourceFile
 from .policies import ApplyContext, BatchError, key_label
 
@@ -135,6 +135,7 @@ def stage_batch(cur: psycopg.Cursor, intake: Intake, *, writer: CanonicalWriter 
         rejects.start(intake.header)
     stmt = sql.SQL("COPY {} ({}) FROM STDIN").format(
         temp, sql.SQL(", ").join([sql.Identifier("_at")] + [sql.Identifier(c) for c in intake.header]))
+    sensitive = {c for c, s in table["columns"].items() if isinstance(s, Mapping) and s.get("sensitive")}
     with cur.copy(stmt) as copy:
         for at, values, typed in intake.rows():
             if progress is not None and report.total % 10000 == 0:
@@ -144,8 +145,9 @@ def stage_batch(cur: psycopg.Cursor, intake: Intake, *, writer: CanonicalWriter 
                 if skip_invalid:
                     report.rejected.append(at)
                     if rejects is not None:
-                        rejects.row(values, [f"{intake.parser.where(at, '-').rsplit(':', 1)[0]}: {p}"
-                                             for p in intake.last_problems])
+                        shown_vals = ["***" if (c in sensitive and v != "") else v for c, v in zip(intake.header, values)]
+                        rejects.row(shown_vals, [f"{intake.parser.where(at, '-').rsplit(':', 1)[0]}: {p}"
+                                                  for p in intake.last_problems])
                 continue
             if report.invalid and not skip_invalid:
                 continue          # 오류가 하나라도 있으면 더 넣지 않고 나머지 오류만 모은다
@@ -174,17 +176,22 @@ def _check_duplicates(cur: psycopg.Cursor, staged: StagedBatch, intake: Intake) 
     cur.execute(sql.SQL(
         "SELECT {}, array_agg(_at ORDER BY _at) FROM {} GROUP BY {} HAVING count(*) > 1 ORDER BY min(_at) LIMIT %s"
     ).format(keys, sql.Identifier(staged.temp), keys), (MAX_REPORTED + 1,))
-    first_word = "줄" if intake.parser.kind == "csv" else "위치"
+    first_word = "줄" if intake.parser.kind in ("csv", "xlsx") else "위치"
     for r in cur.fetchall():
         values, ats = list(r[:-1]), r[-1]
-        shown = ", ".join(str(v) for v in values)
-        first = ats[0] if intake.parser.kind == "csv" else intake.parser.where(ats[0], "-")
+        shown = ", ".join(
+            "***" if isinstance(intake.table["columns"].get(k), Mapping) and intake.table["columns"][k].get("sensitive")
+            else str(v)
+            for k, v in zip(pk, values)
+        )
+        first = ats[0] if intake.parser.kind in ("csv", "xlsx") else intake.parser.where(ats[0], "-")
         for at in ats[1:]:
             staged.error_count += 1
             staged.invalid += 1
             staged.duplicates += 1
             if len(staged.errors) < MAX_REPORTED:
-                staged.errors.append(f"{staged.where(at, ','.join(pk))}: 기본 키 중복 ({shown}, 처음 나온 {first_word} {first})")
+                line = f"{staged.where(at, ','.join(pk))}: 기본 키 중복 ({shown}, 처음 나온 {first_word} {first})"
+                staged.errors.append(redact_sensitive_errors(intake.table, [line])[0])
 
 
 def source_label(src: SourceFile) -> str:
@@ -247,7 +254,23 @@ def apply_batch(cur: psycopg.Cursor, project_schema: Mapping[str, Any], staged: 
     matches = int(cur.fetchone()[0])
     ctx = ApplyContext(cur, tname, target, temp, pk, staged.header, matches, counts, changes_limit)
     policy = policies.POLICIES[table.get("on_conflict") or policies.DEFAULT_POLICY]
-    policy(ctx)
+    sensitive_pk = any(table["columns"][k].get("sensitive") for k in pk)
+    try:
+        policy(ctx)
+    except BatchError as exc:
+        if sensitive_pk and exc.detail == "key_conflict":
+            raise BatchError(exc.detail, exc.message, redact_sensitive_errors(table, exc.errors),
+                             keys=["***" for _ in (exc.extra.get("keys") or [])]) from None
+        raise
+    sensitive = {c for c, s in table["columns"].items() if isinstance(s, Mapping) and s.get("sensitive")}
+    if sensitive and ctx.changes:
+        for ch in ctx.changes:
+            for side in ("before", "after"):
+                side_map = ch.get(side)
+                if isinstance(side_map, dict):
+                    for col in list(side_map):
+                        if col in sensitive and side_map[col] is not None:
+                            side_map[col] = "***"
     _insert_new(cur, table, staged, target, temp, join, counts)
     counts["total"] = staged.rows        # 새 행의 필수 열 오류로 뺀 행이 있으면 줄어든다(배치 파일의 행 수와 같게)
     return {**counts, "changes": ctx.changes}
@@ -269,16 +292,18 @@ def _check_refs(cur: psycopg.Cursor, project_schema: Mapping[str, Any], staged: 
             (None if staged.skip_invalid else MAX_REPORTED,))
         found_limited = cur.fetchall()
         for at, v in found_limited:
-            errors.append((at, c, f"참조 대상 {rt}.{rc}에 값 '{v}'가 없음"))
+            reason = "참조 대상 {0}.{1}에 값 '{2}'가 없음".format(
+                rt, rc, "***" if table["columns"][c].get("sensitive") else v)
+            errors.append((at, c, reason))
     if errors and staged.skip_invalid:
-        _drop_rows(cur, staged, errors)
+        _drop_rows(cur, table, staged, errors)
         return
     if errors:
         raise BatchError("invalid_rows", "참조 대상에 없는 값이 있습니다",
                          [f"{staged.where(at, c)}: {reason}" for at, c, reason in errors[:MAX_REPORTED]])
 
 
-def _drop_rows(cur: psycopg.Cursor, staged: StagedBatch, found: list[tuple[int, str, str]]) -> None:
+def _drop_rows(cur: psycopg.Cursor, table: Mapping[str, Any], staged: StagedBatch, found: list[tuple[int, str, str]]) -> None:
     """오류 행을 빼고 넣을 때(skip_invalid): DB를 보고 정해진 오류(참조, 새 행의 필수 열)가 난 행을 임시 테이블에서 뺀다.
     빠진 행 파일에 쓰고 staged.dropped에 위치를 적는다(부른 쪽이 정규형 파일을 다시 쓴다)."""
     from ..loader.record import canonical
@@ -292,10 +317,14 @@ def _drop_rows(cur: psycopg.Cursor, staged: StagedBatch, found: list[tuple[int, 
     ats = sorted(by_at)
     temp = sql.Identifier(staged.temp)
     if staged.rejects is not None:
+        sensitive = {c for c, s in table["columns"].items() if isinstance(s, Mapping) and s.get("sensitive")}
         cols = sql.SQL(", ").join(sql.Identifier(c) for c in staged.header)
         cur.execute(sql.SQL("SELECT _at, {} FROM {} WHERE _at = ANY(%s) ORDER BY _at").format(cols, temp), (ats,))
         for row in cur.fetchall():
-            values = ["" if v is None else str(canonical(v)) for v in row[1:]]
+            values = [
+                ("" if v is None else ("***" if c in sensitive else str(canonical(v))))
+                for c, v in zip(staged.header, row[1:])
+            ]
             where = staged.where(row[0], "-").rsplit(":", 1)[0]
             staged.rejects.row(values, [f"{where}: {r}" for r in by_at[row[0]]])
     cur.execute(sql.SQL("DELETE FROM {} WHERE _at = ANY(%s)").format(temp), (ats,))
@@ -319,7 +348,7 @@ def _insert_new(cur: psycopg.Cursor, table: Mapping[str, Any], staged: StagedBat
             col = missing_required[0]
             reason = f"값이 필요함(새 행. 열 '{col}'이 머리글에 없고 default도 없음)"
             if staged.skip_invalid:
-                _drop_rows(cur, staged, [(at, col, reason) for at in ats])
+                _drop_rows(cur, table, staged, [(at, col, reason) for at in ats])
             else:
                 raise BatchError("invalid_rows", "새 행에 필요한 열이 배치에 없습니다",
                                  [f"{staged.where(at, col)}: {reason}" for at in ats])

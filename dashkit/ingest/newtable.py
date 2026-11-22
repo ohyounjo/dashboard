@@ -18,7 +18,8 @@ from typing import Any, Mapping
 
 from .. import config, scaffold
 from . import batches
-from .intake import CsvParser, Intake, IntakeError
+from .add import make_parser
+from .intake import Intake, IntakeError
 from .operation import IngestError
 
 NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,62}")
@@ -59,11 +60,13 @@ def unique(base: str, taken: set[str], limit: int = 63) -> str:
 
 
 def infer_one(project: config.Project, name: str, content: bytes) -> dict[str, Any]:
-    """CSV 하나 → 테이블 추론(scaffold 형식의 표 하나). 이미 있는 이름과 겹치면 이름을 바꾼다."""
+    """CSV 또는 xlsx 하나 → 테이블 추론(scaffold 형식의 표 하나). 이미 있는 이름과 겹치면 이름을 바꾼다."""
     try:
         tables = scaffold.infer_tables({name: content})
     except scaffold.ScaffoldError as exc:
-        raise IngestError(422, "invalid_csv", "CSV를 읽을 수 없습니다", exc.errors) from None
+        detail = exc.detail or "invalid_csv"
+        msg = "암호화되지 않은 .xlsx 파일만 지원합니다" if detail == "invalid_xlsx" else "파일을 읽을 수 없습니다"
+        raise IngestError(422, detail, msg, exc.errors) from None
     table = tables[0]
     taken = taken_names(project)          # 지운 테이블의 데이터 파일이 남은 이름도 피한다
     base = table["name"]
@@ -154,29 +157,32 @@ def _first_path(project: config.Project, name: str, mode: str) -> str:
 
 def _first_file(project: config.Project, name: str, value: Mapping[str, Any], columns: list[dict[str, Any]],
                 content: bytes, source_name: str, mode: str) -> bytes:
-    """올린 CSV를 새 테이블 정의로 접수해 정규형으로 쓴다(머리글 → 열은 추론의 source로 맞춘다)."""
+    """올린 CSV 또는 xlsx를 새 테이블 정의로 접수해 정규형으로 쓴다(머리글 → 열은 추론의 source로 맞춘다)."""
     import tempfile
 
     table = config._normalize_schema({"tables": {name: dict(value)}})["tables"][name]
     overrides = {c["source"]: c["name"] for c in columns if isinstance(c.get("source"), str) and c["source"]}
     with tempfile.TemporaryDirectory(prefix="dashkit-newtable-") as tmp:
-        src = Path(tmp) / "in.csv"
+        is_xlsx = source_name.lower().endswith(".xlsx")
+        src = Path(tmp) / ("in.xlsx" if is_xlsx else "in.csv")
         src.write_bytes(content)
-        parser = CsvParser(src, source_name)
         try:
-            intake = Intake(parser, name, table, overrides=overrides)
+            parser = make_parser({"kind": "xlsx" if is_xlsx else "csv", "path": src, "name": source_name}, strict=False)
+            try:
+                intake = Intake(parser, name, table, overrides=overrides)
+                out = io.StringIO()
+                w = csv.writer(out, lineterminator="\n")
+                header = list(table["columns"]) if mode == "replace" else intake.header
+                w.writerow(header)
+                pos = {c: i for i, c in enumerate(intake.header)}
+                for _at, values, typed in intake.rows():
+                    if typed is None:
+                        continue        # 검증 오류는 아래에서 모두 알린다
+                    w.writerow([values[pos[c]] if c in pos else "" for c in header])
+            finally:
+                parser.close()
         except IntakeError as exc:
             raise IngestError(422, exc.detail, exc.message, exc.errors or None, **exc.extra) from None
-        out = io.StringIO()
-        w = csv.writer(out, lineterminator="\n")
-        header = list(table["columns"]) if mode == "replace" else intake.header
-        w.writerow(header)
-        pos = {c: i for i, c in enumerate(intake.header)}
-        for _at, values, typed in intake.rows():
-            if typed is None:
-                continue        # 검증 오류는 아래에서 모두 알린다
-            w.writerow([values[pos[c]] if c in pos else "" for c in header])
-        parser.close()
         if intake.report.errors:
             raise IngestError(422, "invalid_rows", "첫 파일이 새 테이블의 규칙을 통과하지 못했습니다(유형·필수·기본 키를 고치세요)",
                               intake.report.errors)
