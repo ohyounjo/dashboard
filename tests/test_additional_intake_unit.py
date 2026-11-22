@@ -505,6 +505,29 @@ def test_xlsx_security_defenses_and_filename_checks(tmp_path):
         XlsxParser(bad_crc_xlsx, "bad_crc.xlsx").header()
     assert crc_exc.value.detail == "invalid_xlsx"
 
+    # 5-f) 날짜 일련번호 범위 초과(1900/1904 + 반올림 넘침 포함) → OverflowError 대신 IntakeError / fatal RowError
+    from dashkit.ingest.xlsx import _excel_serial_to_iso
+    assert _excel_serial_to_iso("2958465", has_time=False, date1904=False) == "9999-12-31"
+    assert _excel_serial_to_iso("2957003", has_time=False, date1904=True) == "9999-12-31"
+    assert _excel_serial_to_iso("2958465.99999999", has_time=True, date1904=False) == "9999-12-31T23:59:59.999136"
+    for bad_serial, d1904 in (("2958466", False), ("2958465.999999999999", False), ("2957004", True), ("2957003.999999999999", True)):
+        with pytest.raises(IntakeError) as dt_exc:
+            _excel_serial_to_iso(bad_serial, has_time=True, date1904=d1904)
+        assert dt_exc.value.detail == "invalid_csv"
+    bad_dt_xlsx = tmp_path / "bad_date.xlsx"
+    bad_dt_xlsx.write_bytes(
+        make_xlsx_bytes(
+            [{"name": "S1", "rows": [["id", "d"], ["1", {"t": "n", "s": 1, "v": "2958466"}]]}],
+            num_fmts={164: "yyyy-mm-dd"},
+            cell_xfs=[0, 164],
+        )
+    )
+    dp = XlsxParser(bad_dt_xlsx, "bad_date.xlsx")
+    assert dp.header() == ["id", "d"]
+    dt_rows = list(dp.rows())
+    dp.close()
+    assert len(dt_rows) == 1 and isinstance(dt_rows[0][1], RowError) and dt_rows[0][1].fatal is True
+
     # 6) 파일 이름 검증 분리: Studio(check_filename)는 .csv만, 관리 서비스(check_ingest_filename)는 .csv·.xlsx 허용
     assert upload.check_ingest_filename("orders.xlsx") == "orders.xlsx"
     assert upload.check_ingest_filename("orders.CSV") == "orders.CSV"

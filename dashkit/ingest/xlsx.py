@@ -113,13 +113,20 @@ def _classify_format_code(code: str) -> tuple[bool, bool]:
 
 
 def _excel_serial_to_iso(raw: str, *, has_time: bool, date1904: bool) -> str | None:
-    """엑셀 날짜·시각 일련번호 → ISO 8601 문자열(실패 시 None)."""
+    """엑셀 날짜·시각 일련번호 → ISO 8601 문자열(범위 초과 시 IntakeError, 숫자가 아니면 None)."""
     try:
         serial = Decimal(raw)
     except InvalidOperation:
         return None
-    if not serial.is_finite() or serial < 0 or serial > 3_000_000:
+    if not serial.is_finite() or serial < 0:
         return None
+    # Python date.max(9999-12-31) 기준 최대 일수(1900 체계 2,958,465 / 1904 체계 2,957,003) + 반올림 여유 전 사전 차단
+    if serial > 2_958_466:
+        raise IntakeError(
+            "invalid_csv",
+            "엑셀 날짜 일련번호가 표현 가능한 범위를 초과했습니다",
+            ["날짜 일련번호가 최대 날짜(9999-12-31)를 초과함"],
+        )
     days_dec = serial // 1
     frac = serial - days_dec
     if frac < 0:
@@ -130,23 +137,28 @@ def _excel_serial_to_iso(raw: str, *, has_time: bool, date1904: bool) -> str | N
     if total_us >= 86_400_000_000:
         days += 1
         total_us -= 86_400_000_000
-    if not has_time and total_us == 0:
-        if date1904:
-            return (date(1904, 1, 1) + timedelta(days=days)).isoformat()
-        if days == 60:
-            return "1900-02-29"
+    if date1904:
+        base = date(1904, 1, 1)
+    elif days == 60:
+        base = date(1899, 12, 30)
+    else:
         base = date(1899, 12, 31) if days < 60 else date(1899, 12, 30)
+    if days > (date.max - base).days:
+        raise IntakeError(
+            "invalid_csv",
+            "엑셀 날짜 일련번호가 표현 가능한 범위를 초과했습니다",
+            ["날짜 일련번호가 최대 날짜(9999-12-31)를 초과함"],
+        )
+    if not has_time and total_us == 0:
+        if not date1904 and days == 60:
+            return "1900-02-29"
         return (base + timedelta(days=days)).isoformat()
     sec, us = divmod(total_us, 1_000_000)
     hh, rem = divmod(sec, 3600)
     mm, ss = divmod(rem, 60)
     if not date1904 and days == 60:
         return f"1900-02-29T{hh:02d}:{mm:02d}:{ss:02d}" + (f".{us:06d}" if us else "")
-    if date1904:
-        d = date(1904, 1, 1) + timedelta(days=days)
-    else:
-        base = date(1899, 12, 31) if days < 60 else date(1899, 12, 30)
-        d = base + timedelta(days=days)
+    d = base + timedelta(days=days)
     dt = datetime(d.year, d.month, d.day, hh, mm, ss, us)
     return dt.isoformat()
 

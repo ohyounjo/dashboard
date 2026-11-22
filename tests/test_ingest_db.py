@@ -964,12 +964,21 @@ def test_watch_processing_recovery_transient_retry_and_sensitive_redaction(tmp_p
     crc_buf[_pos] ^= 0xFF
     (inbox / "01_bad.csv.gz").write_bytes(b"not-a-valid-gzip-stream")
     (inbox / "01_bad_crc.xlsx").write_bytes(bytes(crc_buf))
+    (inbox / "01_bad_date.xlsx").write_bytes(
+        _make_xlsx(
+            [{"name": "S1", "rows": [["id", "group_id", "state", "on_day"],
+                                     ["E997", "g1", "open", {"t": "n", "s": 1, "v": "2958466"}]]}],
+            num_fmts={164: "yyyy-mm-dd"},
+            cell_xfs=[0, 164],
+        )
+    )
     (inbox / "02_ok.csv").write_text("id,group_id,state\nE962,g1,open\n", encoding="utf-8")
     st_corrupt = watch_once("ledger", settle_ms=0, projects_dir=root, dbname=scratch_db)
-    assert st_corrupt["failed"] == 2 and st_corrupt["succeeded"] == 1
+    assert st_corrupt["failed"] == 3 and st_corrupt["succeeded"] == 1
     assert not list(proc.iterdir())
     assert any(p.name.endswith("-01_bad.csv.gz.error.json") for p in (inbox / "_failed").iterdir())
     assert any(p.name.endswith("-01_bad_crc.xlsx.error.json") for p in (inbox / "_failed").iterdir())
+    assert any(p.name.endswith("-01_bad_date.xlsx.error.json") for p in (inbox / "_failed").iterdir())
     assert any(p.name.endswith("-02_ok.csv") for p in (inbox / "_done").iterdir())
 
     rebuilt_equals_current(root, scratch_db)
