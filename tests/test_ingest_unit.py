@@ -372,3 +372,35 @@ def test_change_config_acquires_db_lock_before_project_lock_and_rechecks_revisio
                                             "set": {"description": "x"}}], rev, action="column-update")
     assert exc.value.status == 409 and exc.value.detail == "stale_config"
     assert order == ["db_lock", "project_lock"]
+
+
+def test_is_fast_remove_candidate_returns_false_on_lock_timeout(tmp_path, monkeypatch):
+    import psycopg
+    from contextlib import contextmanager
+    from dashkit import db
+    from dashkit.ingest import ledger
+    from dashkit.manage.routes import tables as tables_route
+
+    shutil.copytree(FIXTURES / "ledger", tmp_path / "ledger")
+    project = config.load_project("ledger", tmp_path)
+    seen_sql = []
+
+    class DummyCur:
+        def execute(self, sql_str, params=None):
+            seen_sql.append((sql_str, params))
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    class DummyConn:
+        def cursor(self): return DummyCur()
+
+    @contextmanager
+    def fake_inspect():
+        yield DummyConn()
+
+    monkeypatch.setattr(db, "inspect_conn", fake_inspect)
+    monkeypatch.setattr(ledger, "read", lambda _cur: (_ for _ in ()).throw(psycopg.errors.LockNotAvailable()))
+
+    # 000010-20261121T0102Z.csv 는 ledger 픽스처의 가장 최근 배치
+    assert not tables_route._is_fast_remove_candidate(project, "entries", "000010-20261121T0102Z.csv", lock_timeout_ms=150)
+    assert seen_sql and "lock_timeout" in seen_sql[0][0] and seen_sql[0][1] == ("150ms",)
