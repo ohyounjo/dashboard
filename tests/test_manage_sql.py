@@ -325,6 +325,51 @@ def test_sql_console_blocks_sensitive_columns_and_views(sql_clients, monkeypatch
         finally:
             with db.owner_conn() as conn:
                 conn.execute(f"DROP VIEW IF EXISTS dash.{mix_v}")
+
+        # 혼합 테이블(민감 PK 포함)에서 export: columns=["secret"] 필터 유지 및 암묵적 민감 PK 정렬 제외 검증
+        from types import SimpleNamespace
+        from dashkit.manage.routes import export as export_mod
+        monkeypatch.setenv("MANAGE_FEATURES", "export")
+        sens_pk_tbl = f"_test_senspk_{secrets.token_hex(4)}"
+        with db.owner_conn() as conn:
+            conn.execute(f"CREATE TABLE raw.{sens_pk_tbl} (secret text, note text)")
+            conn.execute(f"INSERT INTO raw.{sens_pk_tbl} VALUES ('s1', 'keep'), ('s2', 'drop')")
+            conn.execute(f"REVOKE ALL ON raw.{sens_pk_tbl} FROM PUBLIC, {role}")
+            conn.execute(f"GRANT SELECT (note) ON raw.{sens_pk_tbl} TO {role}")
+        fake_proj = SimpleNamespace(
+            name="p",
+            schema={
+                "tables": {
+                    sens_pk_tbl: {
+                        "primary_key": ["secret"],
+                        "columns": {
+                            "secret": {"type": "text", "sensitive": True},
+                            "note": {"type": "text"},
+                        },
+                    }
+                }
+            },
+        )
+        monkeypatch.setattr(export_mod, "_project", lambda: fake_proj)
+        try:
+            flt = json.dumps([{"column": "note", "op": "eq", "value": "keep"}])
+            r_exp_sens = op_c.get(
+                f"/api/manage/tables/{sens_pk_tbl}/export?format=csv&columns=secret&filters={flt}",
+                headers=op_h,
+            )
+            assert r_exp_sens.status == 200, r_exp_sens.body
+            lines = r_exp_sens.body.decode("utf-8-sig").splitlines()
+            assert lines == ["secret", "***"]
+
+            r_exp_note = op_c.get(
+                f"/api/manage/tables/{sens_pk_tbl}/export?format=csv&columns=note",
+                headers=op_h,
+            )
+            assert r_exp_note.status == 200, r_exp_note.body
+            assert set(r_exp_note.body.decode("utf-8-sig").splitlines()[1:]) == {"keep", "drop"}
+        finally:
+            with db.owner_conn() as conn:
+                conn.execute(f"DROP TABLE IF EXISTS raw.{sens_pk_tbl}")
     finally:
         with db.owner_conn() as conn:
             conn.execute(f"DROP VIEW IF EXISTS dash.{view_name}")
