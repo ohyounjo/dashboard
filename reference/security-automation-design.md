@@ -192,15 +192,16 @@ CREATE INDEX api_tokens_project_created_idx ON dashkit_auth.api_tokens (project,
   ```json
   {
     "columns": [{"name": "id", "type": "text"}, {"name": "status", "type": "text"}],
-    "rows": [{"id": "ISS-1", "status": "open"}],
+    "rows": [["ISS-1", "open"]],
     "has_more": true,
     "elapsed_ms": 12,
     "truncated_cells": []
   }
   ```
+  - **행 표현(`rows`)과 중복 열 이름 보존:** 임의 SQL은 조인이나 별칭 없는 식(`SELECT 1 AS id, 2 AS id`, `SELECT 1 + 1, 2 + 2`)으로 동일한 이름의 열을 여러 개 반환할 수 있다. 키 덮어쓰기 없이 모든 열 값을 손실 없이 보존하기 위해 `rows`는 `columns` 배열과 동일한 열 순서의 2차원 배열(`list[list[Any]]`, `rows[row_idx][col_idx]` ↔ `columns[col_idx]`)로 반환한다.
   - 전체 행 수는 세지 않고 `limit + 1`행을 읽어 `len(fetched) > limit`로 `has_more`를 판정한다.
   - 열 유형은 `cur.description`의 `type_code`를 `dashkit/api/data.py`의 `_TYPE_BY_OID`로 매핑(미등록 타입은 `"text"`).
-  - 값 직렬화는 `dashkit/manage/routes/rows.py`의 `_to_json`을 재사용하고, 문자열 길이가 `paging.CELL_CHARS`(2,000자)를 초과하면 2,000자에서 절단해 `truncated_cells`에 `[row_index, col_name]`을 기록한다.
+  - 값 직렬화는 `dashkit/manage/routes/rows.py`의 `_to_json`을 재사용하고, 문자열 길이가 `paging.CELL_CHARS`(2,000자)를 초과하면 2,000자에서 절단해 `truncated_cells`에 `[row_index, col_index]`를 기록한다.
 
 ### 4-2. 다층 SQL 방어 설계 (`dashkit/manage/sql_guard.py`)
 
@@ -209,7 +210,7 @@ CREATE INDEX api_tokens_project_created_idx ON dashkit_auth.api_tokens (project,
 | 계층 | 방어 수단 | 차단 대상 |
 |---|---|---|
 | 1. SQL 렉서 사전 검사 (`sql_guard.prepare_sql`) | PostgreSQL 문자열(`'...'`, `''`), 이중 따옴표(`"..."`), 달러 인용(`$tag$...$tag$`), 줄 주석(`--`), 중첩 블록 주석(`/*...*/`)을 파싱해 토큰 검증 | 다중 문장(문장 중간 `;`), 괄호 탈출(`)` 깊이 < 0), 미종결 문자열·주석·괄호, 허용 외 시작 키워드(`INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, `GRANT`, `REVOKE`, `TRUNCATE`, `COPY`, `DO`, `CALL`, `SET`, `EXPLAIN`, `PREPARE`, `EXECUTE` 등), 부작용/DoS 시스템 함수(`pg_sleep`, `pg_terminate_backend`, `pg_cancel_backend`, `pg_reload_conf`, `pg_rotate_logfile`, `lo_import`, `lo_export`, `dblink*`) |
-| 2. 서브쿼리 래핑 + 줄바꿈 보호 | `SELECT * FROM (\n<정제된 SQL>\n) AS _dashkit_q LIMIT %s OFFSET %s` | 비-SELECT 문장, 쓰기 CTE(`WITH ... INSERT/UPDATE/DELETE`), `SELECT ... INTO`, 마지막 줄 `--` 주석에 의한 래핑 탈출 |
+| 2. 서브쿼리 래핑 + `%` 이스케이프 + 줄바꿈 보호 | 정제된 사용자 SQL의 모든 `%`를 `%%`로 치환한 뒤 `SELECT * FROM (\n<이스케이프된 SQL>\n) AS _dashkit_q LIMIT %s OFFSET %s`로 래핑 | 비-SELECT 문장, 쓰기 CTE(`WITH ... INSERT/UPDATE/DELETE`), `SELECT ... INTO`, 마지막 줄 `--` 주석에 의한 래핑 탈출, 사용자 SQL 내 리터럴 `%`(나머지 연산·`LIKE 'a%'`·`'%s'`)의 플레이스홀더 오인 |
 | 3. 확장 쿼리 프로토콜 | `psycopg` 매개변수 바인딩(`(limit + 1, offset)`) | PostgreSQL 서버 프로토콜 레벨에서 다중 문장 실행 원천 차단 |
 | 4. `dash_inspect` 계정 및 스키마 권한 | `db.inspect_conn()`만 사용(`dash_owner` 절대 금지) | `dashkit_auth` 스키마 조회(`02-auth.sh`에서 `PUBLIC` 회수), 쓰기 DDL/DML, 민감 열(`#37`) 및 민감 열 참조 `sql:` 뷰 조회 |
 | 5. 읽기 전용 트랜잭션 + 시간 제한 | `-c default_transaction_read_only=on -c statement_timeout=<MANAGE_STATEMENT_TIMEOUT_MS> -c lock_timeout=<min(timeout, 5000)> -c search_path=raw,dash,dashkit_meta` | 쓰기 부작용, 장시간 풀스캔·카테시안 조인에 의한 DB 자원 점유 |
@@ -221,7 +222,7 @@ CREATE INDEX api_tokens_project_created_idx ON dashkit_auth.api_tokens (project,
   4. 괄호 깊이가 도중에 음수가 되거나 최종 깊이가 0이 아니면 422 `invalid_query`.
   5. 첫 유효 토큰(소문자)이 `select`, `with`, `values`, `table`, `(` 중 하나가 아니면 422 `invalid_query`("읽기 전용 SELECT 문장만 실행할 수 있습니다").
   6. 식별자 토큰이 차단 함수 목록(`pg_sleep`, `pg_terminate_backend`, `pg_cancel_backend`, `pg_reload_conf`, `pg_rotate_logfile`, `lo_import`, `lo_export`, `pg_read_file`, `pg_read_binary_file`, `pg_ls_dir`, `dblink`, `dblink_exec`, `dblink_connect`)에 해당하고 바로 다음 유효 토큰이 `(`이면 422 `invalid_query`.
-  7. 원문에서 후행 세미콜론만 제거한 문자열을 반환해 줄바꿈으로 감싸 래핑한다.
+  7. 원문에서 후행 세미콜론만 제거한 문자열의 `%`를 모두 `%%`로 이스케이프(`cleaned.replace("%", "%%")`)한 뒤 줄바꿈으로 감싸 `SELECT * FROM (\n<escaped>\n) AS _dashkit_q LIMIT %s OFFSET %s`로 조립한다. `psycopg`가 `(limit + 1, offset)`을 바인딩할 때 사용자 SQL의 나머지 연산(`5 % 2`), `LIKE 'a%'`, 문자열 리터럴 `'%s'`가 플레이스홀더로 오인되지 않고 그대로 PostgreSQL에 전달된다.
 - **오류 매핑:**
   - `psycopg.errors.QueryCanceled` → 504 `query_timeout` (`"쿼리가 시간 제한을 넘었습니다. 조건을 좁혀 주세요"`)
   - `psycopg.errors.InsufficientPrivilege` → 403 `forbidden` (`"접근 권한이 없는 스키마·테이블 또는 열입니다"`)
@@ -318,8 +319,10 @@ CREATE INDEX api_tokens_project_created_idx ON dashkit_auth.api_tokens (project,
    - `admin`·`operator` → 200 정상 실행.
    - `user` → 403 `forbidden`, 비로그인 → 401 `unauthenticated`, API 토큰 → 401 `unauthenticated`.
 3. **정상 조회 및 페이지 나눔:**
-   - `raw.*`, `dash.*`, `dashkit_meta.*` 조회 성공, `columns`·`rows`·`has_more`·`elapsed_ms` 형식 검증.
+   - `raw.*`, `dash.*`, `dashkit_meta.*` 조회 성공, `columns`·`rows`(열 순서 2차원 배열)·`has_more`·`elapsed_ms`·`truncated_cells` 형식 검증.
    - 후행 세미콜론 1개(`SELECT 1;`), CTE(`WITH x AS (SELECT 1 AS a) SELECT * FROM x`), 문자열 안 세미콜론(`SELECT 'a;b' AS s`), 마지막 줄 주석(`SELECT 1 -- comment`) 정상 실행.
+   - `%` 문자 포함 쿼리: 나머지 연산(`SELECT 5 % 2 AS rem`), `LIKE` 패턴(`SELECT 'abc' LIKE 'a%' AS matched`), 문자열 내부 플레이스홀더 유사 문자열(`SELECT '%s' AS fmt, '%(x)s' AS named`)이 `psycopg` 바인딩 오류 없이 정상 실행됨을 검증.
+   - 중복 열 이름 보존: `SELECT 1 AS id, 2 AS id` 및 별칭 없는 복수 식(`SELECT 1 + 1, 2 + 2`)에서 `columns` 2개와 `rows`의 2개 위치 값이 손실 없이 반환됨을 검증.
    - `limit` 1~200 경계(0·201 → 422), `offset` 0~100000 경계(-1·100001 → 422), `has_more` 정확성 검증.
 4. **SQL 보안 차단 (실 DB 포함):**
    - `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE`, `TRUNCATE`, `GRANT`, `COPY`, `DO $$ ... $$` → 422 차단.
