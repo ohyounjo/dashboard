@@ -366,16 +366,18 @@ def test_sql_console_blocks_sensitive_columns_and_views(sql_clients, monkeypatch
         monkeypatch.setattr(export_mod, "_project", lambda: fake_proj)
         try:
             flt = json.dumps([{"column": "note", "op": "eq", "value": "keep"}])
+            cols_s = json.dumps(["secret"])
             r_exp_sens = op_c.get(
-                f"/api/manage/tables/{sens_pk_tbl}/export?format=csv&columns=secret&filters={flt}",
+                f"/api/manage/tables/{sens_pk_tbl}/export?format=csv&columns={cols_s}&filters={flt}",
                 headers=op_h,
             )
             assert r_exp_sens.status == 200, r_exp_sens.body
             lines = r_exp_sens.body.decode("utf-8-sig").splitlines()
             assert lines == ["secret", "***"]
 
+            cols_n = json.dumps(["note"])
             r_exp_note = op_c.get(
-                f"/api/manage/tables/{sens_pk_tbl}/export?format=csv&columns=note",
+                f"/api/manage/tables/{sens_pk_tbl}/export?format=csv&columns={cols_n}",
                 headers=op_h,
             )
             assert r_exp_note.status == 200, r_exp_note.body
