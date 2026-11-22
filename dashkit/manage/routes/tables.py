@@ -26,6 +26,7 @@ from ...ingest.batches import REMOVED_DIR
 from ...ingest.remove import NeedsRebuild, remove_batch, restore_batch
 from ...project import store, upload
 from .. import context
+from ..auth import ManageActor, require_ingest_actor
 from ..runs_state import runs
 from ..uploads import uploads
 
@@ -82,10 +83,17 @@ def _lineage(project: config.Project) -> dict[str, Any]:
     return lineage.build(project, snap)
 
 
-def _audit(action: str, principal: Principal | None, request: Request | None, **detail: Any) -> None:
+def _audit(action: str, actor: Principal | ManageActor | None, request: Request | None, **detail: Any) -> None:
+    if isinstance(actor, ManageActor):
+        actor_id = actor.actor_id
+        actor_email = actor.actor_email
+        if actor.token is not None:
+            detail = {**detail, "auth_type": "api_token", "api_key_id": actor.token.id, "api_key_name": actor.token.name}
+    else:
+        actor_id = actor.id if actor else None
+        actor_email = actor.email if actor else None
     try:
-        auth_store.record_audit(action, actor_id=principal.id if principal else None,
-                                actor_email=principal.email if principal else None, target_type="table",
+        auth_store.record_audit(action, actor_id=actor_id, actor_email=actor_email, target_type="table",
                                 target_id=detail.get("table"), target_label=detail.get("table"), detail=detail,
                                 ip=client_ip(request) if request is not None else None)
     except Exception:     # 감사 로그 실패가 끝난 적재를 실패로 만들지 않는다
@@ -204,7 +212,7 @@ def _columns(value: Any) -> dict[str, Any] | None:
     return value
 
 
-def _ingest_job(project_name: str, entries: list[dict[str, Any]], principal: Principal, *, dry_run: bool,
+def _ingest_job(project_name: str, entries: list[dict[str, Any]], actor: Principal | ManageActor, *, dry_run: bool,
                 force: bool, skip_invalid: bool, strict: bool, upload_id: str | None,
                 folder: Path) -> JSONResponse:
     """파일 적재(하나 또는 여럿, 한 트랜잭션)를 작업으로 돌린다(202). entries는 [{table, path, name, columns}].
@@ -246,14 +254,18 @@ def _ingest_job(project_name: str, entries: list[dict[str, Any]], principal: Pri
             uploads.drop(upload_id)          # 넣었으면 푼다. 실패하면 1시간 동안 같은 upload_id로 다시 넣을 수 있다
         if run.status == "succeeded":
             for e, b in zip(entries, _summary(run.result)["batches"]):
-                _audit("data.batch.create", principal, None, project=project_name, method="upload",
+                _audit("data.batch.create", actor, None, project=project_name, method="upload",
                        source_name=e["name"], **b)
         else:
             for e in entries:
-                _audit("data.batch.failed", principal, None, project=project_name, table=e["table"], method="upload",
+                _audit("data.batch.failed", actor, None, project=project_name, table=e["table"], method="upload",
                        source_name=e["name"], detail_code=(run.error or {}).get("detail"))
 
-    run = runs.start("ingest", work, table=one, actor_id=principal.id, actor_email=principal.email, on_done=done)
+    actor_id = actor.actor_id if isinstance(actor, ManageActor) else actor.id
+    actor_email = actor.actor_email if isinstance(actor, ManageActor) else actor.email
+    token_id = actor.token_id if isinstance(actor, ManageActor) else None
+    run = runs.start("ingest", work, table=one, actor_id=actor_id, actor_email=actor_email,
+                     token_id=token_id, on_done=done)
     return JSONResponse({"job": run.public()}, status_code=202)
 
 
@@ -298,9 +310,11 @@ async def _receive(request: Request, field: str, *, single: bool) -> tuple[Path,
 
 
 @router.post("/tables/{table}/batches")
-async def post_batches(table: str, request: Request, principal: Principal = Depends(require_operator)):
+async def post_batches(table: str, request: Request, actor: ManageActor = Depends(require_ingest_actor)):
     project = _project()
     name = _table(project, table)
+    if actor.token is not None and (actor.token.project != project.name or name not in actor.token.tables):
+        raise IngestError(403, "forbidden", "이 API 토큰으로 적재할 수 없는 프로젝트 또는 테이블입니다")
     ctype = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     limits = context.limits()
     if ctype == "multipart/form-data":
@@ -308,18 +322,18 @@ async def post_batches(table: str, request: Request, principal: Principal = Depe
         source_name, path = files[0]
         dry_run = _flag(fields.get("dry_run"))
         columns = _columns(fields.get("columns"))
-        upload_id = uploads.hold(name, files, principal.id, columns={source_name: columns}) if dry_run else None
+        upload_id = uploads.hold(name, files, actor.upload_actor_id, columns={source_name: columns}) if dry_run else None
         return _ingest_job(project.name, [{"table": name, "path": path, "name": source_name, "columns": columns}],
-                           principal, dry_run=dry_run, force=_flag(fields.get("force")),
+                           actor, dry_run=dry_run, force=_flag(fields.get("force")),
                            skip_invalid=_flag(fields.get("skip_invalid")), strict=_flag(fields.get("strict")),
                            upload_id=upload_id, folder=folder)
     body = await _json(request)
     if "upload_id" in body:
-        held = uploads.get(body.get("upload_id"), name, principal.id)
+        held = uploads.get(body.get("upload_id"), name, actor.upload_actor_id)
         source_name, path = held.files[0]
         columns = _columns(body.get("columns")) if "columns" in body else (held.columns or {}).get(source_name)
         return _ingest_job(project.name, [{"table": name, "path": path, "name": source_name, "columns": columns}],
-                           principal, dry_run=False, force=_flag(body.get("force")),
+                           actor, dry_run=False, force=_flag(body.get("force")),
                            skip_invalid=_flag(body.get("skip_invalid")), strict=_flag(body.get("strict")),
                            upload_id=held.id, folder=path.parent)
     rows = body.get("rows")
@@ -336,12 +350,12 @@ async def post_batches(table: str, request: Request, principal: Principal = Depe
                             wait_ms=limits.lock_wait_ms)
         except IngestError as exc:
             if not dry_run:
-                _audit("data.batch.failed", principal, request, project=project.name, table=name, method=method,
+                _audit("data.batch.failed", actor, request, project=project.name, table=name, method=method,
                        detail_code=exc.detail)
             raise
         if not dry_run:
             b = _summary(result)["batches"][0]
-            _audit("data.batch.create", principal, request, project=project.name, method=method, **b)
+            _audit("data.batch.create", actor, request, project=project.name, method=method, **b)
         return result
 
     return await run_in_threadpool(work)

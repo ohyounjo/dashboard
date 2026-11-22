@@ -20,8 +20,10 @@ import datasets from "./menus/datasets.js";
 import history from "./menus/history.js";
 import audit from "./menus/audit.js";
 import outbox from "./menus/outbox.js";
+import tokens from "./menus/tokens.js";
+import sql from "./menus/sql.js";
 
-const MENUS = [users, groups, tables, datasets, history, stats, audit, outbox];
+const MENUS = [users, groups, tables, datasets, history, sql, tokens, stats, audit, outbox];
 const menus = () => MENUS.filter((m) => !m.when || m.when());
 
 function route() {

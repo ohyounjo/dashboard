@@ -10,7 +10,7 @@ import * as Q from "../../shared/query.js";
 import { rowsView } from "../rows.js";
 import { box, btn, pill, jobText, jobBox, dataFailText as failText } from "../datakit.js";
 import { newTableWizard, addColumnCard, columnRuleCard, usagePanel, dropTableCard, compactTable } from "../structure.js";
-import { T, view, session, ApiFail, api, apiForm, waitJob, notice, head, checkbox, pagedTable, detailId } from "../kit.js";
+import { T, view, session, ApiFail, api, apiForm, waitJob, notice, head, checkbox, pagedTable, detailId, isManageFeature } from "../kit.js";
 
 const D = T.data;
 const BASE = "/api/manage";
@@ -24,7 +24,7 @@ let flash = null;            // 구조 변경을 마치고 상세를 다시 그�
 
 const isAdmin = () => ((session.manage && session.manage.role) || (session.me && session.me.role)) === "admin";
 const limits = () => (session.manage && session.manage.limits) || {};
-const hasFeature = (name) => Array.isArray(session.manage && session.manage.features) && session.manage.features.includes(name);
+const hasFeature = isManageFeature;
 const inlineMax = () => limits().inline_max_rows || 500;
 
 /* ---------------- 공통 조각 ---------------- */
@@ -539,8 +539,20 @@ async function detailView(name, my) {
       structBtns.forEach((b) => { b.hidden = true; });
     } })), "danger"));
   }
+  let copyCurlBtn = null;
+  if (t.mode === "append" && hasFeature("tokens")) {
+    copyCurlBtn = btn(D.copyCurl, async () => {
+      const cmd = `curl -X POST "${location.origin}/api/manage/tables/${encodeURIComponent(t.name)}/batches" \\\n  -H "Authorization: Bearer $DASHKIT_API_TOKEN" \\\n  -F "file=@data.csv"`;
+      try {
+        await navigator.clipboard.writeText(cmd);
+        if (alive()) actionBox.replaceChildren(box("good", D.curlCopied));
+      } catch (e) {
+        if (alive()) actionBox.replaceChildren(box("bad", D.curlCopyFail), h("pre", { class: "mono", text: cmd }));
+      }
+    });
+  }
   view().replaceChildren(crumb,
-    head(t.name, t.description || (t.mode === "append" ? null : D.replaceNote), addBtn, ...structBtns),
+    head(t.name, t.description || (t.mode === "append" ? null : D.replaceNote), addBtn, copyCurlBtn, ...structBtns),
     h("div", { class: "a-card" }, info), h("div", { class: "a-gap" }), actionBox, addBox, tabsBox);
   draw(detailTab);
 }

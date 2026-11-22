@@ -10,6 +10,8 @@ export const view = () => $("view");
 /** 셸이 채우는 값. me: 로그인한 운용자 {email, role}, mailMode: 메일 모드(/api/auth/config),
  *  manage: 관리 서비스의 GET /api/manage/config({project, role, limits}). 관리 서비스가 떠 있지 않으면 null(데이터 메뉴를 숨긴다) */
 export const session = { me: null, mailMode: "test", manage: null };
+export const isAdmin = () => Boolean(session.me && session.me.role === "admin");
+export const isManageFeature = (name) => Array.isArray(session.manage && session.manage.features) && session.manage.features.includes(name);
 
 /* ---------------- 네트워크 ---------------- */
 

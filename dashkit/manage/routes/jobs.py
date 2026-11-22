@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 
 from ...auth.routes import Principal, require_operator
 from ...ingest import IngestError
+from ..auth import ManageActor, require_ingest_actor
 from ..runs_state import runs
 
 router = APIRouter()
@@ -22,10 +23,12 @@ def get_jobs(principal: Principal = Depends(require_operator)) -> dict[str, Any]
 
 
 @router.get("/jobs/{job_id}")
-def get_job(job_id: str, principal: Principal = Depends(require_operator)) -> dict[str, Any]:
+def get_job(job_id: str, actor: ManageActor = Depends(require_ingest_actor)) -> dict[str, Any]:
     run = runs.get(job_id)
     if run is None:
         raise IngestError(404, "unknown_job", "없는 작업입니다(관리 서비스가 다시 떴으면 지난 작업은 감사 로그에 있습니다)")
+    if actor.token is not None and run.token_id != actor.token.id:
+        raise IngestError(403, "forbidden", "이 작업에 접근할 권한이 없습니다")
     return run.public()
 
 
