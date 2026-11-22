@@ -172,6 +172,7 @@ python -m dashkit ingest-db \
 └─ <테이블 이름>/                        # schema.yaml의 append 테이블 이름과 일치
    ├─ 20261122-orders.csv                # 대기 중인 입고 파일 (.csv, .csv.gz, .xlsx)
    ├─ .uploading.csv.part                # 무시: '.' 또는 '_'로 시작하거나 .part / .tmp 확장자
+   ├─ _processing/                       # 현재 적재 중인 파일 (중단 시 시작/스캔 복구가 회수)
    ├─ _done/                             # 적재 성공한 원본 파일 보관 (또는 --delete-done 시 삭제)
    │  └─ 20261122T130500Z-20261122-orders.csv
    └─ _failed/                           # 적재 실패한 원본 파일 + 오류 사유
@@ -182,7 +183,7 @@ python -m dashkit ingest-db \
 - 기본 감시 루트 `projects/<PROJECT>/data/_inbox/`는 `_`로 시작하므로 기존 로더(`dashkit/loader/`)와 배치 목록(`batches.list_batches`)이 테이블이나 배치로 읽지 않는다(기존 규칙: `_`나 `.`으로 시작하는 이름은 무시).
 - 또는 `--dir /path/to/inbox --table <테이블>`로 특정 테이블의 단일 폴더를 감시할 수도 있다.
 
-### 4-2. 안전한 파일 소비 규칙 (불완전 파일 방지·원자적 격리·중복 방지)
+### 4-2. 안전한 파일 소비 규칙 (불완전 파일 방지·재시작 복구·원자적 격리·중복 방지)
 
 1. **대상 파일 필터링:**
    - 파일 이름이 `.` 또는 `_`로 시작하거나, 확장자가 `.tmp`, `.part`, `.crdownload`, `.error.json`, `.lock`인 파일은 건너뛴다.
@@ -190,22 +191,30 @@ python -m dashkit ingest-db \
    - 심볼릭 링크(`path.is_symlink()`)는 경로 이탈 방지를 위해 거절하고 `_failed/`로 격리한다.
    - 파일 크기가 `INGEST_MAX_UPLOAD_MB`를 넘으면 읽지 않고 즉시 `_failed/`로 옮기며 `upload_too_large` 오류를 기록한다.
 2. **쓰기 완료(Quiescence) 확인:**
-   - 외부 프로세스가 파일을 복사하는 도중에 읽는 일을 막기 위해, 권장 방식은 임시 이름(`.name.tmp`)으로 쓴 뒤 `mv`로 이름을 바꾸는 것이며, 이에 더해 감시기는 파일의 `(st_size, st_mtime_ns)`가 최소 ` settle_ms `(기본 `500`ms, `--settle-ms`로 조정 가능; `--once`에서는 `mtime`이 현재 시각보다 `settle_ms` 이상 지났거나 두 번 측정해 변하지 않았는지 확인) 동안 변하지 않고 배타적 열기/읽기가 가능한 파일만 처리한다.
-3. **처리 순서와 `ingest()` 호출:**
-   - 여러 테이블 폴더가 있으면 `config.table_order(project)`(참조 부모 테이블 먼저) 순으로, 같은 테이블 폴더 안에서는 파일 이름 오름차순으로 하나씩 처리한다.
-   - 각 파일을 처리하기 직전 같은 파일시스템 안의 `_processing/<타임스탬프>-<파일명>`으로 `os.replace` 이동해 중복 소비를 막는다.
+   - 외부 프로세스가 파일을 복사하는 도중에 읽는 일을 막기 위해, 권장 방식은 임시 이름(`.name.tmp`)으로 쓴 뒤 `mv`로 이름을 바꾸는 것이며, 이에 더해 감시기는 파일의 `(st_size, st_mtime_ns)`가 최소 `settle_ms`(기본 `500`ms, `--settle-ms`로 조정 가능; `--once`에서는 `mtime`이 현재 시각보다 `settle_ms` 이상 지났거나 두 번 측정해 변하지 않았는지 확인) 동안 변하지 않고 배타적 열기/읽기가 가능한 파일만 처리한다.
+3. **`_processing/` 중단 파일 재시작 복구 절차:**
+   - 감시기는 단일 테이블(또는 감시 루트) 당 하나의 프로세스만 돌도록 `<감시 루트>/.watch.lock` 파일 잠금(`fcntl.flock(LOCK_EX | LOCK_NB)`)을 잡는다.
+   - 잠금을 잡은 직후(시작 시 및 매 스캔 주기 첫 단계) 각 테이블 폴더의 `_processing/` 안에 남아 있는 파일이 있으면 **이전 실행이 `_processing/` 이동 직후 또는 `ingest()` 도중 강제 종료된 것**이므로 새 대기 파일보다 먼저 회수해 재처리한다:
+     1. `_processing/<UTC 시각>-<원래 이름>`에서 `<원래 이름>`을 복원해 `ingest()`를 실행한다(내부 `locked()`가 데이터 DB에 남은 `data/_pending/` 묶음 기록을 먼저 `recover`한다).
+     2. 이전 실행이 `ingest()` 커밋(또는 `recover`의 자동 반영)까지 마친 직후 죽었다면 이번 `ingest()` 호출은 `409 duplicate_file`을 돌려준다. `_processing/` 복구 경로에서 `409 duplicate_file`이 반환되고 중복 대상 배치의 생성 시각이 해당 `_processing/` 파일 이동 시각 이후(또는 방금 복구된 배치)이면 이미 적재가 완료된 파일로 판정해 `_done/`(또는 `--delete-done` 시 삭제)으로 정상 마감한다.
+     3. 아직 적재되지 않았던 파일이면 이번 `ingest()`가 정상 적재하여 `_done/`으로 옮기고, 검증 실패면 아래 5번 규칙에 따라 `_failed/`로 격리한다. 이로써 `_processing/` 이동 후 프로세스가 죽더라도 파일이 영구 누락되지 않는다.
+4. **처리 순서와 `ingest()` 호출:**
+   - 여러 테이블 폴더가 있으면 `config.table_order(project)`(참조 부모 테이블 먼저) 순으로, 같은 테이블 폴더 안에서는 (`_processing/` 복구 파일 먼저 → 새 대기 파일) 이름 오름차순으로 하나씩 처리한다.
+   - 새 대기 파일을 처리하기 직전 같은 파일시스템 안의 `_processing/<타임스탬프>-<파일명>`으로 `os.replace` 이동해 중복 소비를 막는다.
    - `ingest(project.name, [Item(table, {"kind": kind, "path": proc_path, "name": orig_name})], ...)`를 호출한다.
-4. **결과 처리 및 자원 정리:**
+5. **결과 처리, 민감 열 오류 값 마스킹 및 자원 정리:**
    - **성공 (`200`):**
      - 감사 로그에 `data.batch.create`(`method: "watch"`, `source_name: orig_name`, 배치 요약)를 남긴다.
      - `--delete-done` 옵션이 켜져 있으면 원본 파일을 삭제하고, 기본값에서는 `<테이블>/_done/<UTC 시각>-<원래 이름>`으로 옮긴다(`_done/` 보관 개수는 `--keep-done`, 기본 100개로 오래된 파일부터 정리).
    - **실패 (`IngestError`, 예: `422 invalid_rows`, `422 unknown_columns`, `409 duplicate_file`, `422 key_conflict`):**
      - 감사 로그에 `data.batch.failed`(`method: "watch"`, `source_name: orig_name`, `detail_code: exc.detail`)를 남긴다.
      - 원본 파일을 `<테이블>/_failed/<UTC 시각>-<원래 이름>`으로 옮기고, 옆에 `<같은 이름>.error.json`(`{"at", "table", "file", "status", "detail", "message", "errors"}`)을 기록한다.
-     - **민감 열 보호:** `ingest()`가 반환하는 `errors`는 이미 민감 열 값을 마스킹하므로 `.error.json`에도 민감 데이터 값이 남지 않는다.
+     - **민감 열 오류 값 명시적 마스킹 (`redact_sensitive_errors`):** 현재 `dashkit/loader/validate.py`의 `_parse()`·`_check_value()`와 `Intake.rows()`는 검증 실패 시 원문 값(`'<raw>'`)을 오류 문자열에 포함하고 `RowError.raw`에는 원래 행 칸들을 담는다. 따라서 `schema.yaml`에서 `sensitive: true`가 설정된 열이 있는 테이블은(감시 폴더의 `.error.json` 기록 및 `Intake` 오류 보고 공통으로) `redact_sensitive_errors(table_spec, errors)`를 거쳐:
+       - `<위치>:<민감 열 이름>: <이유>` 줄에서 작은따옴표로 인용된 원문 값(`'...'`)을 `'***'`로 치환하거나 제거해 위치와 이유만 남긴다(예: `bad.csv:17:phone: 형식 불일치 '***'`).
+       - 열 개수 불일치 등으로 `원래 칸: ...`을 남길 때도 민감 열 위치나 전체 원문 칸 인용을 마스킹한다.
      - 실패한 파일이 `_failed/`로 격리되므로 다음 폴링 주기에 같은 실패 파일을 무한 반복 실행하지 않는다.
    - **일시적 잠금·DB 장애 (`409 apply_running`, `503 db_unavailable`):**
-     - 파일 자체의 결함이 아니므로 `_failed/`로 버리지 않고 `_processing/`에서 원래 자리로 되돌려 다음 폴링 주기에 재시도한다(`--once` 모드에서는 종료 코드 1 반환).
+     - 파일 자체의 결함이 아니므로 `_failed/`로 버리지 않고 `_processing/`에서 원래 자리로 되돌려(또는 `_processing/`에 남겨 다음 주기의 3번 복구 단계에서) 다음 폴링 주기에 재시도한다(`--once` 모드에서는 종료 코드 1 반환).
 
 ### 4-3. CLI 인터페이스
 
@@ -358,7 +367,7 @@ python -m dashkit ingest-watch [--interval 5] [--dir <경로>] [--table <테이�
    - `CursorParser(Parser)` 구현 (`PARSERS["cursor"]`).
    - `ingest_from_db(...)`: `--dsn-env` 환경 변수 검증·읽기, 외부 DB `read_only=True` 접속, `--source-table` / `--query-file` 단일 SELECT 강제, DSN/비밀번호 마스킹(`sanitize_db_error`), `ingest()` 호출 및 감사 로그(`method="db"`).
 3. `dashkit/ingest/watch.py` (신규):
-   - `watch_once(...)`, `watch_loop(...)`: 감시 폴더 스캔, 임시/숨김 파일 및 심볼릭 링크 필터링, 크기·수정 시각 안정성(quiescence) 확인, `_processing/` → `ingest()` → `_done/` 또는 `_failed/`(+ `.error.json`) 원자적 이동 및 감사 로그(`method="watch"`).
+   - `watch_once(...)`, `watch_loop(...)`: 감시 폴더 `.watch.lock` 잠금, `_processing/` 중단 파일 재시작 복구, 대기 폴더 스캔, 임시/숨김 파일 및 심볼릭 링크 필터링, 크기·수정 시각 안정성(quiescence) 확인, `_processing/` → `ingest()` → `_done/` 또는 `_failed/`(+ `.error.json`, `redact_sensitive_errors` 민감 열 오류 값 명시적 마스킹) 원자적 이동 및 감사 로그(`method="watch"`).
 4. [`dashkit/ingest/intake.py`](../dashkit/ingest/intake.py) & [`dashkit/ingest/add.py`](../dashkit/ingest/add.py):
    - `PARSERS`에 `"xlsx": XlsxParser`, `"cursor": CursorParser` 등록.
    - `make_parser`에서 `kind == "xlsx"` 및 파일 확장자 `.xlsx` 자동 분기(`strict=False`일 때), `kind == "cursor"` 분기 지원.
@@ -397,7 +406,7 @@ python -m dashkit ingest-watch [--interval 5] [--dir <경로>] [--table <테이�
 | **동일 정규형 보장 (`xlsx` vs `csv` vs `rows` vs `cursor`)** | - 동일한 행 데이터(문자열, 천 단위 쉼표 숫자, `YYYY/MM/DD` 및 엑셀 날짜 일련번호, 참거짓, 빈 칸 NULL, 빠진 선택 열)를 `CsvParser`, `RowsParser`, `XlsxParser`, `CursorParser`로 각각 접수했을 때 `CanonicalWriter`가 만드는 정규형 `.csv.gz`의 바이트와 `sha256`이 100% 일치함 |
 | **`xlsx` 파서 정상·경계·악성 입력** | - 공유 문자열(`t="s"`), 인라인 문자열(`inlineStr`), 서식 있는 텍스트(`<r><t>`), 숫자, 부울(`t="b"`), 1900/1904 날짜 일련번호, 희소 셀(`r="A1"`, `r="D1"`), 앞뒤 빈 행·빈 끝 열 정상 파싱<br>- 다중 시트에서 기본 첫 가시 시트 선택 및 `sheet` 이름/번호 지정, 없는 시트 422 오류<br>- 오류 위치가 `<파일 이름>:<엑셀 행 번호>:<열>`로 정확히 보고됨<br>- ZIP가 아닌 파일, 암호화된 xlsx / 구형 `.xls`, `<!DOCTYPE`/`<!ENTITY` 포함 XML, 비압축 크기 한도 초과(ZIP 폭탄 모사) 시 메모리 폭주 없이 즉시 `422` 거절 및 파일 핸들 정리 |
 | **원본 DB 가져오기 (`ingest-db`)** | - `CursorParser`가 2,000행 이상을 스트리밍으로 읽고 데이터 유형(`int`, `Decimal`, `bool`, `date`, `datetime`, `UUID`, `None`)을 정확히 변환함<br>- 지원하지 않는 `bytea`·JSON 배열 열 포함 시 정확한 행·열 위치 오류 보고<br>- `--dsn-env`에 지정된 환경 변수가 없거나 잘못된 변수 이름일 때 거절<br>- 접속 실패·쿼리 오류 시 DSN 원문과 비밀번호가 표준 에러·예외 메시지·로그·감사 로그 어디에도 포함되지 않음(`sanitize_db_error` 검증)<br>- 외부 DB 세션이 `read_only=True`로 열려 쓰기 쿼리(`INSERT`/`UPDATE`/`DROP` 또는 쓰기 CTE)가 외부 DB에서 실행 차단됨 |
-| **감시 폴더 (`ingest-watch`)** | - 대기 폴더의 `.csv`, `.csv.gz`, `.xlsx`가 참조 순서·이름순으로 적재되고 `_done/`으로 이동함<br>- `.`·`_` 시작 파일, `.part`·`.tmp` 파일, 아직 수정 시각/크기가 안정되지 않은 파일은 건너뜀<br>- 심볼릭 링크, 크기 초과 파일, 검증 실패 파일은 `_failed/`로 격리되고 `.error.json`이 생성되며 다음 스캔에서 재실행되지 않음(민감 열 값은 `.error.json`에서도 마스킹됨)<br>- `409 apply_running` 등 일시적 잠금 실패 시 `_failed/`로 버리지 않고 원래 자리에 남겨 다음 스캔에 재시도함 |
+| **감시 폴더 (`ingest-watch`)** | - 대기 폴더의 `.csv`, `.csv.gz`, `.xlsx`가 참조 순서·이름순으로 적재되고 `_done/`으로 이동함<br>- `.`·`_` 시작 파일, `.part`·`.tmp` 파일, 아직 수정 시각/크기가 안정되지 않은 파일은 건너뜀<br>- **`_processing/` 재시작 복구:** `_processing/`으로 이동한 직후(적재 전) 중단된 파일은 다음 시작/스캔에서 회수되어 정상 적재되고 `_done/`으로 이동함; 적재 커밋 직후 중단되어 `_processing/`에 남은 파일은 재시작 복구 시 기존 배치 중복 감지(`duplicate_file`)와 연동해 중복 적재나 `_failed/` 격리 없이 `_done/`으로 정상 마감됨<br>- 심볼릭 링크, 크기 초과 파일, 검증 실패 파일은 `_failed/`로 격리되고 `.error.json`이 생성되며 다음 스캔에서 재실행되지 않음<br>- **민감 열 오류 값 마스킹:** `sensitive: true` 열의 값이 유형·패턴·범위 검증에 실패하거나 열 개수 불일치가 발생했을 때 `redact_sensitive_errors`가 원문 값을 마스킹해 `.error.json`에 민감 값이 절대 남지 않음을 검증<br>- `409 apply_running` 등 일시적 잠금 실패 시 `_failed/`로 버리지 않고 다음 스캔에 재시도함 |
 | **이어 올리기 (`uploads` 수명주기)** | - `POST /uploads` → 여러 조각 `PATCH /uploads/{id}` → `GET /uploads/{id}` 오프셋 확인 → 완료 후 `POST /tables/{t}/batches` 미리보기(`dry_run: true`) 및 확정(`dry_run: false`) 성공, 일괄 multipart 업로드와 동일한 배치 파일·재생성 결과 생성<br>- **중단 및 재개:** 1·2번째 조각 전송 후 연결 중단 → `GET /uploads/{id}`로 `offset` 조회 → 3번째 조각부터 이어 올려 정상 완료<br>- **중복 조각 및 부분 겹침:** 이미 보낸 오프셋의 동일 바이트 조각 재전송 시 200 멱등 응답; 다른 바이트 재전송 또는 건너뛴 오프셋(`req_offset > offset`) 전송 시 `409 offset_mismatch`와 현재 `offset` 반환<br>- **동시 PATCH:** 같은 `upload_id`에 동시 PATCH 요청 시 하나는 `409 upload_in_progress`<br>- **크기 제한 및 무결성:** `total_size > max_upload_mb` 또는 조각 누적 크기 초과 시 `413 upload_too_large`; 완료 시 `sha256` 불일치 시 임시 파일 즉시 삭제 및 `422 checksum_mismatch`; 미완료 세션을 `batches`에 넘기면 `409 upload_incomplete`<br>- **만료·취소·권한:** 다른 운용자(`operator B`)가 `operator A`의 `upload_id`에 접근 시 `410 upload_expired`; `DELETE /uploads/{id}` 호출 또는 TTL 경과 시 디스크 임시 폴더가 남김없이 삭제됨 |
 
 ### 7-2. DB 및 전체 통합 검증 (`tests/test_ingest_db.py`, `tests/test_manage_data.py`)
