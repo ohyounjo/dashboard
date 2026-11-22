@@ -44,7 +44,7 @@ position:
     - GRID_ID
     - ROW-1
     meta:
-      chartId: 0
+      chartId: 1
       uuid: 1a48d16a-b967-5f07-b247-5f1864bafae2
       sliceName: 전체 진척률(%)
       width: 3
@@ -58,7 +58,7 @@ position:
     - GRID_ID
     - ROW-1
     meta:
-      chartId: 0
+      chartId: 2
       uuid: 7cd8c1d3-79f7-5b4f-926a-4be4c44bda64
       sliceName: 다음 마일스톤까지(일)
       width: 3
@@ -72,7 +72,7 @@ position:
     - GRID_ID
     - ROW-1
     meta:
-      chartId: 0
+      chartId: 3
       uuid: 7a38b7d7-249d-5c1a-8e3a-83eed00167c4
       sliceName: 열린 이슈
       width: 3
@@ -86,7 +86,7 @@ position:
     - GRID_ID
     - ROW-1
     meta:
-      chartId: 0
+      chartId: 4
       uuid: 70d4c5de-1cfe-57f0-a152-3cac8b497008
       sliceName: Critical 미해결
       width: 3
@@ -112,7 +112,7 @@ position:
     - GRID_ID
     - ROW-2
     meta:
-      chartId: 0
+      chartId: 5
       uuid: 7cf313e3-7a30-5158-b7ed-ec1326ab086b
       sliceName: 열린 이슈 추이
       width: 4
@@ -126,7 +126,7 @@ position:
     - GRID_ID
     - ROW-2
     meta:
-      chartId: 0
+      chartId: 6
       uuid: a6181da3-33ba-5565-a20e-40ff41b61015
       sliceName: 마일스톤별 진척률
       width: 4
@@ -140,7 +140,7 @@ position:
     - GRID_ID
     - ROW-2
     meta:
-      chartId: 0
+      chartId: 9
       uuid: 1465d92f-e208-5eaf-96f0-4ab7e512d2e2
       sliceName: 심각도별 열린 이슈
       width: 4
@@ -165,7 +165,7 @@ position:
     - GRID_ID
     - ROW-3
     meta:
-      chartId: 0
+      chartId: 7
       uuid: 930faba8-c08c-5553-a167-daad2693ebe4
       sliceName: 남은 마일스톤
       width: 6
@@ -179,13 +179,39 @@ position:
     - GRID_ID
     - ROW-3
     meta:
-      chartId: 0
+      chartId: 8
       uuid: 704a5ce5-8be0-5914-81a2-2a6c43cebbbc
       sliceName: 최근 갱신 이슈 5건
       width: 6
       height: 50
 metadata:
-  native_filter_configuration: []
+  native_filter_configuration:
+  - id: NATIVE_FILTER-f_overview_period
+    name: 기간
+    filterType: filter_time
+    type: NATIVE_FILTER
+    targets:
+    - {}
+    controlValues:
+      enableEmptyFilter: false
+    defaultDataMask:
+      extraFormData:
+        time_range: '2026-10-01 : 2026-12-01'
+      filterState:
+        value: '2026-10-01 : 2026-12-01'
+      ownState: {}
+    cascadeParentIds: []
+    scope:
+      rootPath:
+      - ROOT_ID
+      excluded:
+      - 1
+      - 2
+      - 3
+      - 4
+      - 6
+      - 7
+    description: ''
   color_scheme: ''
   cross_filters_enabled: false
   refresh_frequency: 0

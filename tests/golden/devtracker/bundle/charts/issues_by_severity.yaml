@@ -8,6 +8,12 @@ params:
   groupby:
   - severity
   metric: open_issues
+  adhoc_filters:
+  - expressionType: SIMPLE
+    clause: WHERE
+    subject: updated
+    operator: TEMPORAL_RANGE
+    comparator: No filter
 query_context: null
 cache_timeout: null
 uuid: 1465d92f-e208-5eaf-96f0-4ab7e512d2e2

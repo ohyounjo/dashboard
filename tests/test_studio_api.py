@@ -533,16 +533,16 @@ def test_filter_remove_refuses_while_another_filter_points_at_it(client):
 
 
 def test_first_filter_creates_the_key_and_last_removal_drops_it(client):
-    doc = raw_dashboard(client)
+    doc = raw_dashboard(client, GALLERY)
     name = dashboard_with(doc, lambda d: "filters" not in d)
-    before = dashboard_text(client)
+    before = dashboard_text(client, GALLERY)
     r = patch(client, {"op": "filter.add", "dashboard": name, "filter": {"label": "기간", "key": "f_new", "type": "time_range",
-                                                                        "default": None}})
+                                                                        "default": None}}, project=GALLERY)
     assert r.status == 200, r.text
     assert r.json["dashboard"]["dashboards"][name]["filters"] == [{"key": "f_new", "label": "기간", "type": "time_range"}]
-    r = patch(client, {"op": "filter.remove", "dashboard": name, "key": "f_new"})
+    r = patch(client, {"op": "filter.remove", "dashboard": name, "key": "f_new"}, project=GALLERY)
     assert r.status == 200 and "filters" not in r.json["dashboard"]["dashboards"][name]
-    assert dashboard_text(client) == before
+    assert dashboard_text(client, GALLERY) == before
 
 
 def test_5b_ops_mix_with_5a_ops(client):

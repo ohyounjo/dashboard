@@ -19,6 +19,12 @@ params:
   - '["id", false]'
   row_limit: 5
   table_timestamp_format: '%Y-%m-%d'
+  adhoc_filters:
+  - expressionType: SIMPLE
+    clause: WHERE
+    subject: updated
+    operator: TEMPORAL_RANGE
+    comparator: No filter
 query_context: null
 cache_timeout: null
 uuid: 704a5ce5-8be0-5914-81a2-2a6c43cebbbc

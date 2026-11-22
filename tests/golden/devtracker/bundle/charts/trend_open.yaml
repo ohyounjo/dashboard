@@ -15,6 +15,12 @@ params:
     sqlExpression: MAX(critical_open)
     label: Critical 미해결
   groupby: []
+  adhoc_filters:
+  - expressionType: SIMPLE
+    clause: WHERE
+    subject: week_start
+    operator: TEMPORAL_RANGE
+    comparator: No filter
 query_context: null
 cache_timeout: null
 uuid: 7cf313e3-7a30-5158-b7ed-ec1326ab086b

@@ -461,7 +461,7 @@ def test_chart_and_filter_edits_touch_only_their_lines(name):
     flt = d["filters"][0]
     new, how = edit(text, [{"op": "filter.update", "dashboard": dkey, "key": flt["key"], "values": {"label": "고친 라벨"}}])
     removed, added = line_changes(text, new)
-    assert how == "exact" and len(removed) == 1 and len(added) == 1 and f"key: {flt['key']}" in added[0]
+    assert how == "exact" and len(removed) == 1 and len(added) == 1 and "고친 라벨" in added[0]
     if len(d["filters"]) > 1:
         new, how = edit(text, [{"op": "filter.move", "dashboard": dkey, "key": flt["key"], "index": len(d["filters"]) - 1}])
         assert how == "exact" and sorted(new.split("\n")) == sorted(text.split("\n")) and new != text

@@ -321,3 +321,56 @@ def test_sync_lock_ui_only_changes_the_lock(tmp_path, value, locked):
     docs = [doc for path, doc in files.items() if path.split("/")[0] in KIND_OF]
     assert {doc["is_managed_externally"] for doc in docs} == {locked}
     assert all(doc["external_url"].startswith("dashkit://basic/") for doc in docs)
+
+
+def test_devtracker_time_range_filters_and_temporal_subjects():
+    """이슈 #67: devtracker의 기간 필터 3개, 대상 차트 5개 시간 열, overview 제외 차트 6개의 scope.excluded를 검증한다."""
+    import golden
+
+    docs = {path: yaml.safe_load(text) for path, text in golden.build("devtracker").items()}
+
+    expected_subjects = {
+        "trend_open": "week_start",
+        "issues_recent": "updated",
+        "issues_by_severity": "updated",
+        "issue_table": "updated",
+        "doc_table": "updated",
+    }
+    for key, subject in expected_subjects.items():
+        adhoc = docs[f"charts/{key}.yaml"]["params"].get("adhoc_filters", [])
+        temporal = [f for f in adhoc if f.get("operator") == "TEMPORAL_RANGE"]
+        assert temporal == [{
+            "expressionType": "SIMPLE",
+            "clause": "WHERE",
+            "subject": subject,
+            "operator": "TEMPORAL_RANGE",
+            "comparator": "No filter",
+        }], key
+
+    excluded_charts = {"kpi_progress", "kpi_dday", "kpi_open", "kpi_critical", "ms_bar", "ms_remaining"}
+    for key in excluded_charts:
+        adhoc = docs[f"charts/{key}.yaml"]["params"].get("adhoc_filters", [])
+        assert not any(f.get("operator") == "TEMPORAL_RANGE" for f in adhoc), key
+
+    overview = docs["dashboards/overview.yaml"]
+    chart_ids = {
+        node_id.removeprefix("CHART-"): node["meta"]["chartId"]
+        for node_id, node in overview["position"].items()
+        if isinstance(node, dict) and node.get("type") == "CHART"
+    }
+    ov_filters = {f["id"]: f for f in overview["metadata"]["native_filter_configuration"]}
+    f_ov = ov_filters["NATIVE_FILTER-f_overview_period"]
+    assert f_ov["filterType"] == "filter_time"
+    assert f_ov["defaultDataMask"]["extraFormData"] == {"time_range": "2026-10-01 : 2026-12-01"}
+    assert f_ov["scope"]["rootPath"] == ["ROOT_ID"]
+    assert set(f_ov["scope"]["excluded"]) == {chart_ids[k] for k in excluded_charts}
+
+    issues_filters = [f["id"] for f in docs["dashboards/issues.yaml"]["metadata"]["native_filter_configuration"]]
+    assert issues_filters == [
+        "NATIVE_FILTER-f_issue_period",
+        "NATIVE_FILTER-f_severity",
+        "NATIVE_FILTER-f_issue_status",
+        "NATIVE_FILTER-f_assignee",
+    ]
+    docs_filters = [f["id"] for f in docs["dashboards/docs.yaml"]["metadata"]["native_filter_configuration"]]
+    assert docs_filters == ["NATIVE_FILTER-f_doc_period", "NATIVE_FILTER-f_doc_type"]
